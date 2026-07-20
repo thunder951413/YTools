@@ -1,0 +1,24 @@
+name: Swift validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Swift version
+        run: swift --version
+      - name: Strict build and core checks
+        run: ./scripts/check.sh
+      - name: Build ad-hoc signed app
+        run: ./scripts/build-app.sh
+      - name: Verify app signature
+        run: codesign --verify --deep --strict --verbose=2 dist/ZToolsNative.app
