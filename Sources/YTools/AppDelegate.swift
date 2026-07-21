@@ -54,6 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusItem()
         updateStatusItemVisibility()
 
+        if ProcessInfo.processInfo.arguments.contains("--import-alfred-clipboard") {
+            clipboard.importAlfredHistory()
+        }
+
         panelController.showLauncher()
     }
 
@@ -167,6 +171,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             : "暂停剪贴板记录"
     }
     @objc private func quit() { NSApp.terminate(nil) }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        panelController?.showLauncher()
+        return true
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         snippets?.flushPendingChanges()

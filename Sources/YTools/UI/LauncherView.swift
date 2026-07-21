@@ -4,6 +4,7 @@ import SwiftUI
 struct LauncherView: View {
     @ObservedObject var model: LauncherModel
     @ObservedObject var preferences: AppPreferences
+    let searchFocusRequest: Int
     let onActivate: () -> Void
     @FocusState private var searchFocused: Bool
 
@@ -66,78 +67,97 @@ struct LauncherView: View {
         .background(style.backgroundStyle)
         .clipShape(RoundedRectangle(cornerRadius: preferences.panelCornerRadius, style: .continuous))
         .onAppear { searchFocused = true }
+        .onChange(of: searchFocusRequest) { _, _ in searchFocused = true }
     }
 
     @ViewBuilder
     private var resultContent: some View {
         if model.isShowingActions {
-                ScrollViewReader { proxy in
-                    List(Array(model.actions.enumerated()), id: \.element.id) { index, action in
-                        ActionRow(action: action, selected: index == model.selectedActionIndex)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                model.selectedActionIndex = index
-                                if model.activateSelected() { onActivate() }
-                            }
-                            .id(action.id)
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                    }
-                    .listStyle(.plain)
-                    .onChange(of: model.selectedActionIndex) { _, index in
-                        guard model.actions.indices.contains(index) else { return }
-                        proxy.scrollTo(model.actions[index].id, anchor: .center)
-                    }
-                }
-            } else if model.results.isEmpty {
-                emptyResultsView
+            if model.actions.count <= 6 {
+                actionRows
             } else {
-                HStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView { actionRows }
+                        .onChange(of: model.selectedActionIndex) { _, index in
+                            guard model.actions.indices.contains(index) else { return }
+                            proxy.scrollTo(model.actions[index].id, anchor: .center)
+                        }
+                }
+            }
+        } else if model.results.isEmpty {
+            emptyResultsView
+        } else {
+            HStack(spacing: 0) {
+                if model.results.count <= 6 {
+                    resultRows
+                } else {
                     ScrollViewReader { proxy in
-                        List(Array(model.results.enumerated()), id: \.element.id) { index, result in
-                            ResultRow(
-                                result: result,
-                                selected: index == model.selectedIndex,
-                                compact: preferences.compactResults,
-                                showSubtitle: preferences.showSubtitles,
-                                buffered: model.isBuffered(result),
-                                shortcutNumber: preferences.showNumberShortcuts && index < 9 ? index + 1 : nil,
-                                selectionOpacity: style.selectionOpacity
-                            )
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    model.selectedIndex = index
-                                    if model.activate(result) { onActivate() }
-                                }
-                                .contextMenu {
-                                    if let url = result.fileURL {
-                                        Button("打开") {
-                                            if model.activate(result) { onActivate() }
-                                        }
-                                        Button("在访达中显示") {
-                                            model.reveal(url)
-                                            onActivate()
-                                        }
-                                        Button("复制路径") { model.copyPath(url) }
-                                    }
-                                }
-                                .id(result.id)
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                        }
-                        .listStyle(.plain)
-                        .onChange(of: model.selectedIndex) { _, index in
-                            guard model.results.indices.contains(index) else { return }
-                            proxy.scrollTo(model.results[index].id, anchor: .center)
-                        }
-                    }
-
-                    if model.showsPreview, let url = model.displayedPreviewURL {
-                        Divider()
-                        FilePreviewView(url: url)
-                            .frame(width: 330)
+                        ScrollView { resultRows }
+                            .onChange(of: model.selectedIndex) { _, index in
+                                guard model.results.indices.contains(index) else { return }
+                                proxy.scrollTo(model.results[index].id, anchor: .center)
+                            }
                     }
                 }
+
+                if model.showsPreview, let url = model.displayedPreviewURL {
+                    Divider()
+                    FilePreviewView(url: url)
+                        .frame(width: 330)
+                }
+            }
+        }
+    }
+
+    private var actionRows: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(Array(model.actions.enumerated()), id: \.element.id) { index, action in
+                ActionRow(action: action, selected: index == model.selectedActionIndex)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        model.selectedActionIndex = index
+                        if model.activateSelected() { onActivate() }
+                    }
+                    .id(action.id)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private var resultRows: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(Array(model.results.enumerated()), id: \.element.id) { index, result in
+                ResultRow(
+                    result: result,
+                    selected: index == model.selectedIndex,
+                    compact: preferences.compactResults,
+                    showSubtitle: preferences.showSubtitles,
+                    buffered: model.isBuffered(result),
+                    shortcutNumber: preferences.showNumberShortcuts && index < 9 ? index + 1 : nil,
+                    selectionOpacity: style.selectionOpacity
+                )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        model.selectedIndex = index
+                        if model.activate(result) { onActivate() }
+                    }
+                    .contextMenu {
+                        if let url = result.fileURL {
+                            Button("打开") {
+                                if model.activate(result) { onActivate() }
+                            }
+                            Button("在访达中显示") {
+                                model.reveal(url)
+                                onActivate()
+                            }
+                            Button("复制路径") { model.copyPath(url) }
+                        }
+                    }
+                    .id(result.id)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+            }
         }
     }
 

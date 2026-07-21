@@ -10,13 +10,15 @@ struct RegisteredSearchModule: Sendable {
         _ module: any YToolsModule,
         contentType: SearchContentType,
         allowedCapabilities: Set<ModuleCapability> = [],
-        allowsPrivilegedActions: Bool = false
+        allowsPrivilegedActions: Bool = false,
+        allowsDictionaryLookup: Bool = false
     ) {
         self.module = module
         self.contentType = contentType
         self.policy = ModuleResultPolicy(
             allowedCapabilities: allowedCapabilities,
-            allowsPrivilegedActions: allowsPrivilegedActions
+            allowsPrivilegedActions: allowsPrivilegedActions,
+            allowsDictionaryLookup: allowsDictionaryLookup
         )
     }
 }
