@@ -58,14 +58,20 @@ struct ClipboardSettingsView: View {
                     .frame(width: 130)
                 }
                 Divider()
-                SettingsRow(title: "最多记录", detail: "限制数据库和搜索规模") {
-                    Stepper(
-                        "\(preferences.clipboardMaximumItems) 条",
-                        value: $preferences.clipboardMaximumItems,
-                        in: 50...1000,
-                        step: 50
-                    )
-                    .frame(width: 145)
+                SettingsRow(title: "最多记录", detail: "可设为无限制；仍受 200 MB 加密存储上限保护") {
+                    HStack {
+                        Toggle("无限制", isOn: unlimitedItemsBinding)
+                            .toggleStyle(.checkbox)
+                        if preferences.clipboardMaximumItems != 0 {
+                            Stepper(
+                                "\(preferences.clipboardMaximumItems) 条",
+                                value: $preferences.clipboardMaximumItems,
+                                in: 50...5_000,
+                                step: 50
+                            )
+                        }
+                    }
+                    .frame(width: 250)
                 }
                 Divider()
                 SettingsRow(title: "文本长度上限", detail: "超过上限的文本仍可正常粘贴，但不会进入历史") {
@@ -87,6 +93,25 @@ struct ClipboardSettingsView: View {
                     Text(formattedStorageSize)
                         .foregroundStyle(.secondary)
                 }
+                Divider()
+                SettingsRow(title: "高频记录保护", detail: "被选用达到 5 次后，不再因保留时间到期自动删除") {
+                    Text("自动启用").foregroundStyle(.secondary)
+                }
+            }
+
+            SettingsCard(title: "从 Alfred 迁移", icon: "square.and.arrow.down") {
+                Text("只读导入 Alfred 的文本历史；按当前文本长度上限过滤，合格内容作为最新记录写入 YTools 加密存储。Alfred 原数据库不会被修改。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let message = clipboardManager.alfredImportMessage {
+                    Divider()
+                    Text(message)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Divider()
+                Button("导入并合并 Alfred 剪贴板") { clipboardManager.importAlfredHistory() }
+                    .disabled(!clipboardManager.canImportAlfredHistory || clipboardManager.isImportingAlfredHistory)
             }
 
             SettingsCard(title: "忽略的应用", icon: "eye.slash") {
@@ -127,6 +152,13 @@ struct ClipboardSettingsView: View {
         ByteCountFormatter.string(
             fromByteCount: clipboardManager.storageByteCount,
             countStyle: .file
+        )
+    }
+
+    private var unlimitedItemsBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.clipboardMaximumItems == 0 },
+            set: { preferences.clipboardMaximumItems = $0 ? 0 : 300 }
         )
     }
 }

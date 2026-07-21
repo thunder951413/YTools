@@ -257,7 +257,7 @@ final class LauncherModel: ObservableObject {
             ),
             RegisteredSearchModule(DictionaryModule(
                 includeAutomaticResults: preferences.includeAutomaticDictionary
-            ), contentType: .dictionary),
+            ), contentType: .dictionary, allowsDictionaryLookup: true),
             RegisteredSearchModule(
                 SystemCommandsModule(configuration: preferences.systemCommandConfiguration),
                 contentType: .systemTools,

@@ -25,7 +25,7 @@ struct DictionaryModule: YToolsModule {
             subtitle: definitionSummary(definition),
             icon: .system("character.book.closed"),
             score: lookup.explicit ? 950 : 350,
-            action: .copy(definition)
+            action: .openDictionary(lookup.word)
         )]
     }
 

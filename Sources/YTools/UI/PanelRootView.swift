@@ -11,9 +11,19 @@ struct PanelRootView: View {
         Group {
             switch state.mode {
             case .launcher:
-                LauncherView(model: launcher, preferences: preferences, onActivate: onHide)
+                LauncherView(
+                    model: launcher,
+                    preferences: preferences,
+                    searchFocusRequest: state.searchFocusRequest,
+                    onActivate: onHide
+                )
             case .clipboard:
-                ClipboardHistoryView(manager: clipboard, preferences: preferences, onActivate: onHide)
+                ClipboardHistoryView(
+                    manager: clipboard,
+                    preferences: preferences,
+                    searchFocusRequest: state.searchFocusRequest,
+                    onActivate: onHide
+                )
             }
         }
         .id(state.mode)

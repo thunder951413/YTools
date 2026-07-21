@@ -18,6 +18,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
     private let onOpenSettings: () -> Void
     private let largeTypeController: LargeTypeWindowController
     private let commandRouter = PanelCommandRouter()
+    private var firstKeyBackspacePolicy = FirstKeyBackspacePolicy()
     private let positionSaveDebouncer = DebouncedAction()
     private var keyMonitor: Any?
     private var shiftPreviewTimer: Timer?
@@ -86,6 +87,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
                 self.handleModifierChange(event)
                 return event
             }
+            if self.handleFirstKeyAfterPresentation(event) { return nil }
             if self.handleTextEditingShortcut(event) { return nil }
             if [36, 123, 124, 125, 126].contains(Int(event.keyCode)),
                let textView = self.window?.firstResponder as? NSTextView,
@@ -145,6 +147,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
 
     private func show() {
         guard let window else { return }
+        firstKeyBackspacePolicy.beginPresentation()
         adjustPanelSize(animated: false)
         position(window)
         NSApp.activate(ignoringOtherApps: true)
@@ -154,6 +157,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             preferences.keyboardInputSourceError = "所选输入源当前不可用，已保留系统当前输入源。"
         }
         window.makeKeyAndOrderFront(nil)
+        state.requestSearchFocus()
     }
 
     func hide() {
@@ -168,6 +172,10 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
 
     func windowDidResignKey(_ notification: Notification) {
         hide()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        state.requestSearchFocus()
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -334,6 +342,26 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
               event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command],
               let textView = window?.firstResponder as? NSTextView else { return false }
         textView.selectAll(nil)
+        return true
+    }
+
+    private func handleFirstKeyAfterPresentation(_ event: NSEvent) -> Bool {
+        let textView = window?.firstResponder as? NSTextView
+        let shouldClear = firstKeyBackspacePolicy.shouldClearQuery(
+            for: PanelKeyEvent(
+                keyCode: event.keyCode,
+                modifiers: panelModifiers(from: event.modifierFlags)
+            ),
+            isEditingText: textView != nil,
+            hasMarkedText: textView?.hasMarkedText() ?? false
+        )
+        guard shouldClear else { return false }
+        switch state.mode {
+        case .launcher:
+            _ = launcher.clearQuery()
+        case .clipboard:
+            _ = clipboard.clearQuery()
+        }
         return true
     }
 

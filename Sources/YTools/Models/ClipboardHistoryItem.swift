@@ -15,6 +15,7 @@ struct ClipboardHistoryItem: Codable, Identifiable, Equatable, Sendable {
     let binaryData: Data?
     let contentHash: String?
     var isPinned: Bool?
+    var useCount: Int?
 
     init(
         id: UUID,
@@ -24,7 +25,8 @@ struct ClipboardHistoryItem: Codable, Identifiable, Equatable, Sendable {
         sourceApplication: String?,
         binaryData: Data? = nil,
         contentHash: String? = nil,
-        isPinned: Bool = false
+        isPinned: Bool = false,
+        useCount: Int = 0
     ) {
         self.id = id
         self.kind = kind
@@ -34,6 +36,7 @@ struct ClipboardHistoryItem: Codable, Identifiable, Equatable, Sendable {
         self.binaryData = binaryData
         self.contentHash = contentHash
         self.isPinned = isPinned
+        self.useCount = useCount
     }
 
     var displayText: String {
@@ -55,4 +58,5 @@ struct ClipboardHistoryItem: Codable, Identifiable, Equatable, Sendable {
     }
 
     var pinned: Bool { isPinned == true }
+    var usageCount: Int { max(0, useCount ?? 0) }
 }
