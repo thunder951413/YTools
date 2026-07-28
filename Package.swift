@@ -35,7 +35,8 @@ let package = Package(
                 .linkedFramework("CoreServices"),
                 .linkedFramework("QuickLookUI"),
                 .linkedFramework("Security"),
-                .linkedFramework("ServiceManagement")
+                .linkedFramework("ServiceManagement"),
+                .linkedLibrary("sqlite3")
             ]
         ),
         .testTarget(

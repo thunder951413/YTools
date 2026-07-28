@@ -6,15 +6,18 @@ public struct ModuleResultPolicy: Sendable {
     public let allowedCapabilities: Set<ModuleCapability>
     public let scoreRange: ClosedRange<Int>
     public let allowsPrivilegedActions: Bool
+    public let allowsDictionaryLookup: Bool
 
     public init(
         allowedCapabilities: Set<ModuleCapability> = [],
         scoreRange: ClosedRange<Int> = -10_000...10_000,
-        allowsPrivilegedActions: Bool = false
+        allowsPrivilegedActions: Bool = false,
+        allowsDictionaryLookup: Bool = false
     ) {
         self.allowedCapabilities = allowedCapabilities
         self.scoreRange = scoreRange
         self.allowsPrivilegedActions = allowsPrivilegedActions
+        self.allowsDictionaryLookup = allowsDictionaryLookup
     }
 
     public func permits(_ descriptor: ModuleDescriptor) -> Bool {
@@ -54,6 +57,11 @@ public struct ModuleResultPolicy: Sendable {
         switch action {
         case let .copy(text):
             return text.count <= 1_000_000
+        case let .openDictionary(term):
+            return allowsDictionaryLookup
+                && !term.isEmpty
+                && term.count <= 100
+                && !term.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
         case .none, .openSettings:
             return true
         case let .open(url), let .reveal(url):

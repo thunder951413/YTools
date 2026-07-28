@@ -57,6 +57,8 @@ final class ActionDispatcher {
         switch action {
         case let .copy(text):
             copyText(text)
+        case let .openDictionary(term):
+            return openDictionary(term)
         case let .open(url):
             guard url.isFileURL else {
                 showAlert(title: "已阻止外部链接", message: "YTools 只允许打开本机文件和应用。")
@@ -196,16 +198,21 @@ final class ActionDispatcher {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = operation == .move ? "移动到这里" : "复制到这里"
-        guard panel.runModal() == .OK, let directory = panel.url else { return .keepPanel }
-
-        Task { [weak self, fileOperations] in
-            do {
-                try await fileOperations.perform(operation, source: source, destinationDirectory: directory)
-            } catch {
-                self?.showAlert(
-                    title: operation == .move ? "移动失败" : "复制失败",
-                    message: error.localizedDescription
-                )
+        panel.begin { [weak self, fileOperations] response in
+            guard response == .OK, let directory = panel.url else { return }
+            Task { @MainActor [weak self, fileOperations] in
+                do {
+                    try await fileOperations.perform(
+                        operation,
+                        source: source,
+                        destinationDirectory: directory
+                    )
+                } catch {
+                    self?.showAlert(
+                        title: operation == .move ? "移动失败" : "复制失败",
+                        message: error.localizedDescription
+                    )
+                }
             }
         }
         return .hidePanel
@@ -223,17 +230,19 @@ final class ActionDispatcher {
         panel.allowedContentTypes = [.applicationBundle]
         panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
         panel.prompt = "使用此应用打开"
-        guard panel.runModal() == .OK, let applicationURL = panel.url else { return .keepPanel }
-        recentDocuments.record(url)
-        Task { [weak self] in
-            do {
-                try await NSWorkspace.shared.open(
-                    [url],
-                    withApplicationAt: applicationURL,
-                    configuration: NSWorkspace.OpenConfiguration()
-                )
-            } catch {
-                self?.showAlert(title: "无法打开文件", message: error.localizedDescription)
+        panel.begin { [weak self] response in
+            guard response == .OK, let applicationURL = panel.url else { return }
+            self?.recentDocuments.record(url)
+            Task { @MainActor [weak self] in
+                do {
+                    try await NSWorkspace.shared.open(
+                        [url],
+                        withApplicationAt: applicationURL,
+                        configuration: NSWorkspace.OpenConfiguration()
+                    )
+                } catch {
+                    self?.showAlert(title: "无法打开文件", message: error.localizedDescription)
+                }
             }
         }
         return .hidePanel
@@ -309,6 +318,18 @@ final class ActionDispatcher {
         guard let url = URL(string: "x-apple.systempreferences:\(identifier)"),
               NSWorkspace.shared.open(url) else {
             showAlert(title: "无法打开系统设置", message: "当前 macOS 版本不支持该设置面板。")
+            return .keepPanel
+        }
+        return .hidePanel
+    }
+
+    private func openDictionary(_ term: String) -> ActionExecutionOutcome {
+        let allowed = CharacterSet.urlHostAllowed.subtracting(.init(charactersIn: "/?#"))
+        guard let encoded = term.addingPercentEncoding(withAllowedCharacters: allowed),
+              let url = URL(string: "dict://\(encoded)"),
+              url.scheme == "dict",
+              NSWorkspace.shared.open(url) else {
+            showAlert(title: "无法打开系统词典", message: "Dictionary 当前无法查询“\(term)”。")
             return .keepPanel
         }
         return .hidePanel

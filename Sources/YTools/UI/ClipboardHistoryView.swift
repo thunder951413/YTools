@@ -3,6 +3,7 @@ import SwiftUI
 struct ClipboardHistoryView: View {
     @ObservedObject var manager: ClipboardHistoryManager
     @ObservedObject var preferences: AppPreferences
+    let searchFocusRequest: Int
     let onActivate: () -> Void
 
     @FocusState private var searchFocused: Bool
@@ -113,6 +114,7 @@ struct ClipboardHistoryView: View {
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: preferences.panelCornerRadius, style: .continuous))
         .onAppear { searchFocused = true }
+        .onChange(of: searchFocusRequest) { _, _ in searchFocused = true }
         .confirmationDialog(
             "清理剪贴板历史",
             isPresented: $manager.showsClearConfirmation,

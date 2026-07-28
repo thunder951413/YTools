@@ -10,6 +10,7 @@ public enum ResultIcon: Equatable, Sendable {
 /// excludes arbitrary shell commands, scripts, dynamic code and URL opening.
 public enum ResultAction: Equatable, Sendable {
     case copy(String)
+    case openDictionary(String)
     case open(URL)
     case reveal(URL)
     case navigate(String)

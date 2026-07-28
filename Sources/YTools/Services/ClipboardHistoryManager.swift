@@ -50,9 +50,12 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     @Published private(set) var storageError: String?
     @Published private(set) var isLoading = true
     @Published private(set) var storageByteCount: Int64 = 0
+    @Published private(set) var alfredImportMessage: String?
+    @Published private(set) var isImportingAlfredHistory = false
 
     private let persistence = ClipboardPersistenceService()
     private let processor = ClipboardCaptureProcessor()
+    private let alfredImporter = AlfredClipboardImportService()
     private let preferences: AppPreferences
     private var timer: Timer?
     private var cancellables: Set<AnyCancellable> = []
@@ -66,6 +69,11 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     private var appliedQuery = ""
     private var appliedFilter: Filter = .all
     private let maximumVisibleItems = 100
+    private var pendingAlfredImport = false
+
+    var canImportAlfredHistory: Bool {
+        FileManager.default.fileExists(atPath: AlfredClipboardImportService.databaseURL.path)
+    }
 
     var layoutInvalidations: AnyPublisher<Void, Never> {
         $filteredItems
@@ -139,6 +147,10 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     }
 
     func copy(_ item: ClipboardHistoryItem) {
+        if let index = items.firstIndex(where: { $0.id == item.id }) {
+            items[index].useCount = items[index].usageCount + 1
+            persistCurrent()
+        }
         switch item.kind {
         case .text:
             guard let text = item.payload.first else { return }
@@ -250,6 +262,72 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         self.storageByteCount = storageByteCount
         prune()
         if persistenceWritable { persistCurrent() }
+        if pendingAlfredImport {
+            pendingAlfredImport = false
+            importAlfredHistory()
+        }
+    }
+
+    func importAlfredHistory() {
+        guard !isImportingAlfredHistory else { return }
+        guard storageReady else {
+            pendingAlfredImport = true
+            alfredImportMessage = "正在等待加密剪贴板存储完成加载…"
+            return
+        }
+        guard persistenceWritable else {
+            alfredImportMessage = "当前加密存储不可写，未导入 Alfred 记录。"
+            return
+        }
+        isImportingAlfredHistory = true
+        alfredImportMessage = "正在读取并筛选 Alfred 剪贴板记录…"
+        Task { [weak self, alfredImporter] in
+            do {
+                let records = try await alfredImporter.loadTextRecords()
+                self?.finishAlfredImport(records)
+            } catch {
+                self?.isImportingAlfredHistory = false
+                self?.alfredImportMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func finishAlfredImport(_ records: [AlfredClipboardRecord]) {
+        let textPolicy = ClipboardTextPolicy(
+            maximumCharacters: preferences.clipboardMaximumTextCharacters
+        )
+        var knownText = Set(items.compactMap { item in
+            item.kind == .text ? item.payload.first : nil
+        })
+        var imported: [ClipboardHistoryItem] = []
+        var skippedByLength = 0
+        var skippedDuplicates = 0
+        let newestDate = Date()
+
+        for record in records {
+            guard textPolicy.shouldStore(record.text) else {
+                skippedByLength += 1
+                continue
+            }
+            guard knownText.insert(record.text).inserted else {
+                skippedDuplicates += 1
+                continue
+            }
+            imported.append(ClipboardHistoryItem(
+                id: UUID(),
+                kind: .text,
+                payload: [record.text],
+                createdAt: newestDate.addingTimeInterval(-Double(imported.count) * 0.001),
+                sourceApplication: record.sourceApplication
+            ))
+        }
+
+        preferences.clipboardMaximumItems = 0
+        items = imported + items
+        prune()
+        persistCurrent()
+        isImportingAlfredHistory = false
+        alfredImportMessage = "已导入 \(imported.count) 条；按当前长度上限跳过 \(skippedByLength) 条，重复跳过 \(skippedDuplicates) 条。"
     }
 
     private func ingest(_ processed: ProcessedClipboardCapture) {
@@ -410,9 +488,20 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     }
 
     private func prune() {
-        let retentionInterval = TimeInterval(preferences.clipboardRetentionDays) * 24 * 60 * 60
-        let cutoff = Date().addingTimeInterval(-retentionInterval)
-        items = Array(items.filter { $0.pinned || $0.createdAt >= cutoff }.prefix(preferences.clipboardMaximumItems))
+        let policy = ClipboardRetentionPolicy(
+            retentionDays: preferences.clipboardRetentionDays,
+            maximumItems: preferences.clipboardMaximumItems
+        )
+        let now = Date()
+        let retained = items.filter {
+            policy.shouldRetain(
+                createdAt: $0.createdAt,
+                useCount: $0.usageCount,
+                isPinned: $0.pinned,
+                now: now
+            )
+        }
+        items = Array(retained.prefix(policy.limitedCount(retained.count)))
         selectedIndex = min(selectedIndex, max(filteredItems.count - 1, 0))
     }
 

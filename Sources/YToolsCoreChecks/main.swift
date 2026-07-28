@@ -17,8 +17,10 @@ struct YToolsCoreChecks {
     static func main() throws {
         try checkCalculator()
         try checkPanelCommandRouter()
+        try checkFirstKeyBackspacePolicy()
         try checkSearchNormalization()
         try checkClipboardPolicy()
+        try checkClipboardRetentionPolicy()
         try checkRelativePanelPlacement()
         try checkModuleBoundary()
         print("YToolsCore checks passed")
@@ -32,7 +34,9 @@ struct YToolsCoreChecks {
             ("2 ^ 3 ^ 2", 512),
             ("-2 × 4 + 10 ÷ 2", -3),
             ("sqrt(16) + abs(-2)", 6),
-            ("round(pi)", 3)
+            ("round(pi)", 3),
+            ("sqrt(abs(-81))", 9),
+            ("round(sin(pi / 2))", 1)
         ]
         for (expression, expected) in cases {
             let actual = try calculator.evaluate(expression)
@@ -45,6 +49,16 @@ struct YToolsCoreChecks {
             throw CheckFailure.message("Calculator accepted division by zero")
         } catch CalculatorError.divisionByZero {
             // Expected.
+        }
+        for invalidExpression in ["pie + 1", "exp(1)"] {
+            do {
+                _ = try calculator.evaluate(invalidExpression)
+                throw CheckFailure.message(
+                    "Calculator accepted invalid expression: \(invalidExpression)"
+                )
+            } catch CalculatorError.invalidExpression {
+                // Expected.
+            }
         }
     }
 
@@ -70,6 +84,31 @@ struct YToolsCoreChecks {
         )
         guard clipboardPreview == nil else {
             throw CheckFailure.message("Launcher-only command escaped into clipboard mode")
+        }
+    }
+
+    private static func checkFirstKeyBackspacePolicy() throws {
+        var policy = FirstKeyBackspacePolicy()
+        policy.beginPresentation()
+        guard policy.shouldClearQuery(
+            for: PanelKeyEvent(keyCode: 51, modifiers: []),
+            isEditingText: true,
+            hasMarkedText: false
+        ), !policy.shouldClearQuery(
+            for: PanelKeyEvent(keyCode: 51, modifiers: []),
+            isEditingText: true,
+            hasMarkedText: false
+        ) else {
+            throw CheckFailure.message("First-key Backspace policy did not clear exactly once")
+        }
+
+        policy.beginPresentation()
+        guard !policy.shouldClearQuery(
+            for: PanelKeyEvent(keyCode: 51, modifiers: .option),
+            isEditingText: true,
+            hasMarkedText: false
+        ) else {
+            throw CheckFailure.message("First-key Backspace policy intercepted a modified shortcut")
         }
     }
 
@@ -120,6 +159,20 @@ struct YToolsCoreChecks {
         )
         guard policy.sanitize(copied, from: noCapabilities)?.moduleID == "safe" else {
             throw CheckFailure.message("Module policy rejected a safe copy result")
+        }
+        let dictionaryLookup = LauncherResult(
+            id: "dictionary:hello",
+            moduleID: "dictionary",
+            title: "hello",
+            subtitle: "definition",
+            icon: .system("character.book.closed"),
+            score: 100,
+            action: .openDictionary("hello")
+        )
+        guard policy.sanitize(dictionaryLookup, from: noCapabilities) == nil,
+              ModuleResultPolicy(allowsDictionaryLookup: true)
+                .sanitize(dictionaryLookup, from: noCapabilities) != nil else {
+            throw CheckFailure.message("Dictionary lookup action policy failed")
         }
         let privileged = LauncherResult(
             id: "system",
@@ -176,6 +229,17 @@ struct YToolsCoreChecks {
         guard policy.shouldStore(String(repeating: "字", count: 100)),
               !policy.shouldStore(String(repeating: "字", count: 101)) else {
             throw CheckFailure.message("Clipboard text length policy failed")
+        }
+    }
+
+    private static func checkClipboardRetentionPolicy() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        let old = now.addingTimeInterval(-30 * 24 * 60 * 60)
+        let policy = ClipboardRetentionPolicy(retentionDays: 7, maximumItems: 0)
+        guard !policy.shouldRetain(createdAt: old, useCount: 4, isPinned: false, now: now),
+              policy.shouldRetain(createdAt: old, useCount: 5, isPinned: false, now: now),
+              policy.limitedCount(10_000) == 10_000 else {
+            throw CheckFailure.message("Clipboard retention or unlimited-item policy failed")
         }
     }
 

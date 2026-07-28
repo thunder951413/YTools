@@ -12,8 +12,8 @@ struct HotKeyDefinition: Codable, Equatable {
         modifiers: UInt32(optionKey)
     )
     static let clipboardDefault = HotKeyDefinition(
-        keyCode: UInt32(kVK_ANSI_C),
-        modifiers: UInt32(optionKey) | UInt32(cmdKey)
+        keyCode: UInt32(kVK_ANSI_V),
+        modifiers: UInt32(shiftKey) | UInt32(cmdKey)
     )
 
     var displayString: String {
@@ -382,10 +382,8 @@ final class AppPreferences: ObservableObject {
         self.clipboardPaused = defaults.object(forKey: Keys.clipboardPaused) as? Bool ?? false
         let retention = defaults.object(forKey: Keys.clipboardRetentionDays) as? Int ?? 7
         self.clipboardRetentionDays = [1, 7, 30, 90].contains(retention) ? retention : 7
-        self.clipboardMaximumItems = min(
-            max(defaults.object(forKey: Keys.clipboardMaximumItems) as? Int ?? 300, 50),
-            1_000
-        )
+        let maximumItems = defaults.object(forKey: Keys.clipboardMaximumItems) as? Int ?? 300
+        self.clipboardMaximumItems = maximumItems == 0 ? 0 : min(max(maximumItems, 50), 5_000)
         self.clipboardMaximumTextCharacters = min(
             max(defaults.object(forKey: Keys.clipboardMaximumTextCharacters) as? Int ?? 1_000, 100),
             10_000
@@ -625,6 +623,23 @@ final class AppPreferences: ObservableObject {
             // Narrow only the former default. Preserve widths the user chose.
             defaults.set(720.0, forKey: Keys.panelWidth)
         }
+        if storedVersion < 9,
+           let data = defaults.data(forKey: Keys.clipboardHotKey),
+           let storedHotKey = try? JSONDecoder().decode(HotKeyDefinition.self, from: data),
+           [
+               HotKeyDefinition(
+                   keyCode: UInt32(kVK_ANSI_C),
+                   modifiers: UInt32(optionKey) | UInt32(cmdKey)
+               ),
+               HotKeyDefinition(
+                   keyCode: UInt32(kVK_ANSI_C),
+                   modifiers: UInt32(shiftKey) | UInt32(cmdKey)
+               )
+           ].contains(storedHotKey),
+           let migratedData = try? JSONEncoder().encode(HotKeyDefinition.clipboardDefault) {
+            // Move only known former defaults. Keep every other user-recorded shortcut.
+            defaults.set(migratedData, forKey: Keys.clipboardHotKey)
+        }
         defaults.set(currentSchemaVersion, forKey: Keys.schemaVersion)
     }
 
@@ -651,7 +666,7 @@ final class AppPreferences: ObservableObject {
         )
     }
 
-    private static let currentSchemaVersion = 7
+    private static let currentSchemaVersion = 9
 
     private enum Keys {
         static let schemaVersion = "preferences.schemaVersion"

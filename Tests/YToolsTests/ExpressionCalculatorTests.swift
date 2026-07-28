@@ -28,4 +28,11 @@ final class ExpressionCalculatorTests: XCTestCase {
         XCTAssertEqual(try calculator.evaluate("sqrt(16) + abs(-2)"), 6)
         XCTAssertEqual(try calculator.evaluate("round(pi)"), 3)
     }
+
+    func testSupportsNestedFunctionsAndKeepsConstantBoundaries() throws {
+        XCTAssertEqual(try calculator.evaluate("sqrt(abs(-81))"), 9)
+        XCTAssertEqual(try calculator.evaluate("round(sin(pi / 2))"), 1)
+        XCTAssertThrowsError(try calculator.evaluate("pie + 1"))
+        XCTAssertThrowsError(try calculator.evaluate("exp(1)"))
+    }
 }

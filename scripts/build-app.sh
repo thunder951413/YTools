@@ -35,7 +35,12 @@ plutil -insert LSUIElement -bool true "${CONTENTS_DIR}/Info.plist"
 plutil -insert NSHighResolutionCapable -bool true "${CONTENTS_DIR}/Info.plist"
 plutil -insert NSAppleEventsUsageDescription -string "仅在您确认清空废纸篓时，请求 Finder 执行固定的清空命令。" "${CONTENTS_DIR}/Info.plist"
 
-codesign --force --sign - --identifier "com.ztools.native" "${APP_DIR}"
+CODESIGN_IDENTITY="${YTOOLS_CODESIGN_IDENTITY:--}"
+CODESIGN_OPTIONS=(--force --sign "${CODESIGN_IDENTITY}" --identifier "com.ztools.native")
+if [[ "${CODESIGN_IDENTITY}" != "-" ]]; then
+    CODESIGN_OPTIONS+=(--timestamp=none)
+fi
+codesign "${CODESIGN_OPTIONS[@]}" "${APP_DIR}"
 codesign --verify --strict "${APP_DIR}"
 plutil -lint "${CONTENTS_DIR}/Info.plist"
 

@@ -2,6 +2,41 @@ import XCTest
 import YToolsModuleKit
 
 final class ModuleResultPolicyTests: XCTestCase {
+    func testDictionaryLookupRequiresExplicitHostPermission() {
+        let descriptor = ModuleDescriptor(id: "dictionary", name: "Dictionary")
+        let result = LauncherResult(
+            id: "dictionary:hello",
+            moduleID: descriptor.id,
+            title: "hello",
+            subtitle: "definition",
+            icon: .system("character.book.closed"),
+            score: 100,
+            action: .openDictionary("hello")
+        )
+
+        XCTAssertNil(ModuleResultPolicy().sanitize(result, from: descriptor))
+        XCTAssertNotNil(
+            ModuleResultPolicy(allowsDictionaryLookup: true).sanitize(result, from: descriptor)
+        )
+    }
+
+    func testDictionaryLookupRejectsControlCharacters() {
+        let descriptor = ModuleDescriptor(id: "dictionary", name: "Dictionary")
+        let result = LauncherResult(
+            id: "dictionary:bad",
+            moduleID: descriptor.id,
+            title: "bad",
+            subtitle: "definition",
+            icon: .system("character.book.closed"),
+            score: 100,
+            action: .openDictionary("bad\nterm")
+        )
+
+        XCTAssertNil(
+            ModuleResultPolicy(allowsDictionaryLookup: true).sanitize(result, from: descriptor)
+        )
+    }
+
     func testRejectsExternalURLFromSourceModule() {
         let descriptor = ModuleDescriptor(id: "test", name: "Test")
         let result = LauncherResult(
