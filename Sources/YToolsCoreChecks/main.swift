@@ -34,7 +34,9 @@ struct YToolsCoreChecks {
             ("2 ^ 3 ^ 2", 512),
             ("-2 × 4 + 10 ÷ 2", -3),
             ("sqrt(16) + abs(-2)", 6),
-            ("round(pi)", 3)
+            ("round(pi)", 3),
+            ("sqrt(abs(-81))", 9),
+            ("round(sin(pi / 2))", 1)
         ]
         for (expression, expected) in cases {
             let actual = try calculator.evaluate(expression)
@@ -47,6 +49,16 @@ struct YToolsCoreChecks {
             throw CheckFailure.message("Calculator accepted division by zero")
         } catch CalculatorError.divisionByZero {
             // Expected.
+        }
+        for invalidExpression in ["pie + 1", "exp(1)"] {
+            do {
+                _ = try calculator.evaluate(invalidExpression)
+                throw CheckFailure.message(
+                    "Calculator accepted invalid expression: \(invalidExpression)"
+                )
+            } catch CalculatorError.invalidExpression {
+                // Expected.
+            }
         }
     }
 

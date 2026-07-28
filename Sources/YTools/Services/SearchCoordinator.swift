@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import YToolsModuleKit
 
 struct RegisteredSearchModule: Sendable {
@@ -38,6 +39,11 @@ struct BackgroundSearchRequest: Sendable {
 /// Owns every non-Spotlight query provider. All results—including trusted
 /// built-ins—cross the same descriptor, capability, field and action policy.
 actor SearchCoordinator {
+    private static let logger = Logger(
+        subsystem: "com.ztools.native",
+        category: "SearchCoordinator"
+    )
+
     private let applications = ApplicationModule()
     private let fileNavigation = FileNavigationModule()
     private let standardModules: [RegisteredSearchModule]
@@ -140,6 +146,7 @@ actor SearchCoordinator {
         query: String,
         policy: ModuleResultPolicy
     ) async -> [LauncherResult] {
+        let moduleID = module.descriptor.id
         do {
             let request = ModuleSearchRequest(query: query, maximumResults: 40)
             let results = try await module.search(request)
@@ -148,6 +155,9 @@ actor SearchCoordinator {
                 policy.sanitize($0, from: module.descriptor)
             }
         } catch {
+            logger.error(
+                "Search module \(moduleID, privacy: .public) failed: \(String(describing: error), privacy: .private)"
+            )
             return []
         }
     }

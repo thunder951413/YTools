@@ -57,8 +57,11 @@ open dist/YTools.app
 运行完整测试：
 
 ```bash
-swift test
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test -Xswiftc -warnings-as-errors
 ```
+
+GitHub Actions 会确认使用完整 Xcode 而不是 Command Line Tools，随后执行严格检查、XCTest、`.app` 构建及 `dist/YTools.app` 签名验证。
 
 Developer ID、Hardened Runtime 和公证分发需要相应的 Apple Developer 证书与凭据。
 

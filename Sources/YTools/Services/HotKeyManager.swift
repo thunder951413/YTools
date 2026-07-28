@@ -71,7 +71,10 @@ final class HotKeyManager {
                     &identifier
                 )
                 if status == noErr {
-                    MainActor.assumeIsolated { manager.actions[identifier.id]?() }
+                    let actionID = identifier.id
+                    Task { @MainActor in
+                        manager.actions[actionID]?()
+                    }
                 }
                 return noErr
             },
