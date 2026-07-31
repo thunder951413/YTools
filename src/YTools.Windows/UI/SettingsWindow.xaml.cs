@@ -20,7 +20,7 @@ public partial class SettingsWindow : Window
     private ClipboardHistoryManager? _clipboard;
     private SnippetManager? _snippets;
     private RecentDocumentsManager? _recentDocuments;
-    private readonly Dictionary<TabItem, Page> _pages = [];
+    private readonly Dictionary<TabItem, UserControl> _pages = [];
     private readonly ObservableCollection<string> _scopePaths = [];
     private readonly ObservableCollection<AliasEntry> _aliasEntries = [];
     private readonly ObservableCollection<string> _ignoredApps = [];
@@ -99,7 +99,7 @@ public partial class SettingsWindow : Window
         _pages[tabs[8]] = SafePage("隐私", BuildPrivacyPage);
     }
 
-    private Page SafePage(string name, Func<Page> build)
+    private UserControl SafePage(string name, Func<UserControl> build)
     {
         try
         {
@@ -108,7 +108,7 @@ public partial class SettingsWindow : Window
         catch (Exception exception)
         {
             AppPaths.LogException(exception);
-            var page = new Page();
+            var page = new UserControl();
             page.Content = new TextBlock
             {
                 Text = $"页面“{name}”加载失败：{exception.Message}",
@@ -119,9 +119,9 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private Page BuildGeneralPage()
+    private UserControl BuildGeneralPage()
     {
-        var page = new Page();
+        var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("通用"));
         stack.Children.Add(CheckBox("开机启动", "LaunchAtLogin", "登录 Windows 后自动运行 YTools"));
@@ -141,9 +141,9 @@ public partial class SettingsWindow : Window
         return page;
     }
 
-    private Page BuildSearchPage()
+    private UserControl BuildSearchPage()
     {
-        var page = new Page();
+        var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("搜索内容"));
         var panel = new WrapPanel();
@@ -205,9 +205,9 @@ public partial class SettingsWindow : Window
         return page;
     }
 
-    private Page BuildAliasesPage()
+    private UserControl BuildAliasesPage()
     {
-        var page = new Page();
+        var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("应用别名"));
         stack.Children.Add(new TextBlock
@@ -274,9 +274,9 @@ public partial class SettingsWindow : Window
         return page;
     }
 
-    private Page BuildAppearancePage()
+    private UserControl BuildAppearancePage()
     {
-        var page = new Page();
+        var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("启动器外观"));
         stack.Children.Add(ComboRow("外观样式", "LauncherAppearanceStyle", EnumMetadata.StyleOptions()));
@@ -294,9 +294,9 @@ public partial class SettingsWindow : Window
         return page;
     }
 
-    private Page BuildHotKeysPage()
+    private UserControl BuildHotKeysPage()
     {
-        var page = new Page();
+        var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("全局快捷键"));
         stack.Children.Add(new TextBlock
@@ -335,9 +335,9 @@ public partial class SettingsWindow : Window
         return page;
     }
 
-    private Page BuildClipboardPage()
+    private UserControl BuildClipboardPage()
     {
-        var page = new Page();
+        var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("剪贴板历史"));
         stack.Children.Add(CheckBox("启用剪贴板历史", "ClipboardEnabled", "启用剪贴板历史"));
@@ -387,9 +387,9 @@ public partial class SettingsWindow : Window
         return page;
     }
 
-    private Page BuildSnippetsPage()
+    private UserControl BuildSnippetsPage()
     {
-        var page = new Page();
+        var page = new UserControl();
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -468,9 +468,9 @@ public partial class SettingsWindow : Window
         return page;
     }
 
-    private Page BuildSystemCommandsPage()
+    private UserControl BuildSystemCommandsPage()
     {
-        var page = new Page();
+        var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("系统命令"));
         stack.Children.Add(new TextBlock
@@ -520,9 +520,9 @@ public partial class SettingsWindow : Window
         return page;
     }
 
-    private Page BuildPrivacyPage()
+    private UserControl BuildPrivacyPage()
     {
-        var page = new Page();
+        var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("隐私"));
         stack.Children.Add(new TextBlock

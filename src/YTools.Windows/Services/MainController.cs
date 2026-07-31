@@ -109,6 +109,12 @@ public sealed class MainController
         _messages = null;
     }
 
+    /// <summary>Diagnostic entry: opens the settings window directly.</summary>
+    public void ShowSettings()
+    {
+        OpenSettings();
+    }
+
     private void ConfigureHotKeys()
     {
         if (_hotKeys is null || _launcherWindow is null || _clipboardWindow is null)
@@ -260,13 +266,14 @@ public sealed class MainController
         {
             if (_settingsWindow is null)
             {
-                _settingsWindow = new SettingsWindow();
-                _settingsWindow.Attach(
+                var settingsWindow = new SettingsWindow();
+                settingsWindow.Attach(
                     _preferences,
                     _clipboard!,
                     _snippets!,
                     _recentDocuments!);
-                _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+                settingsWindow.Closed += (_, _) => _settingsWindow = null;
+                _settingsWindow = settingsWindow;
             }
 
             _settingsWindow.Show();

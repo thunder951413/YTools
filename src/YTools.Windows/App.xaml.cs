@@ -63,6 +63,10 @@ public partial class App : Application
         UI.IconService.InitializeCom();
         _controller = new MainController();
         _controller.Start();
+        if (e.Args.Contains("--opensettings"))
+        {
+            _controller.ShowSettings();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
