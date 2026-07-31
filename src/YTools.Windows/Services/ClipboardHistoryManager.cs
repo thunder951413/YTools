@@ -196,12 +196,12 @@ public sealed class ClipboardHistoryManager : ObservableObject
         switch (item.Kind)
         {
             case ClipboardItemKind.Text:
-                Clipboard.SetText(item.Payload.FirstOrDefault() ?? "");
+                TrySetClipboard(() => Clipboard.SetText(item.Payload.FirstOrDefault() ?? ""));
                 break;
             case ClipboardItemKind.Files:
                 var collection = new System.Collections.Specialized.StringCollection();
                 collection.AddRange(item.Payload.ToArray());
-                Clipboard.SetFileDropList(collection);
+                TrySetClipboard(() => Clipboard.SetFileDropList(collection));
                 break;
             case ClipboardItemKind.Image:
                 var data = item.BinaryData ?? await _imageTasks.GetOrAdd(
@@ -209,7 +209,7 @@ public sealed class ClipboardHistoryManager : ObservableObject
                     id => _persistence.ImageDataAsync(id));
                 if (data is not null)
                 {
-                    Clipboard.SetImage(DecodeImage(data));
+                    TrySetClipboard(() => Clipboard.SetImage(DecodeImage(data)));
                 }
 
                 break;
@@ -353,7 +353,17 @@ public sealed class ClipboardHistoryManager : ObservableObject
             return;
         }
 
-        var capture = MakeCapture();
+        ClipboardCapture? capture;
+        try
+        {
+            capture = MakeCapture();
+        }
+        catch
+        {
+            // Clipboard contention is transient; wait for the next change event.
+            return;
+        }
+
         if (capture is null)
         {
             return;
@@ -742,6 +752,18 @@ public sealed class ClipboardHistoryManager : ObservableObject
     private static string Hash(string value)
     {
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    }
+
+    private static void TrySetClipboard(Action write)
+    {
+        try
+        {
+            write();
+        }
+        catch
+        {
+            // Transient clipboard lock contention must never crash the panel.
+        }
     }
 }
 

@@ -63,5 +63,6 @@ public partial class App : Application
             "YTools",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
+        e.Handled = true;
     }
 }

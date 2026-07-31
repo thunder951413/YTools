@@ -102,8 +102,8 @@ public partial class SettingsWindow : Window
         var page = new Page();
         var stack = new StackPanel();
         stack.Children.Add(Header("通用"));
-        stack.Children.Add(CheckBox("开机启动", "登录 Windows 后自动运行 YTools", "LaunchAtLogin"));
-        stack.Children.Add(CheckBox("显示托盘图标", "隐藏后全局快捷键和剪贴板监听不受影响", "ShowTrayIcon"));
+        stack.Children.Add(CheckBox("开机启动", "LaunchAtLogin", "登录 Windows 后自动运行 YTools"));
+        stack.Children.Add(CheckBox("显示托盘图标", "ShowTrayIcon", "隐藏后全局快捷键和剪贴板监听不受影响"));
         stack.Children.Add(ComboRow("主题", "Theme", EnumMetadata.ThemeOptions()));
         stack.Children.Add(ComboRow("强调色", "AccentColor", EnumMetadata.AccentOptions()));
         var launchError = new TextBlock
@@ -139,7 +139,7 @@ public partial class SettingsWindow : Window
         }
 
         stack.Children.Add(panel);
-        stack.Children.Add(CheckBox("默认结果包含文件", "关闭后仅输入 open/打开 等前缀时返回文件", "IncludeFilesInDefaultResults"));
+        stack.Children.Add(CheckBox("默认结果包含文件", "IncludeFilesInDefaultResults", "关闭后仅输入 open/打开 等前缀时返回文件"));
         stack.Children.Add(SliderRow("最大结果数", "MaximumSearchResults", 3, 20, 1));
         stack.Children.Add(SliderRow("输入防抖（秒）", "SearchInputDelay", 0.05, 0.4, 0.05));
         stack.Children.Add(Header("搜索范围"));
@@ -262,7 +262,7 @@ public partial class SettingsWindow : Window
         stack.Children.Add(ComboRow("屏幕偏好", "ScreenPreference", EnumMetadata.ScreenOptions()));
         stack.Children.Add(SliderRow("面板宽度", "PanelWidth", 640, 960, 10));
         stack.Children.Add(SliderRow("圆角半径", "PanelCornerRadius", 10, 20, 1));
-        stack.Children.Add(CheckBox("紧凑结果行", "以更小的行高显示结果", "CompactResults"));
+        stack.Children.Add(CheckBox("紧凑结果行", "CompactResults", "以更小的行高显示结果"));
         stack.Children.Add(CheckBox("显示结果副标题", "ShowSubtitles", "显示结果副标题"));
         stack.Children.Add(CheckBox("显示数字快捷键", "ShowNumberShortcuts", "显示数字快捷键"));
         stack.Children.Add(SliderRow("结果展开动画（秒）", "ResultExpansionDuration", 0, 0.4, 0.05));
