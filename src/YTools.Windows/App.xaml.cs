@@ -12,6 +12,7 @@ public partial class App : Application
 {
     private MainController? _controller;
     private Mutex? _singleInstanceMutex;
+    private bool _ownsSingleInstanceMutex;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -26,6 +27,7 @@ public partial class App : Application
         }
 
         _singleInstanceMutex = new Mutex(initiallyOwned: true, "YTools.SingleInstance", out var createdNew);
+        _ownsSingleInstanceMutex = createdNew;
         if (!createdNew)
         {
             try
@@ -45,6 +47,7 @@ public partial class App : Application
             return;
         }
 
+        UI.IconService.InitializeCom();
         _controller = new MainController();
         _controller.Start();
     }
@@ -52,7 +55,18 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _controller?.Shutdown();
-        _singleInstanceMutex?.ReleaseMutex();
+        if (_ownsSingleInstanceMutex && _singleInstanceMutex is not null)
+        {
+            try
+            {
+                _singleInstanceMutex.ReleaseMutex();
+            }
+            catch
+            {
+                // The mutex may already be released during a hard shutdown.
+            }
+        }
+
         _singleInstanceMutex?.Dispose();
         base.OnExit(e);
     }

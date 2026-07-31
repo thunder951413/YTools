@@ -304,7 +304,15 @@ public sealed class MainController
                 return;
             }
 
-            Application.Current.Dispatcher.Invoke(ShowLauncher);
+            try
+            {
+                Application.Current.Dispatcher.Invoke(ShowLauncher);
+            }
+            catch
+            {
+                // Dispatcher may be shutting down; stop waiting.
+                return;
+            }
         }
     }
 }

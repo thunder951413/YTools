@@ -64,37 +64,49 @@ public static class IconService
             return null;
         }
 
-        return IconCache.GetOrAdd(path, static fullPath =>
+        if (IconCache.TryGetValue(path, out var cached))
         {
-            try
-            {
-                var icon = ExtractShellIcon(fullPath);
-                if (icon is not null)
-                {
-                    var bitmap = icon.ToBitmap();
-                    var imageSource = Imaging.CreateBitmapSourceFromHBitmap(
-                        bitmap.GetHbitmap(),
-                        IntPtr.Zero,
-                        Int32Rect.Empty,
-                        BitmapSizeOptions.FromWidthAndHeight(32, 32));
-                    bitmap.Dispose();
-                    icon.Dispose();
-                    imageSource.Freeze();
-                    return imageSource;
-                }
-            }
-            catch
-            {
-                // Fall through to the generic glyph.
-            }
+            return cached;
+        }
 
-            return null;
-        });
+        ImageSource? source = null;
+        try
+        {
+            source = ExtractShellIconSource(path);
+        }
+        catch
+        {
+            // Icon extraction is best-effort; failures cache as the generic glyph.
+        }
+
+        IconCache.TryAdd(path, source);
+        return source;
     }
 
-    public static void ClearCache()
+    private static ImageSource? ExtractShellIconSource(string path)
     {
-        IconCache.Clear();
+        var icon = ExtractShellIcon(path);
+        if (icon is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var bitmap = icon.ToBitmap();
+            var imageSource = Imaging.CreateBitmapSourceFromHBitmap(
+                bitmap.GetHbitmap(),
+                IntPtr.Zero,
+                Int32Rect.Empty,
+                BitmapSizeOptions.FromWidthAndHeight(32, 32));
+            bitmap.Dispose();
+            imageSource.Freeze();
+            return imageSource;
+        }
+        finally
+        {
+            icon.Dispose();
+        }
     }
 
     private static Icon? ExtractShellIcon(string path)
@@ -102,7 +114,27 @@ public static class IconService
         var info = new ShFileInfo();
         var flags = ShgfiIcon | ShgfiLargeIcon | ShgfiUseFileAttributes;
         var result = SHGetFileInfo(path, FileAttributes.Normal, ref info, Marshal.SizeOf(info), flags);
-        return result == IntPtr.Zero ? null : (Icon)Icon.FromHandle(info.Icon).Clone();
+        if (result == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            return (Icon)Icon.FromHandle(info.Icon).Clone();
+        }
+        finally
+        {
+            if (info.Icon != IntPtr.Zero)
+            {
+                _ = DestroyIcon(info.Icon);
+            }
+        }
+    }
+
+    public static void ClearCache()
+    {
+        IconCache.Clear();
     }
 
     private const uint ShgfiIcon = 0x000000100;
@@ -128,6 +160,25 @@ public static class IconService
         ref ShFileInfo psfi,
         int cbFileInfo,
         uint uFlags);
+
+    [DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
+    /// <summary>Initializes COM (STA) for shell icon extraction on the UI thread.</summary>
+    public static void InitializeCom()
+    {
+        try
+        {
+            _ = CoInitializeEx(IntPtr.Zero, 0x00000002 /* COINIT_APARTMENTTHREADED */);
+        }
+        catch
+        {
+            // COM may already be initialized; icon extraction falls back to glyphs.
+        }
+    }
+
+    [DllImport("ole32.dll")]
+    private static extern int CoInitializeEx(IntPtr pvReserved, uint dwCoInit);
 }
 
 public sealed class ResultIconConverter : System.Windows.Data.IValueConverter
