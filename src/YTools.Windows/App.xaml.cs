@@ -18,6 +18,19 @@ public partial class App : Application
     {
         base.OnStartup(e);
         DispatcherUnhandledException += OnDispatcherUnhandledException;
+        System.Windows.Forms.Application.ThreadException += (_, args) =>
+        {
+            AppPaths.LogException(args.Exception);
+            MessageBox.Show(
+                $"YTools 遇到未处理的错误：\n{args.Exception.Message}\n\n详细日志已写入 %APPDATA%\\YTools\\error.log。",
+                "YTools",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            AppPaths.LogException(args.ExceptionObject as Exception ?? new Exception("未知错误"));
+        };
 
         if (e.Args.Contains("--selftest"))
         {
@@ -73,18 +86,7 @@ public partial class App : Application
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        try
-        {
-            AppPaths.EnsureDirectories();
-            File.AppendAllText(
-                Path.Combine(AppPaths.RootDirectory, "error.log"),
-                $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] {e.Exception}\n\n");
-        }
-        catch
-        {
-            // Never mask the original failure with a logging failure.
-        }
-
+        AppPaths.LogException(e.Exception);
         MessageBox.Show(
             $"YTools 遇到未处理的错误：\n{e.Exception.Message}\n\n详细日志已写入 %APPDATA%\\YTools\\error.log。",
             "YTools",

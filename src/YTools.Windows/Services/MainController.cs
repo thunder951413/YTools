@@ -256,19 +256,31 @@ public sealed class MainController
 
     private void OpenSettings()
     {
-        if (_settingsWindow is null)
+        try
         {
-            _settingsWindow = new SettingsWindow();
-            _settingsWindow.Attach(
-                _preferences,
-                _clipboard!,
-                _snippets!,
-                _recentDocuments!);
-            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
-        }
+            if (_settingsWindow is null)
+            {
+                _settingsWindow = new SettingsWindow();
+                _settingsWindow.Attach(
+                    _preferences,
+                    _clipboard!,
+                    _snippets!,
+                    _recentDocuments!);
+                _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+            }
 
-        _settingsWindow.Show();
-        _settingsWindow.Activate();
+            _settingsWindow.Show();
+            _settingsWindow.Activate();
+        }
+        catch (Exception exception)
+        {
+            AppPaths.LogException(exception);
+            MessageBox.Show(
+                $"无法打开设置：\n{exception.Message}\n\n详细日志已写入 %APPDATA%\\YTools\\error.log。",
+                "YTools",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private void ShowLargeType(string text)

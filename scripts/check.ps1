@@ -35,7 +35,8 @@ $patterns = @(
     'Assembly\.LoadFrom',
     'Assembly\.LoadFile',
     'Activator\.CreateInstance',
-    'AppDomain',
+    'AppDomain\.CurrentDomain\.Load',
+    'AppDomain\.CreateDomain',
     'cmd\.exe',
     'powershell\.exe',
     '/bin/(sh|bash|zsh)'

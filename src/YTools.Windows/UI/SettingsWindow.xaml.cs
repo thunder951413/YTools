@@ -7,6 +7,8 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using YTools.Infrastructure;
 using YTools.Models;
 using YTools.Services;
 
@@ -86,15 +88,35 @@ public partial class SettingsWindow : Window
     private void BuildPages()
     {
         var tabs = NavTabs.Items.Cast<TabItem>().ToList();
-        _pages[tabs[0]] = BuildGeneralPage();
-        _pages[tabs[1]] = BuildSearchPage();
-        _pages[tabs[2]] = BuildAliasesPage();
-        _pages[tabs[3]] = BuildAppearancePage();
-        _pages[tabs[4]] = BuildHotKeysPage();
-        _pages[tabs[5]] = BuildClipboardPage();
-        _pages[tabs[6]] = BuildSnippetsPage();
-        _pages[tabs[7]] = BuildSystemCommandsPage();
-        _pages[tabs[8]] = BuildPrivacyPage();
+        _pages[tabs[0]] = SafePage("通用", BuildGeneralPage);
+        _pages[tabs[1]] = SafePage("搜索", BuildSearchPage);
+        _pages[tabs[2]] = SafePage("应用别名", BuildAliasesPage);
+        _pages[tabs[3]] = SafePage("外观", BuildAppearancePage);
+        _pages[tabs[4]] = SafePage("快捷键", BuildHotKeysPage);
+        _pages[tabs[5]] = SafePage("剪贴板", BuildClipboardPage);
+        _pages[tabs[6]] = SafePage("片段", BuildSnippetsPage);
+        _pages[tabs[7]] = SafePage("系统命令", BuildSystemCommandsPage);
+        _pages[tabs[8]] = SafePage("隐私", BuildPrivacyPage);
+    }
+
+    private Page SafePage(string name, Func<Page> build)
+    {
+        try
+        {
+            return build();
+        }
+        catch (Exception exception)
+        {
+            AppPaths.LogException(exception);
+            var page = new Page();
+            page.Content = new TextBlock
+            {
+                Text = $"页面“{name}”加载失败：{exception.Message}",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.OrangeRed
+            };
+            return page;
+        }
     }
 
     private Page BuildGeneralPage()

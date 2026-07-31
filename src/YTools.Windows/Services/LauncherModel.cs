@@ -211,6 +211,7 @@ public sealed class LauncherModel : ObservableObject
             _actionMenu.MoveSelection(offset);
             RaisePropertyChanged(nameof(Actions));
             RaisePropertyChanged(nameof(SelectedActionIndex));
+            RaisePropertyChanged(nameof(VisibleItemCount));
             return;
         }
 
@@ -303,6 +304,7 @@ public sealed class LauncherModel : ObservableObject
         RaisePropertyChanged(nameof(Actions));
         RaisePropertyChanged(nameof(IsShowingActions));
         RaisePropertyChanged(nameof(ActionTitle));
+        RaisePropertyChanged(nameof(VisibleItemCount));
         return true;
     }
 
@@ -402,6 +404,7 @@ public sealed class LauncherModel : ObservableObject
         RaisePropertyChanged(nameof(Actions));
         RaisePropertyChanged(nameof(IsShowingActions));
         RaisePropertyChanged(nameof(ActionTitle));
+        RaisePropertyChanged(nameof(VisibleItemCount));
         return true;
     }
 
@@ -582,6 +585,12 @@ public sealed class LauncherModel : ObservableObject
                     IsSearchPending = false;
                     RebuildResults();
                 }
+                else if (task.IsFaulted && Query == requestedQuery)
+                {
+                    _backgroundResults = [];
+                    IsSearchPending = false;
+                    RebuildResults();
+                }
             }, TaskScheduler.FromCurrentSynchronizationContext());
 
         var fileQuery = IsFileNavigationActive || !_preferences.IsSearchContentEnabled(SearchContentType.Files)
@@ -666,6 +675,7 @@ public sealed class LauncherModel : ObservableObject
         _results = aggregated.Results.ToList();
         SelectedIndex = aggregated.SelectedIndex;
         RaisePropertyChanged(nameof(Results));
+        RaisePropertyChanged(nameof(VisibleItemCount));
         if (SelectedFilePath is null)
         {
             ShowsPreview = false;
@@ -724,6 +734,7 @@ public sealed class LauncherModel : ObservableObject
         RaisePropertyChanged(nameof(Actions));
         RaisePropertyChanged(nameof(IsShowingActions));
         RaisePropertyChanged(nameof(ActionTitle));
+        RaisePropertyChanged(nameof(VisibleItemCount));
     }
 
     private void DisplayPreviewImmediately()

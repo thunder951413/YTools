@@ -119,16 +119,24 @@ public sealed class SearchCoordinator
         string query,
         IReadOnlyDictionary<string, string> aliases)
     {
-        var descriptor = new ModuleDescriptor(
-            "applications",
-            "应用程序",
-            new HashSet<ModuleCapability> { ModuleCapability.LocalFileRead });
-        var results = _applications.Search(query, aliases);
-        return Sanitize(
-            results,
-            descriptor,
-            new ModuleResultPolicy(
-                allowedCapabilities: new HashSet<ModuleCapability> { ModuleCapability.LocalFileRead }));
+        try
+        {
+            var descriptor = new ModuleDescriptor(
+                "applications",
+                "应用程序",
+                new HashSet<ModuleCapability> { ModuleCapability.LocalFileRead });
+            var results = _applications.Search(query, aliases);
+            return Sanitize(
+                results,
+                descriptor,
+                new ModuleResultPolicy(
+                    allowedCapabilities: new HashSet<ModuleCapability> { ModuleCapability.LocalFileRead }));
+        }
+        catch
+        {
+            // One provider must never blank the whole result set.
+            return [];
+        }
     }
 
     private static async Task<IReadOnlyList<LauncherResult>> SearchModule(

@@ -61,6 +61,21 @@ public static class AppPaths
         }
     }
 
+    public static void LogException(Exception exception)
+    {
+        try
+        {
+            EnsureDirectories();
+            File.AppendAllText(
+                Path.Combine(RootDirectory, "error.log"),
+                $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] {exception}\n\n");
+        }
+        catch
+        {
+            // Logging must never mask the original failure.
+        }
+    }
+
     private static void RestrictDirectory(string path)
     {
         try

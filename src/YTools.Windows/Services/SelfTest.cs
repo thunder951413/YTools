@@ -101,6 +101,21 @@ public static class SelfTest
             var statsResults = textStats.SearchAsync(new ModuleSearchRequest("统计 hello world", 5)).GetAwaiter().GetResult();
             Check("module.textStatistics", statsResults.Count == 1 && statsResults[0].Title.Contains("字符"));
 
+            var applicationIndex = new ApplicationIndexService();
+            applicationIndex.Prepare();
+            var applicationResults = applicationIndex.Search("note", new Dictionary<string, string>());
+            Check("applications.index", applicationResults.Count > 0);
+
+            var fileSearch = new FileSearchService();
+            var fileResults = fileSearch.SearchAsync(
+                "documents",
+                FileSearchMode.Default,
+                [],
+                5,
+                CancellationToken.None).GetAwaiter().GetResult();
+            Check("files.index", fileResults.Count > 0);
+            fileSearch.Dispose();
+
             var dictionary = new DictionaryService();
             var englishResults = dictionary.Search("hello", 5);
             var chineseResults = dictionary.Search("微信", 5);

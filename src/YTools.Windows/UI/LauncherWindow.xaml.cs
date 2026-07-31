@@ -76,6 +76,7 @@ public partial class LauncherWindow : Window
             case nameof(LauncherModel.FileBuffer):
             case nameof(LauncherModel.ShowsPreview):
             case nameof(LauncherModel.DisplayedPreviewPath):
+            case nameof(LauncherModel.VisibleItemCount):
                 AdjustPanelSize();
                 UpdateEmptyState();
                 UpdatePreview();
