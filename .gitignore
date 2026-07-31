@@ -5,3 +5,5 @@
 *.xcuserstate
 xcuserdata/
 *.log
+**/bin/
+**/obj/

@@ -1,52 +1,51 @@
-# 自用原生模块开发
+# 个人源码模块开发（Windows 版）
 
-YTools 不加载外部插件、网页或脚本。个人工具以 Swift 源码实现，重新编译后与宿主一起签名。公共边界位于 `YToolsModuleKit`，模块只计算结构化结果，不能直接持有窗口、剪贴板、Shell 或宿主对象。
+个人工具以源码形式编译进 YTools，宿主负责权限、UI 与副作用。模块只需要实现 `IYToolsModule`。
 
-## 最小模块
+```csharp
+using YTools.ModuleKit;
 
-```swift
-import YToolsModuleKit
+public sealed class MyToolModule : IYToolsModule
+{
+    public ModuleDescriptor Descriptor { get; } = new("my-tool", "我的工具");
 
-struct MyTextTool: YToolsModule {
-    let descriptor = ModuleDescriptor(id: "my-text-tool", name: "我的文本工具")
-
-    func search(_ request: ModuleSearchRequest) async throws -> [LauncherResult] {
-        guard request.query.hasPrefix("my ") else { return [] }
-        let value = String(request.query.dropFirst(3))
-        return [LauncherResult(
-            id: "my-text-tool:result",
-            moduleID: descriptor.id,
-            title: value.uppercased(),
-            subtitle: "回车复制",
-            icon: .system("textformat"),
-            score: 900,
-            action: .copy(value.uppercased())
-        )]
+    public Task<IReadOnlyList<LauncherResult>> SearchAsync(ModuleSearchRequest request)
+    {
+        var results = new List<LauncherResult>();
+        // 只允许返回结构化结果，不允许执行任何副作用。
+        results.Add(new LauncherResult(
+            "my-tool:hello",
+            Descriptor.Id,
+            "你好",
+            "回车复制",
+            new ResultIcon.System("gearshape.fill"),
+            800,
+            new ResultAction.Copy("你好")));
+        return Task.FromResult<IReadOnlyList<LauncherResult>>(results);
     }
 }
 ```
 
-将实例加入 `SearchCoordinator` 的 `personalModules` 后重新构建。内置工具也使用同一个异步协议和结果校验路径。仓库中的 `TextStatisticsModule` 是可直接参考的无权限示例，输入 `stats 文本`、`统计 文本` 或 `字数 文本` 使用。
+## 注册
 
-## 能力和宿主校验
+在 `SearchCoordinator` 构造函数的 `personalModules` 参数传入：
 
-模块可声明 `localFileRead`、`clipboardRead`、`contactsRead` 或 `calendarRead`。声明不等于获得权限：宿主还必须显式授予，`ModuleResultPolicy` 才会接纳结果。
-
-- 无权限模块只允许复制文本、空动作和打开 YTools 设置。
-- 文件图标、打开、访达显示和目录导航必须同时声明并获得 `localFileRead`，且 URL 必须是本地 `file://`。
-- 网页 URL 会被拒绝，不会交给 `NSWorkspace`。
-- 隐藏/退出应用和系统控制动作不会开放给个人模块。
-- 每个模块每次最多接纳 20 条结果，分数被限制在宿主范围内，模块身份由宿主重写。
-- 错误只丢弃该模块本次结果，不关闭启动器；模块应响应 Task cancellation。
-
-能力策略约束的是宿主接受和执行的结构化结果，并不能沙箱同一进程内的 Swift 代码。因此个人模块必须接受源码审查；`scripts/check.sh` 还会拒绝主程序中的网络、网页、动态加载和 Shell API。系统控制动作只授予仓库内明确注册的内置模块。
-
-未来确需网络时，不应把 `URLSession` 加进主程序，也不应仅增加一个声明式 `network` 能力。应建立独立 XPC Service，并真正实施域名白名单、HTTPS、超时、响应大小上限和显式开关。
-
-## 开发检查
-
-```bash
-./scripts/check.sh
+```csharp
+public SearchCoordinator(SpellingService spelling, IReadOnlyList<IYToolsModule>? personalModules = null)
 ```
 
-`YToolsCoreChecks` 会验证计算器、快捷键路由、拼音规范化和模块结果安全策略。完整 Xcode 环境还应运行 `swift test`。
+## 能力与动作
+
+- 默认无权限：只能返回 `.copy(text)`、`.none` 或 `.openSettings`。
+- 需要读本地文件：描述符声明 `LocalFileRead`，并在注册时用 `ModuleResultPolicy(allowedCapabilities: ...)` 授予；动作只能是本机绝对路径的 `open`/`reveal`/`navigate`。
+- 特权系统动作（回收站、屏保、关显示器、系统设置）只有内置模块通过 `allowsPrivilegedActions: true` 获得。
+- 主程序不授予 `ClipboardRead`/`ContactsRead`/`CalendarRead`（Windows 版当前无对应系统服务）。
+- 模块最多返回 40 条；每条 id ≤ 500、标题 ≤ 1000、副标题 ≤ 4000 字符。
+
+## 规则
+
+- 不动态加载程序集；模块随应用编译。
+- 不发起网络请求；需要网络的新能力必须先与用户确认并隔离。
+- 不执行 Shell/命令；所有副作用交给 `ActionDispatcher`。
+- 新增逻辑后补充 xUnit 测试，并在 `SelfTest` 中增加检查项。
+- 运行 `./scripts/check.ps1` 确认构建、测试与安全扫描通过。

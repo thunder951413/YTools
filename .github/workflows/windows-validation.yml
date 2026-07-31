@@ -1,0 +1,45 @@
+name: Windows validation
+
+on:
+  push:
+    branches: [windows]
+  pull_request:
+    branches: [windows]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Strict build
+        run: dotnet build YTools.Windows.sln -c Debug -warnaserror
+      - name: Unit tests
+        run: dotnet test YTools.Windows.sln -c Debug --no-build
+      - name: Self-test
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'src\YTools.Windows\bin\Debug\net8.0-windows\YTools.exe'
+          $process = Start-Process -FilePath $exe -ArgumentList '--selftest' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Self-test failed ($($process.ExitCode))" }
+      - name: Forbidden API scan
+        shell: pwsh
+        run: |
+          $patterns = @('HttpClient','WebClient','TcpClient','UdpClient','NetworkStream','Socket\(','Assembly\.Load','Activator\.CreateInstance','cmd\.exe','powershell\.exe','/bin/(sh|bash|zsh)')
+          $hits = Get-ChildItem -Path src\YTools.Windows -Recurse -Filter *.cs |
+            Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
+            Select-String -Pattern $patterns
+          if ($hits) { $hits | ForEach-Object { Write-Host $_.Line }; throw 'Forbidden API found' }
+      - name: Publish single-file release
+        run: ./scripts/build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTools-windows-x64
+          path: dist/YTools.Windows/YTools.exe

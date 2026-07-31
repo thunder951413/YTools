@@ -1,82 +1,76 @@
-# YTools
+# YTools (Windows)
 
-YTools 是一个面向个人使用的 macOS 原生启动器与本地效率工具，目标是提供接近 Alfred 的高频体验，同时保持离线优先、最小权限和可审计实现。
+YTools 是一个面向个人使用的 **Windows 原生启动器与本地效率工具**，目标是提供接近 Alfred 的高频体验，同时保持离线优先、最小权限和可审计实现。本分支是原 macOS 版（Swift 6/AppKit/SwiftUI）的完整 Windows 移植，使用 **C# / .NET 8 / WPF** 重写。
 
-项目使用 Swift 6、AppKit、SwiftUI 与 macOS 系统框架，不包含 Electron、Node、网页插件、插件市场、广告、遥测、心跳、自动更新或启动联网。
+主程序不包含 Electron、Node、网页插件、插件市场、广告、遥测、心跳、自动更新或任何网络客户端。
 
 ## 功能
 
-- 应用启动：索引本机 Applications，支持名称、英文缩写、中文拼音全拼及首字母搜索；可在设置中为任意应用添加中文名、简称或拼音别名。
-- 本地搜索：Spotlight 文件名、正文与 Finder 标签搜索；支持 `open/打开`、`find/查找`、`in/内容` 和 `tag/标签`。
-- 文件操作：`/`、`~` 目录导航、Quick Look、打开方式、复制/移动、访达显示、路径复制及 Option 文件缓冲。
-- 剪贴板历史：独立快捷键、类型筛选、忽略应用、暂停、固定、分段清理、文本长度限制及 AES-GCM 加密存储。
-- 本地工具：安全表达式计算、白名单数学函数、离线单位换算、系统词典、拼写建议、Large Type、Snippets 和最近文档。
-- 系统命令：可配置关键词；屏幕保护、显示废纸篓、关闭显示器、勿扰与外观设置入口，以及确认后通过固定 Finder 事件清空废纸篓。
-- 原生设置：启动行为、跨分辨率相对窗口位置、默认输入源、搜索内容类型、应用别名、外观风格、结果展开速度、快捷键、剪贴板、系统命令、文本片段及隐私控制。
-- 源码工具模块：内置与个人工具通过 `YToolsModuleKit` 编译进应用，模块结果由宿主校验，不动态加载外部代码。
+- **应用启动**：索引开始菜单快捷方式（.lnk，经 Shell COM 解析）与 WindowsApps 应用执行别名，支持名称、英文缩写、中文拼音全拼及首字母搜索；可在设置中为任意应用添加中文名、简称或拼音别名。
+- **本地文件搜索**：已安装 [Everything](https://www.voidtools.com/) 时自动使用 Everything 引擎（文件名、`in/内容` 内容与 `tag/标签` 语法）；未安装时回退到内置文件名扫描。支持 `open/打开`、`find/查找` 前缀与 `/`、`~`、盘符目录导航。
+- **文件操作**：目录导航、资源管理器显示、打开方式、复制/移动、路径复制及 Option（Alt）文件缓冲。
+- **剪贴板历史**：独立快捷键、类型筛选、忽略进程、暂停、固定、分段清理、文本长度限制及 AES-GCM 加密存储（密钥由 DPAPI 保护）。
+- **本地工具**：安全表达式计算、白名单数学函数、离线单位换算、离线中英词典（CC-CEDICT）、英文拼写建议（Hunspell）、大字显示、Snippets 和最近文档。
+- **系统命令**：可配置关键词；显示/清空回收站、启动屏幕保护、关闭显示器、专注模式与外观设置入口。
+- **原生设置**：开机启动、面板外观样式、位置、宽度、快捷键、剪贴板、片段、系统命令、应用别名与隐私控制。
+- **源码工具模块**：内置与个人工具通过 `IYToolsModule` 契约编译进应用，结果由宿主校验，不动态加载外部代码。
 
 默认快捷键：
 
-- `Option + Space`：显示启动器。
-- `Option + Command + C`：显示剪贴板历史。
-- `Command + ,`：打开设置。
+- `Alt + Space`：显示启动器。
+- `Alt + Ctrl + C`：显示剪贴板历史。
+- `Ctrl + ,`：打开设置。
 
-所有快捷键均可在设置中修改。
+所有快捷键均可在设置中修改；被占用时自动回退到备用组合。
 
 ## 系统要求
 
-- macOS 14 或更高版本。
-- Swift 6；完整测试建议使用完整 Xcode。
+- Windows 10 / 11（x64）。
+- 发布版为自包含单文件，无需预装 .NET 运行时。
+- 可选：安装 Everything 以获得即时文件搜索；未安装时自动使用内置扫描。
 
 ## 构建
 
-运行严格构建、核心回归与安全边界扫描：
+需要 .NET 8 SDK：
 
-```bash
-./scripts/check.sh
+```powershell
+./scripts/check.ps1      # 严格编译、58 项单元测试、23 项自检与禁止 API 扫描
+./scripts/build.ps1      # 生成 dist/YTools.Windows/YTools.exe 单文件发布版
 ```
 
-运行调试版本：
+运行调试版：
 
-```bash
-swift run YTools
+```powershell
+dotnet run --project src/YTools.Windows
 ```
 
-生成 ad-hoc 签名的应用：
+自检模式（无 UI，CI 冒烟用）：
 
-```bash
-./scripts/build-app.sh
-open dist/YTools.app
+```powershell
+src\YTools.Windows\bin\Debug\net8.0-windows\YTools.exe --selftest
 ```
-
-运行完整测试：
-
-```bash
-swift test
-```
-
-Developer ID、Hardened Runtime 和公证分发需要相应的 Apple Developer 证书与凭据。
 
 ## 安全与隐私
 
 - 主程序没有网络客户端，不发送查询、剪贴板、文件名、使用记录或设备信息。
-- 剪贴板、Snippets 与最近文档分别加密，随机密钥保存在登录钥匙串。
-- 查询文本不能成为 Shell、脚本、可执行路径或任意 URL 参数。
-- 系统动作是编译期白名单；永久操作在执行时确认。
-- 清空废纸篓只在用户确认后请求 Finder 执行固定、无参数的 `fndr/empt` 事件，不申请完全磁盘访问。
-- 不申请辅助功能权限；未来确需网络的个人工具必须隔离、限制域名并由用户显式启用。
+- 剪贴板、Snippets 与最近文档分别用 AES-GCM 加密，随机密钥由 Windows DPAPI（当前用户）保护；数据目录 ACL 仅允许当前用户。
+- 查询文本不能成为 Shell、脚本、可执行路径或任意 URL 参数；系统动作是编译期白名单。
+- 清空回收站只在用户确认后调用固定的 `SHEmptyRecycleBin`；文件移入回收站使用系统 `IFileOperation` 等价 API，不提供永久删除。
+- 不动态加载未签名的库；仅当本机已安装 Everything 时加载其官方 `Everything64.dll` 做只读查询。
+- 快捷键、剪贴板监听均为本机 Win32 消息；不申请辅助功能权限。
 
 ## 项目结构
 
 ```text
-Sources/
-  YTools/             # AppKit/SwiftUI 应用、模块、服务与界面
-  YToolsCore/         # 无 UI 的可测试核心逻辑
-  YToolsModuleKit/    # 源码工具模块契约与宿主安全策略
-  YToolsCoreChecks/   # 不依赖 XCTest 的核心回归入口
-Tests/YToolsTests/    # XCTest 回归测试
-Resources/            # 应用图标
-scripts/              # 构建与检查脚本
+src/YTools.Windows/       # WPF 应用（C# / .NET 8）
+  Core/                   # 纯逻辑：计算器、拼音搜索、命令路由、模块策略
+  ModuleKit/              # 源码模块契约与宿主安全策略
+  Models/                 # 偏好、数据模型
+  Services/               # 搜索、动作、剪贴板、加密存储、热键、系统命令
+  UI/                     # 启动器、剪贴板面板、设置、大字显示、预览
+Tests/YTools.Windows.Tests/  # xUnit 回归测试
+scripts/                  # check.ps1 / build.ps1
+Sources/                  # macOS 原版 Swift 源码（仅作移植参考，本分支不参与构建）
 ```
 
 ## 文档
@@ -87,7 +81,8 @@ scripts/              # 构建与检查脚本
 - [个人模块开发](MODULE_DEVELOPMENT.md)
 - [Alfred 功能对标](ALFRED_PARITY_SPEC.md)
 - [实施路线图](ALFRED_ROADMAP.md)
+- [第三方数据与许可证](THIRD_PARTY_NOTICES.md)
 
 ## 许可证
 
-[MIT](LICENSE)
+[MIT](LICENSE)。内置词典数据 CC-CEDICT 为 CC BY-SA 4.0，拼写词库来自 LibreOffice 词典项目，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

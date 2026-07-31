@@ -1,0 +1,233 @@
+using System.IO;
+
+namespace YTools.ModuleKit;
+
+public enum ModuleCapability
+{
+    LocalFileRead,
+    ClipboardRead,
+    ContactsRead,
+    CalendarRead
+}
+
+public sealed record ModuleDescriptor(
+    string Id,
+    string Name,
+    IReadOnlySet<ModuleCapability> Capabilities)
+{
+    public ModuleDescriptor(string id, string name)
+        : this(id, name, new HashSet<ModuleCapability>())
+    {
+    }
+}
+
+public readonly struct ModuleSearchRequest
+{
+    public ModuleSearchRequest(string query, int maximumResults = 20)
+    {
+        Query = query;
+        MaximumResults = Math.Clamp(maximumResults, 1, 100);
+    }
+
+    public string Query { get; }
+
+    public int MaximumResults { get; }
+}
+
+/// <summary>Source-compiled personal modules implement this contract.</summary>
+public interface IYToolsModule
+{
+    ModuleDescriptor Descriptor { get; }
+
+    Task<IReadOnlyList<LauncherResult>> SearchAsync(ModuleSearchRequest request);
+}
+
+public abstract record ResultIcon
+{
+    public sealed record System(string Name) : ResultIcon;
+
+    public sealed record Application(string Path) : ResultIcon;
+
+    public sealed record File(string Path) : ResultIcon;
+}
+
+/// <summary>
+/// The complete action vocabulary available to a compiled module. Deliberately
+/// excludes arbitrary shell commands, scripts, dynamic code and URL opening.
+/// </summary>
+public abstract record ResultAction
+{
+    public sealed record Copy(string Text) : ResultAction;
+
+    public sealed record Open(string Path) : ResultAction;
+
+    public sealed record Reveal(string Path) : ResultAction;
+
+    public sealed record Navigate(string Path) : ResultAction;
+
+    public sealed record HideApplication(string ProcessName) : ResultAction;
+
+    public sealed record QuitApplication(string ProcessName) : ResultAction;
+
+    public sealed record ShowTrash : ResultAction;
+
+    public sealed record EmptyTrash : ResultAction;
+
+    public sealed record StartScreenSaver : ResultAction;
+
+    public sealed record SleepDisplays : ResultAction;
+
+    public sealed record OpenFocusSettings : ResultAction;
+
+    public sealed record OpenAppearanceSettings : ResultAction;
+
+    public sealed record OpenSettings : ResultAction;
+
+    public sealed record None : ResultAction;
+}
+
+public sealed record LauncherResult(
+    string Id,
+    string ModuleId,
+    string Title,
+    string Subtitle,
+    ResultIcon Icon,
+    int Score,
+    ResultAction Action)
+{
+    public string? FilePath => Icon switch
+    {
+        ResultIcon.File file => file.Path,
+        _ => null
+    };
+
+    public string? ResourcePath => Icon switch
+    {
+        ResultIcon.Application application => application.Path,
+        ResultIcon.File file => file.Path,
+        _ => null
+    };
+
+    public bool IsApplication => Icon is ResultIcon.Application;
+
+    public LauncherResult WithScore(int newScore)
+    {
+        return this with { Score = newScore };
+    }
+
+    public LauncherResult HostedBy(string moduleId, int lowerBound, int upperBound)
+    {
+        return this with
+        {
+            ModuleId = moduleId,
+            Score = Math.Clamp(Score, lowerBound, upperBound)
+        };
+    }
+}
+
+/// <summary>
+/// Host-side validation for source-compiled modules. Capability declarations
+/// are not trusted by themselves; the host must also grant each capability.
+/// </summary>
+public sealed class ModuleResultPolicy
+{
+    public ModuleResultPolicy(
+        IReadOnlySet<ModuleCapability>? allowedCapabilities = null,
+        int scoreLowerBound = -10_000,
+        int scoreUpperBound = 10_000,
+        bool allowsPrivilegedActions = false)
+    {
+        AllowedCapabilities = allowedCapabilities ?? new HashSet<ModuleCapability>();
+        ScoreLowerBound = scoreLowerBound;
+        ScoreUpperBound = scoreUpperBound;
+        AllowsPrivilegedActions = allowsPrivilegedActions;
+    }
+
+    public IReadOnlySet<ModuleCapability> AllowedCapabilities { get; }
+
+    public int ScoreLowerBound { get; }
+
+    public int ScoreUpperBound { get; }
+
+    public bool AllowsPrivilegedActions { get; }
+
+    public bool Permits(ModuleDescriptor descriptor)
+    {
+        var id = descriptor.Id.Trim();
+        var name = descriptor.Name.Trim();
+        return !string.IsNullOrEmpty(id)
+            && id.Length <= 100
+            && !string.IsNullOrEmpty(name)
+            && name.Length <= 200
+            && descriptor.Capabilities.IsSubsetOf(AllowedCapabilities);
+    }
+
+    public LauncherResult? Sanitize(LauncherResult result, ModuleDescriptor descriptor)
+    {
+        if (!Permits(descriptor)
+            || string.IsNullOrEmpty(result.Id)
+            || result.Id.Length > 500
+            || string.IsNullOrEmpty(result.Title)
+            || result.Title.Length > 1_000
+            || result.Subtitle.Length > 4_000
+            || !Permits(result.Icon, descriptor)
+            || !Permits(result.Action, descriptor))
+        {
+            return null;
+        }
+
+        return result.HostedBy(descriptor.Id, ScoreLowerBound, ScoreUpperBound);
+    }
+
+    private static bool Permits(ResultIcon icon, ModuleDescriptor descriptor)
+    {
+        switch (icon)
+        {
+            case ResultIcon.System system:
+                return !string.IsNullOrEmpty(system.Name) && system.Name.Length <= 200;
+            case ResultIcon.Application application:
+                return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
+                    && Path.IsPathRooted(application.Path);
+            case ResultIcon.File file:
+                return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
+                    && Path.IsPathRooted(file.Path);
+            default:
+                return false;
+        }
+    }
+
+    private bool Permits(ResultAction action, ModuleDescriptor descriptor)
+    {
+        switch (action)
+        {
+            case ResultAction.Copy copy:
+                return copy.Text.Length <= 1_000_000;
+            case ResultAction.None:
+            case ResultAction.OpenSettings:
+                return true;
+            case ResultAction.Open open:
+                return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
+                    && Path.IsPathRooted(open.Path);
+            case ResultAction.Reveal reveal:
+                return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
+                    && Path.IsPathRooted(reveal.Path);
+            case ResultAction.Navigate navigate:
+                return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
+                    && navigate.Path.Length <= 4_096
+                    && (Path.IsPathRooted(navigate.Path) || navigate.Path.StartsWith("~", StringComparison.Ordinal));
+            case ResultAction.HideApplication hide:
+                return AllowsPrivilegedActions && !string.IsNullOrEmpty(hide.ProcessName) && hide.ProcessName.Length <= 255;
+            case ResultAction.QuitApplication quit:
+                return AllowsPrivilegedActions && !string.IsNullOrEmpty(quit.ProcessName) && quit.ProcessName.Length <= 255;
+            case ResultAction.ShowTrash:
+            case ResultAction.EmptyTrash:
+            case ResultAction.StartScreenSaver:
+            case ResultAction.SleepDisplays:
+            case ResultAction.OpenFocusSettings:
+            case ResultAction.OpenAppearanceSettings:
+                return AllowsPrivilegedActions;
+            default:
+                return false;
+        }
+    }
+}
