@@ -84,6 +84,7 @@ public sealed class MainController
 
         _preferences.HotKeysChanged += ConfigureHotKeys;
         _preferences.ClearUsageLearningRequested += () => _launcher?.ClearUsageLearning();
+        _preferences.PropertyChanged += OnPreferencePropertyChanged;
         ConfigureHotKeys();
 
         _showLauncherEvent = new EventWaitHandle(
@@ -218,6 +219,19 @@ public sealed class MainController
     private void UpdateTrayHotKeyTitles(HotKeyDefinition launcher, HotKeyDefinition clipboard)
     {
         _tray?.UpdateHotKeyTitles(launcher.DisplayString, clipboard.DisplayString);
+    }
+
+    private void OnPreferencePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(AppPreferences.Theme):
+            case nameof(AppPreferences.AccentColor):
+            case nameof(AppPreferences.LauncherAppearanceStyle):
+                ThemeService.Apply(_preferences);
+                _settingsWindow?.RefreshChrome();
+                break;
+        }
     }
 
     private void ShowLauncher()

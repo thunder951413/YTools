@@ -6,9 +6,9 @@ using YTools.Models;
 namespace YTools.UI;
 
 /// <summary>
-/// Applies the light/dark theme and accent palette as dynamic resources.
-/// System mode follows the Windows AppsUseLightTheme registry value and live
-/// user preference changes.
+/// Applies dedicated light and dark color palettes as dynamic resources.
+/// System mode follows the Windows AppsUseLightTheme registry value; theme,
+/// accent and launcher-style changes re-apply live.
 /// </summary>
 public static class ThemeService
 {
@@ -36,54 +36,37 @@ public static class ThemeService
 
     public static AppPreferences? CurrentPreferences { get; private set; }
 
-    public static void Apply(AppPreferences preferences)
+    public static bool IsDarkEffective(AppPreferences preferences)
     {
-        CurrentPreferences = preferences;
-        var dark = preferences.Theme switch
+        return preferences.Theme switch
         {
             AppTheme.Dark => true,
             AppTheme.Light => false,
             _ => IsSystemDark()
         };
+    }
+
+    public static void Apply(AppPreferences preferences)
+    {
+        CurrentPreferences = preferences;
+        var dark = IsDarkEffective(preferences);
+        var palette = dark ? DarkPalette : LightPalette;
         var resources = Application.Current.Resources;
+        var style = preferences.LauncherAppearanceStyle;
 
-        var panelColor = dark
-            ? Color.FromArgb(242, 34, 34, 38)
-            : Color.FromArgb(246, 248, 248, 250);
-        var glassColor = dark
-            ? Color.FromArgb(205, 44, 44, 50)
-            : Color.FromArgb(190, 252, 252, 254);
-        var classicColor = dark
-            ? Color.FromArgb(250, 28, 28, 32)
-            : Color.FromArgb(252, 252, 253, 255);
-        var isGlass = preferences.LauncherAppearanceStyle == LauncherAppearanceStyle.Glass;
-        var isClassic = preferences.LauncherAppearanceStyle == LauncherAppearanceStyle.Classic;
-        var background = isGlass ? glassColor : isClassic ? classicColor : panelColor;
+        var accent = palette.AccentFor(preferences.AccentColor);
+        var selectionAlpha = (byte)(DesignTokens.SelectionOpacity(style) * 255);
 
-        var textPrimary = dark ? Color.FromRgb(240, 240, 244) : Color.FromRgb(28, 28, 32);
-        var textSecondary = dark ? Color.FromRgb(168, 168, 178) : Color.FromRgb(100, 100, 112);
-        var border = dark ? Color.FromArgb(70, 255, 255, 255) : Color.FromArgb(45, 0, 0, 0);
-        var accent = AccentColor(preferences.AccentColor);
-        var selection = Color.FromArgb(
-            (byte)(DesignTokens.SelectionOpacity(preferences.LauncherAppearanceStyle) * 255),
-            accent.R,
-            accent.G,
-            accent.B);
-        var selectionText = dark ? Colors.White : Colors.Black;
-
-        resources["PanelBackgroundBrush"] = new SolidColorBrush(background);
-        resources["TextPrimaryBrush"] = new SolidColorBrush(textPrimary);
-        resources["TextSecondaryBrush"] = new SolidColorBrush(textSecondary);
-        resources["BorderBrush"] = new SolidColorBrush(border);
-        resources["AccentBrush"] = new SolidColorBrush(accent);
-        resources["SelectionBrush"] = new SolidColorBrush(selection);
-        resources["SelectionTextBrush"] = new SolidColorBrush(selectionText);
-        resources["InputBackgroundBrush"] = new SolidColorBrush(
-            dark ? Color.FromArgb(60, 255, 255, 255) : Color.FromArgb(30, 0, 0, 0));
-        resources["HoverBrush"] = new SolidColorBrush(
-            dark ? Color.FromArgb(30, 255, 255, 255) : Color.FromArgb(22, 0, 0, 0));
-        resources["WindowBackgroundBrush"] = new SolidColorBrush(
-            dark ? Color.FromRgb(32, 32, 36) : Color.FromRgb(250, 250, 252));
+        resources["WindowBackgroundBrush"] = Brush(palette.WindowBackground);
+        resources["PanelBackgroundBrush"] = Brush(panelForStyle(palette, style));
+        resources["InputBackgroundBrush"] = Brush(palette.InputBackground);
+        resources["HoverBrush"] = Brush(palette.Hover);
+        resources["BorderBrush"] = Brush(palette.Border);
+        resources["TextPrimaryBrush"] = Brush(palette.TextPrimary);
+        resources["TextSecondaryBrush"] = Brush(palette.TextSecondary);
+        resources["AccentBrush"] = Brush(accent);
+        resources["SelectionBrush"] = Brush(Color.FromArgb(selectionAlpha, accent.R, accent.G, accent.B));
+        resources["SelectionTextBrush"] = Brush(dark ? Colors.White : palette.TextPrimary);
     }
 
     public static bool IsSystemDark()
@@ -101,15 +84,87 @@ public static class ThemeService
         }
     }
 
-    private static Color AccentColor(AppAccentColor accent)
+    private static Color panelForStyle(Palette palette, LauncherAppearanceStyle style)
     {
-        return accent switch
+        var baseColor = palette.PanelBackground;
+        return style switch
         {
-            AppAccentColor.Blue => Color.FromRgb(0, 120, 212),
-            AppAccentColor.Purple => Color.FromRgb(140, 90, 220),
-            AppAccentColor.Green => Color.FromRgb(16, 140, 90),
-            AppAccentColor.Orange => Color.FromRgb(220, 120, 20),
-            _ => Color.FromRgb(0, 120, 212)
+            LauncherAppearanceStyle.Classic => Color.FromArgb(255, baseColor.R, baseColor.G, baseColor.B),
+            LauncherAppearanceStyle.Glass => Color.FromArgb(
+                (byte)(darkGlassAlpha(baseColor)),
+                baseColor.R,
+                baseColor.G,
+                baseColor.B),
+            _ => Color.FromArgb(245, baseColor.R, baseColor.G, baseColor.B)
         };
+    }
+
+    private static int darkGlassAlpha(Color baseColor)
+    {
+        return baseColor.A == 255 ? 232 : 218;
+    }
+
+    private static SolidColorBrush Brush(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
+    private sealed record Palette(
+        Color WindowBackground,
+        Color PanelBackground,
+        Color InputBackground,
+        Color Hover,
+        Color Border,
+        Color TextPrimary,
+        Color TextSecondary,
+        Color AccentBlue,
+        Color AccentPurple,
+        Color AccentGreen,
+        Color AccentOrange)
+    {
+        public Color AccentFor(AppAccentColor accent)
+        {
+            return accent switch
+            {
+                AppAccentColor.Blue => AccentBlue,
+                AppAccentColor.Purple => AccentPurple,
+                AppAccentColor.Green => AccentGreen,
+                AppAccentColor.Orange => AccentOrange,
+                _ => AccentBlue
+            };
+        }
+    }
+
+    private static readonly Palette LightPalette = new(
+        WindowBackground: Rgb(0xF6, 0xF6, 0xF8),
+        PanelBackground: Rgb(0xFE, 0xFE, 0xFF),
+        InputBackground: Rgb(0xEC, 0xEC, 0xF0),
+        Hover: Color.FromArgb(0x0D, 0x00, 0x00, 0x00),
+        Border: Color.FromArgb(0x1E, 0x00, 0x00, 0x00),
+        TextPrimary: Rgb(0x1A, 0x1A, 0x1E),
+        TextSecondary: Rgb(0x6B, 0x6B, 0x76),
+        AccentBlue: Rgb(0x0B, 0x67, 0xC6),
+        AccentPurple: Rgb(0x7A, 0x4F, 0xCE),
+        AccentGreen: Rgb(0x0E, 0x8A, 0x5D),
+        AccentOrange: Rgb(0xD9, 0x6E, 0x0B));
+
+    private static readonly Palette DarkPalette = new(
+        WindowBackground: Rgb(0x1E, 0x1E, 0x22),
+        PanelBackground: Rgb(0x2B, 0x2B, 0x31),
+        InputBackground: Rgb(0x38, 0x38, 0x3F),
+        Hover: Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF),
+        Border: Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF),
+        TextPrimary: Rgb(0xF1, 0xF1, 0xF4),
+        TextSecondary: Rgb(0x9E, 0x9E, 0xA9),
+        AccentBlue: Rgb(0x4D, 0x9F, 0xFF),
+        AccentPurple: Rgb(0xB1, 0x8C, 0xFF),
+        AccentGreen: Rgb(0x3C, 0xCF, 0x9B),
+        AccentOrange: Rgb(0xFF, 0x9E, 0x4A));
+
+    private static Color Rgb(byte r, byte g, byte b)
+    {
+        return Color.FromRgb(r, g, b);
     }
 }

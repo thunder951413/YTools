@@ -74,8 +74,20 @@ public partial class SettingsWindow : Window
         RefreshSnippets();
         _launcherRecorder?.Bind(preferences.LauncherHotKey);
         _clipboardRecorder?.Bind(preferences.ClipboardHotKey);
+        preferences.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(AppPreferences.Theme))
+            {
+                ApplyDarkTitleBar();
+            }
+        };
         BuildPages();
         SelectFirstTab();
+    }
+
+    public void RefreshChrome()
+    {
+        ApplyDarkTitleBar();
     }
 
     public void SelectFirstTab()
@@ -764,10 +776,15 @@ public partial class SettingsWindow : Window
 
     private void ApplyDarkTitleBar()
     {
-        var dark = ThemeService.IsSystemDark();
+        var dark = _preferences is { } preferences
+            ? ThemeService.IsDarkEffective(preferences)
+            : ThemeService.IsSystemDark();
         var handle = new WindowInteropHelper(this).Handle;
         var value = dark ? 1 : 0;
-        _ = DwmSetWindowAttribute(handle, 20, ref value, sizeof(int));
+        if (handle != IntPtr.Zero)
+        {
+            _ = DwmSetWindowAttribute(handle, 20, ref value, sizeof(int));
+        }
     }
 
     private sealed class AliasEntry
