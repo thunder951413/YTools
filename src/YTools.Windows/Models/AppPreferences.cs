@@ -50,6 +50,8 @@ public sealed class AppPreferences : ObservableObject
     private int _clipboardMaximumTextCharacters = 1_000;
     private bool _clipboardStoreImages;
     private IReadOnlyList<string> _clipboardIgnoredProcessNames = [];
+    private string? _hotKeyError;
+    private string? _launchAtLoginError;
 
     public AppPreferences()
     {
@@ -532,9 +534,17 @@ public sealed class AppPreferences : ObservableObject
         }
     }
 
-    public string? HotKeyError { get; set; }
+    public string? HotKeyError
+    {
+        get => _hotKeyError;
+        set => SetField(ref _hotKeyError, value);
+    }
 
-    public string? LaunchAtLoginError { get; set; }
+    public string? LaunchAtLoginError
+    {
+        get => _launchAtLoginError;
+        set => SetField(ref _launchAtLoginError, value);
+    }
 
     public SystemCommandConfiguration SystemCommandConfiguration =>
         new(_enabledSystemCommands, _systemCommandKeywords);
@@ -771,7 +781,6 @@ public sealed class AppPreferences : ObservableObject
         catch (Exception exception)
         {
             LaunchAtLoginError = $"无法修改登录启动：{exception.Message}";
-            RaisePropertyChanged(nameof(LaunchAtLoginError));
         }
     }
 

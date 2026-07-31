@@ -11,6 +11,7 @@
 - Release 自包含单文件发布：`dist/YTools.Windows/YTools.exe`（约 71 MB），无需预装 .NET。
 - 发布版冒烟：进程稳定运行、空闲无异常、`%APPDATA%\YTools\error.log` 为空。
 - 全局热键（`RegisterHotKey`）、剪贴板监听（`WM_CLIPBOARDUPDATE` + 轮询回退）、开机启动（Run 键）、托盘图标已实现并冒烟。
+- 快捷键冲突处理：默认组合被占用时自动尝试多组备用组合并持久化；冲突提示直接显示在启动器中；二次启动会唤醒已有实例。
 - 加密存储：DPAPI 密钥 + AES-256-GCM；剪贴板增量 vault、Snippets、最近文档独立密钥/文件。
 - 安全扫描：无网络 API、无动态加载、无 Shell 命令（`scripts/check.ps1` 与 CI 强制）。
 

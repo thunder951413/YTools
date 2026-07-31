@@ -12,6 +12,23 @@ namespace YTools.Services;
 public sealed class MainController
 {
     private const string ShowLauncherEventName = "YTools.ShowLauncher";
+
+    private static readonly HotKeyDefinition[] LauncherFallbacks =
+    [
+        HotKeyDefinition.LauncherDefault,
+        HotKeyDefinition.LauncherFallback,
+        new(0x4C, HotKeyModifiers.Control | HotKeyModifiers.Alt), // Ctrl+Alt+L
+        new(0x50, HotKeyModifiers.Control | HotKeyModifiers.Alt)  // Ctrl+Alt+P
+    ];
+
+    private static readonly HotKeyDefinition[] ClipboardFallbacks =
+    [
+        HotKeyDefinition.ClipboardDefault,
+        HotKeyDefinition.ClipboardFallback,
+        new(0x56, HotKeyModifiers.Alt | HotKeyModifiers.Control), // Alt+Ctrl+V
+        new(0x43, HotKeyModifiers.Alt | HotKeyModifiers.Control | HotKeyModifiers.Shift)
+    ];
+
     private readonly AppPreferences _preferences = new();
     private MessageWindowService? _messages;
     private HotKeyManager? _hotKeys;
@@ -100,50 +117,101 @@ public sealed class MainController
         }
 
         _hotKeys.RemoveAll();
-        _preferences.HotKeyError = null;
-
-        var launcherRegistered = _hotKeys.Register(
-            1,
-            _preferences.LauncherHotKey,
-            ShowLauncher);
+        var configuredLauncher = _preferences.LauncherHotKey;
+        var configuredClipboard = _preferences.ClipboardHotKey;
+        var launcherRegistered = _hotKeys.Register(1, configuredLauncher, ShowLauncher);
         var clipboardRegistered = !_preferences.ClipboardEnabled
-            || _hotKeys.Register(
-                2,
-                _preferences.ClipboardHotKey,
-                ShowClipboard);
+            || _hotKeys.Register(2, configuredClipboard, ShowClipboard);
 
         if (launcherRegistered && clipboardRegistered)
         {
-            _lastWorkingLauncher = _preferences.LauncherHotKey;
-            _lastWorkingClipboard = _preferences.ClipboardHotKey;
-            _tray?.UpdateHotKeyTitles(
-                _preferences.LauncherHotKey.DisplayString,
-                _preferences.ClipboardHotKey.DisplayString);
+            _lastWorkingLauncher = configuredLauncher;
+            _lastWorkingClipboard = configuredClipboard;
+            _preferences.HotKeyError = null;
+            UpdateTrayHotKeyTitles(configuredLauncher, configuredClipboard);
             return;
         }
 
         _hotKeys.RemoveAll();
         var hadPrevious = _lastWorkingLauncher is not null;
-        var launcher = _lastWorkingLauncher ?? HotKeyDefinition.LauncherFallback;
-        var clipboard = _lastWorkingClipboard ?? HotKeyDefinition.ClipboardFallback;
-        launcherRegistered = _hotKeys.Register(1, launcher, ShowLauncher);
-        clipboardRegistered = !_preferences.ClipboardEnabled
-            || _hotKeys.Register(2, clipboard, ShowClipboard);
+        HotKeyDefinition? launcher = null;
+        HotKeyDefinition? clipboard = null;
+
+        if (_lastWorkingLauncher is { } previousLauncher
+            && _hotKeys.Register(1, previousLauncher, ShowLauncher))
+        {
+            launcher = previousLauncher;
+        }
+
+        if (launcher is null)
+        {
+            launcher = TryRegisterFirstAvailable(
+                LauncherFallbacks.Append(configuredLauncher).Distinct(),
+                id: 1,
+                ShowLauncher);
+        }
+
+        if (_preferences.ClipboardEnabled)
+        {
+            if (_lastWorkingClipboard is { } previousClipboard
+                && _hotKeys.Register(2, previousClipboard, ShowClipboard))
+            {
+                clipboard = previousClipboard;
+            }
+
+            if (clipboard is null)
+            {
+                clipboard = TryRegisterFirstAvailable(
+                    ClipboardFallbacks.Append(configuredClipboard).Distinct(),
+                    id: 2,
+                    ShowClipboard);
+            }
+        }
+        else
+        {
+            clipboard = configuredClipboard;
+        }
+
+        launcherRegistered = launcher is not null;
+        clipboardRegistered = !_preferences.ClipboardEnabled || clipboard is not null;
         if (launcherRegistered && clipboardRegistered)
         {
-            _preferences.RestoreHotKeysWithoutNotifying(launcher, clipboard);
-            _lastWorkingLauncher = launcher;
-            _lastWorkingClipboard = clipboard;
+            var launcherHotKey = launcher ?? configuredLauncher;
+            var clipboardHotKey = clipboard ?? configuredClipboard;
+            _preferences.RestoreHotKeysWithoutNotifying(launcherHotKey, clipboardHotKey);
+            _lastWorkingLauncher = launcherHotKey;
+            _lastWorkingClipboard = clipboardHotKey;
             _preferences.HotKeyError = hadPrevious
-                ? "新快捷键已被占用，已恢复上一个可用组合。"
-                : "默认快捷键被占用，已启用备用组合。";
-            _tray?.UpdateHotKeyTitles(launcher.DisplayString, clipboard.DisplayString);
+                ? $"新快捷键已被占用，已启用可用组合：{launcherHotKey.DisplayString} / {clipboardHotKey.DisplayString}"
+                : $"默认快捷键被占用，已启用可用组合：{launcherHotKey.DisplayString} / {clipboardHotKey.DisplayString}";
+            UpdateTrayHotKeyTitles(launcherHotKey, clipboardHotKey);
         }
         else
         {
             _hotKeys.RemoveAll();
-            _preferences.HotKeyError = "快捷键已被其他应用占用，请在启动器中按 Ctrl+, 打开设置后更换。";
+            _preferences.HotKeyError = "所有候选快捷键均被其他应用占用，请关闭占用程序或在设置中更换快捷键。";
         }
+    }
+
+    private HotKeyDefinition? TryRegisterFirstAvailable(
+        IEnumerable<HotKeyDefinition> candidates,
+        int id,
+        Action action)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (_hotKeys!.Register(id, candidate, action))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private void UpdateTrayHotKeyTitles(HotKeyDefinition launcher, HotKeyDefinition clipboard)
+    {
+        _tray?.UpdateHotKeyTitles(launcher.DisplayString, clipboard.DisplayString);
     }
 
     private void ShowLauncher()

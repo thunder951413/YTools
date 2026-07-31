@@ -36,6 +36,7 @@ public partial class LauncherWindow : Window
         DataContext = model;
         model.PropertyChanged += OnModelPropertyChanged;
         preferences.PropertyChanged += OnPreferencePropertyChanged;
+        UpdateHotKeyError(preferences.HotKeyError);
         AdjustPanelSize();
         UpdateFooter();
     }
@@ -93,6 +94,27 @@ public partial class LauncherWindow : Window
                 AdjustPanelSize();
                 UpdateFooter();
                 break;
+            case nameof(AppPreferences.HotKeyError):
+                if (_preferences is { } preferences)
+                {
+                    UpdateHotKeyError(preferences.HotKeyError);
+                }
+
+                break;
+        }
+    }
+
+    private void UpdateHotKeyError(string? message)
+    {
+        if (string.IsNullOrEmpty(message))
+        {
+            HotKeyErrorText.Text = "";
+            HotKeyErrorText.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            HotKeyErrorText.Text = message;
+            HotKeyErrorText.Visibility = Visibility.Visible;
         }
     }
 

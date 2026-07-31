@@ -137,35 +137,43 @@
                         Background="Transparent"
                         MouseLeftButtonDown="OnHeaderMouseDown"
                         Cursor="SizeAll">
-                    <Grid Margin="18,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBox x:Name="SearchBox"
-                                 Grid.Column="0"
-                                 Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
-                                 FontSize="18"
-                                 Foreground="{DynamicResource TextPrimaryBrush}"
-                                 CaretBrush="{DynamicResource TextPrimaryBrush}"
-                                 Background="Transparent"
-                                 BorderThickness="0"
-                                 Padding="0,8"
-                                 VerticalContentAlignment="Center"
-                                 SpellCheck.IsEnabled="False"
-                                 ContextMenu="{x:Null}" />
-                        <Border Grid.Column="1"
-                                Margin="8,0,0,0"
-                                Padding="10,3"
-                                CornerRadius="10"
-                                Background="{DynamicResource InputBackgroundBrush}"
-                                VerticalAlignment="Center"
-                                Visibility="{Binding FileBuffer.Count, Converter={StaticResource CountToVisibility}, FallbackValue=Collapsed}">
-                            <TextBlock Text="{Binding FileBuffer.Count, StringFormat=缓冲区 {0}}"
-                                       FontSize="11"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" />
-                        </Border>
-                    </Grid>
+                    <StackPanel Margin="18,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="SearchBox"
+                                     Grid.Column="0"
+                                     Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
+                                     FontSize="18"
+                                     Foreground="{DynamicResource TextPrimaryBrush}"
+                                     CaretBrush="{DynamicResource TextPrimaryBrush}"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     Padding="0,8"
+                                     VerticalContentAlignment="Center"
+                                     SpellCheck.IsEnabled="False"
+                                     ContextMenu="{x:Null}" />
+                            <Border Grid.Column="1"
+                                    Margin="8,0,0,0"
+                                    Padding="10,3"
+                                    CornerRadius="10"
+                                    Background="{DynamicResource InputBackgroundBrush}"
+                                    VerticalAlignment="Center"
+                                    Visibility="{Binding FileBuffer.Count, Converter={StaticResource CountToVisibility}, FallbackValue=Collapsed}">
+                                <TextBlock Text="{Binding FileBuffer.Count, StringFormat=缓冲区 {0}}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </Border>
+                        </Grid>
+                        <TextBlock x:Name="HotKeyErrorText"
+                                   Foreground="#E07030"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,6"
+                                   Visibility="Collapsed" />
+                    </StackPanel>
                 </Border>
                 <Grid Grid.Row="1">
                     <ListBox x:Name="ResultsList"
