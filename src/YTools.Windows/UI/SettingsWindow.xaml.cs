@@ -20,7 +20,8 @@ public partial class SettingsWindow : Window
     private ClipboardHistoryManager? _clipboard;
     private SnippetManager? _snippets;
     private RecentDocumentsManager? _recentDocuments;
-    private readonly Dictionary<TabItem, UserControl> _pages = [];
+    private readonly Dictionary<NavItem, UserControl> _pages = [];
+    private readonly List<NavItem> _navItems = [];
     private readonly ObservableCollection<string> _scopePaths = [];
     private readonly ObservableCollection<AliasEntry> _aliasEntries = [];
     private readonly ObservableCollection<string> _ignoredApps = [];
@@ -31,9 +32,9 @@ public partial class SettingsWindow : Window
     public SettingsWindow()
     {
         InitializeComponent();
-        NavTabs.SelectionChanged += (_, _) =>
+        NavList.SelectionChanged += (_, _) =>
         {
-            if (NavTabs.SelectedItem is TabItem tab && _pages.TryGetValue(tab, out var page))
+            if (NavList.SelectedItem is NavItem item && _pages.TryGetValue(item, out var page))
             {
                 PageHost.Content = page;
             }
@@ -79,24 +80,36 @@ public partial class SettingsWindow : Window
 
     public void SelectFirstTab()
     {
-        if (NavTabs.Items.Count > 0)
+        if (_navItems.Count > 0)
         {
-            NavTabs.SelectedIndex = 0;
+            NavList.SelectedIndex = 0;
         }
     }
 
     private void BuildPages()
     {
-        var tabs = NavTabs.Items.Cast<TabItem>().ToList();
-        _pages[tabs[0]] = SafePage("通用", BuildGeneralPage);
-        _pages[tabs[1]] = SafePage("搜索", BuildSearchPage);
-        _pages[tabs[2]] = SafePage("应用别名", BuildAliasesPage);
-        _pages[tabs[3]] = SafePage("外观", BuildAppearancePage);
-        _pages[tabs[4]] = SafePage("快捷键", BuildHotKeysPage);
-        _pages[tabs[5]] = SafePage("剪贴板", BuildClipboardPage);
-        _pages[tabs[6]] = SafePage("片段", BuildSnippetsPage);
-        _pages[tabs[7]] = SafePage("系统命令", BuildSystemCommandsPage);
-        _pages[tabs[8]] = SafePage("隐私", BuildPrivacyPage);
+        _navItems.AddRange(
+        [
+            new NavItem("通用", "\uE713"),
+            new NavItem("搜索", "\uE721"),
+            new NavItem("应用别名", "\uE8F1"),
+            new NavItem("外观", "\uE790"),
+            new NavItem("快捷键", "\uE765"),
+            new NavItem("剪贴板", "\uE8C8"),
+            new NavItem("片段", "\uE8FD"),
+            new NavItem("系统命令", "\uE756"),
+            new NavItem("隐私", "\uE72E")
+        ]);
+        NavList.ItemsSource = _navItems;
+        _pages[_navItems[0]] = SafePage("通用", BuildGeneralPage);
+        _pages[_navItems[1]] = SafePage("搜索", BuildSearchPage);
+        _pages[_navItems[2]] = SafePage("应用别名", BuildAliasesPage);
+        _pages[_navItems[3]] = SafePage("外观", BuildAppearancePage);
+        _pages[_navItems[4]] = SafePage("快捷键", BuildHotKeysPage);
+        _pages[_navItems[5]] = SafePage("剪贴板", BuildClipboardPage);
+        _pages[_navItems[6]] = SafePage("片段", BuildSnippetsPage);
+        _pages[_navItems[7]] = SafePage("系统命令", BuildSystemCommandsPage);
+        _pages[_navItems[8]] = SafePage("隐私", BuildPrivacyPage);
     }
 
     private UserControl SafePage(string name, Func<UserControl> build)
@@ -164,7 +177,7 @@ public partial class SettingsWindow : Window
         stack.Children.Add(CheckBox("默认结果包含文件", "IncludeFilesInDefaultResults", "关闭后仅输入 open/打开 等前缀时返回文件"));
         stack.Children.Add(SliderRow("最大结果数", "MaximumSearchResults", 3, 20, 1));
         stack.Children.Add(SliderRow("输入防抖（秒）", "SearchInputDelay", 0.05, 0.4, 0.05));
-        stack.Children.Add(Header("搜索范围"));
+        stack.Children.Add(SubHeader("搜索范围"));
         stack.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("HintText"),
@@ -346,7 +359,7 @@ public partial class SettingsWindow : Window
         stack.Children.Add(SliderRow("最大条数", "ClipboardMaximumItems", 50, 1_000, 10));
         stack.Children.Add(SliderRow("单条文本上限（字符）", "ClipboardMaximumTextCharacters", 100, 10_000, 100));
         stack.Children.Add(CheckBox("保存图片", "ClipboardStoreImages", "图片默认关闭，单项限制 5 MB"));
-        stack.Children.Add(Header("忽略的进程"));
+        stack.Children.Add(SubHeader("忽略的进程"));
         stack.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("HintText"),
@@ -419,7 +432,7 @@ public partial class SettingsWindow : Window
         left.Children.Add(leftButtons);
         grid.Children.Add(left);
         var right = new StackPanel { Margin = new Thickness(16, 0, 0, 0) };
-        right.Children.Add(Header("编辑"));
+        right.Children.Add(SubHeader("编辑"));
         var title = LabeledTextBox("标题", 200);
         var keyword = LabeledTextBox("关键词", 200);
         var collection = LabeledTextBox("分类", 200);
@@ -530,7 +543,7 @@ public partial class SettingsWindow : Window
             Style = (Style)FindResource("HintText"),
             Text = "YTools 是本机应用：主程序不包含任何网络客户端，不发送查询、剪贴板、文件名、使用记录或设备信息。"
         });
-        stack.Children.Add(Header("加密存储状态"));
+        stack.Children.Add(SubHeader("加密存储状态"));
         var clipboardError = new TextBlock
         {
             Style = (Style)FindResource("HintText"),
@@ -558,7 +571,7 @@ public partial class SettingsWindow : Window
             TextBlock.TextProperty,
             new System.Windows.Data.Binding(nameof(RecentDocumentsManager.StorageError)) { Source = _recentDocuments });
         stack.Children.Add(recentError);
-        stack.Children.Add(Header("清除数据"));
+        stack.Children.Add(SubHeader("清除数据"));
         stack.Children.Add(Button("清除使用学习记录", () => _preferences?.ClearUsageLearning()));
         stack.Children.Add(Button("清除最近文档", () => _recentDocuments?.Clear(), margin: new Thickness(0, 8, 0, 0)));
         stack.Children.Add(Button("清空剪贴板历史", () =>
@@ -583,9 +596,22 @@ public partial class SettingsWindow : Window
         return page;
     }
 
-    private TextBlock Header(string text)
+    private UIElement Header(string text)
     {
-        return new TextBlock { Text = text, Style = (Style)FindResource("SectionHeader") };
+        var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 2) };
+        panel.Children.Add(new TextBlock { Text = text, Style = (Style)FindResource("SectionHeader") });
+        panel.Children.Add(new Border
+        {
+            Height = 1,
+            Background = (Brush)Application.Current.Resources["BorderBrush"],
+            Margin = new Thickness(0, 0, 0, 10)
+        });
+        return panel;
+    }
+
+    private UIElement SubHeader(string text)
+    {
+        return new TextBlock { Text = text, Style = (Style)FindResource("SubHeader") };
     }
 
     private CheckBox CheckBox(string label, string binding, string tooltip)
@@ -847,6 +873,8 @@ public partial class SettingsWindow : Window
     }
 
     internal sealed record EnumOption(string Title, object Value);
+
+    private sealed record NavItem(string Title, string Glyph);
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
