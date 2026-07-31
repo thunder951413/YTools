@@ -665,12 +665,12 @@ public partial class SettingsWindow : Window
         return grid;
     }
 
-    private static (TextBlock Label, TextBox Box) LabeledTextBox(string label, double width)
+    private (TextBlock Label, TextBox Box) LabeledTextBox(string label, double width)
     {
         var labelText = new TextBlock
         {
             Text = label,
-            Style = (Style)Application.Current.FindResource("RowLabel")
+            Style = (Style)FindResource("RowLabel")
         };
         var box = new TextBox
         {

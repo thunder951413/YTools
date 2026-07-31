@@ -28,6 +28,19 @@ public partial class App : Application
         _singleInstanceMutex = new Mutex(initiallyOwned: true, "YTools.SingleInstance", out var createdNew);
         if (!createdNew)
         {
+            try
+            {
+                using var signal = new EventWaitHandle(
+                    false,
+                    EventResetMode.AutoReset,
+                    "YTools.ShowLauncher");
+                signal.Set();
+            }
+            catch
+            {
+                // The primary instance may be too old to listen; fall through.
+            }
+
             Shutdown();
             return;
         }

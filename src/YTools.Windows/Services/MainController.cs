@@ -11,6 +11,7 @@ namespace YTools.Services;
 /// </summary>
 public sealed class MainController
 {
+    private const string ShowLauncherEventName = "YTools.ShowLauncher";
     private readonly AppPreferences _preferences = new();
     private MessageWindowService? _messages;
     private HotKeyManager? _hotKeys;
@@ -24,6 +25,7 @@ public sealed class MainController
     private SettingsWindow? _settingsWindow;
     private LargeTypeWindow? _largeTypeWindow;
     private TrayIconService? _tray;
+    private EventWaitHandle? _showLauncherEvent;
     private HotKeyDefinition? _lastWorkingLauncher;
     private HotKeyDefinition? _lastWorkingClipboard;
 
@@ -67,6 +69,12 @@ public sealed class MainController
         _preferences.ClearUsageLearningRequested += () => _launcher?.ClearUsageLearning();
         ConfigureHotKeys();
 
+        _showLauncherEvent = new EventWaitHandle(
+            false,
+            EventResetMode.AutoReset,
+            ShowLauncherEventName);
+        _ = WaitForShowSignalAsync();
+
         _launcherWindow.ShowLauncher();
     }
 
@@ -76,6 +84,8 @@ public sealed class MainController
         _snippets?.FlushPendingChanges();
         _launcher?.Dispose();
         _tray?.Dispose();
+        _showLauncherEvent?.Dispose();
+        _showLauncherEvent = null;
         _hotKeys?.Dispose();
         _clipboardMonitor?.Dispose();
         _messages?.Dispose();
@@ -211,5 +221,22 @@ public sealed class MainController
         }
 
         return _settingsWindow;
+    }
+
+    private async Task WaitForShowSignalAsync()
+    {
+        while (_showLauncherEvent is not null)
+        {
+            try
+            {
+                await Task.Run(() => _showLauncherEvent.WaitOne());
+            }
+            catch
+            {
+                return;
+            }
+
+            Application.Current.Dispatcher.Invoke(ShowLauncher);
+        }
     }
 }
