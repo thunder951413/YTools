@@ -18,6 +18,7 @@ public sealed class LauncherModel : ObservableObject
     private readonly SnippetManager _snippets;
     private readonly RecentDocumentsManager _recentDocuments;
     private readonly FileSearchService _fileSearch;
+    private readonly DictionaryService _dictionary = new();
     private readonly SearchCoordinator _searchCoordinator;
     private readonly ResultAggregator _resultAggregator;
     private readonly ActionDispatcher _actionDispatcher;
@@ -64,10 +65,15 @@ public sealed class LauncherModel : ObservableObject
             {
                 case nameof(AppPreferences.EnabledSearchContentTypes):
                 case nameof(AppPreferences.ApplicationAliases):
+                case nameof(AppPreferences.CustomApplicationPaths):
                     RefreshImmediately();
                     break;
                 case nameof(AppPreferences.SearchInputDelay):
                     ScheduleSearch();
+                    break;
+                case nameof(AppPreferences.ShowSubtitles):
+                case nameof(AppPreferences.ShowNumberShortcuts):
+                    RaisePropertyChanged(args.PropertyName);
                     break;
                 case nameof(AppPreferences.PreviewSelectionDelay):
                     SchedulePreviewUpdate();
@@ -75,6 +81,7 @@ public sealed class LauncherModel : ObservableObject
             }
         };
         _ = _searchCoordinator.PrepareAsync();
+        _ = _dictionary.WarmAsync();
     }
 
     public string Query
@@ -90,6 +97,12 @@ public sealed class LauncherModel : ObservableObject
     }
 
     public IReadOnlyList<LauncherResult> Results => _results;
+
+    public bool ShowSubtitles => _preferences.ShowSubtitles;
+
+    public bool ShowNumberShortcuts => _preferences.ShowNumberShortcuts;
+
+    public string FileSearchBackendDescription => _fileSearch.BackendDescription;
 
     public bool IsSearchPending
     {
@@ -488,6 +501,9 @@ public sealed class LauncherModel : ObservableObject
             EndPreviewSession();
         }
 
+        // Invalidate both delayed and already-posted callbacks before touching
+        // query state. ScheduleSearch creates the sole new generation below.
+        _searchDebouncer.Cancel();
         _searchCancellation?.Cancel();
         _fileSearchDebouncer.Cancel();
         if (string.IsNullOrWhiteSpace(Query))
@@ -519,6 +535,7 @@ public sealed class LauncherModel : ObservableObject
     {
         if (string.IsNullOrWhiteSpace(Query))
         {
+            _searchDebouncer.Cancel();
             return;
         }
 
@@ -568,6 +585,7 @@ public sealed class LauncherModel : ObservableObject
             _preferences.FileNavigationFoldersFirst,
             _preferences.EnabledSearchContentTypes,
             _preferences.ApplicationAliases,
+            _preferences.CustomApplicationPaths,
             _preferences.SearchScopePaths,
             _preferences.MaximumSearchResults,
             _preferences.IncludeFilesInDefaultResults,
@@ -593,7 +611,10 @@ public sealed class LauncherModel : ObservableObject
                 }
             }, TaskScheduler.FromCurrentSynchronizationContext());
 
-        var fileQuery = IsFileNavigationActive || !_preferences.IsSearchContentEnabled(SearchContentType.Files)
+        var includeFiles = _preferences.IsSearchContentEnabled(SearchContentType.Files)
+            && (_preferences.IncludeFilesInDefaultResults
+                || FileSearchService.HasExplicitMode(requestedQuery));
+        var fileQuery = IsFileNavigationActive || !includeFiles
             ? ""
             : requestedQuery;
         ScheduleFileSearch(fileQuery, requestedQuery, cancellation.Token);
@@ -703,7 +724,7 @@ public sealed class LauncherModel : ObservableObject
                 new ModuleResultPolicy(
                     allowedCapabilities: new HashSet<ModuleCapability> { ModuleCapability.LocalFileRead })),
             new RegisteredSearchModule(
-                new DictionaryModule(new DictionaryService(), _preferences.IncludeAutomaticDictionary),
+                new DictionaryModule(_dictionary, _preferences.IncludeAutomaticDictionary),
                 SearchContentType.Dictionary,
                 new ModuleResultPolicy()),
             new RegisteredSearchModule(

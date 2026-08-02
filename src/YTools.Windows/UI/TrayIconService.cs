@@ -13,6 +13,7 @@ public sealed class TrayIconService : IDisposable
 {
     private readonly System.Windows.Forms.NotifyIcon _notifyIcon = new();
     private readonly AppPreferences _preferences;
+    private readonly System.Windows.Forms.ContextMenuStrip _menu;
     private System.Windows.Forms.ToolStripMenuItem? _pauseItem;
     private System.Windows.Forms.ToolStripMenuItem? _launcherItem;
     private System.Windows.Forms.ToolStripMenuItem? _clipboardItem;
@@ -30,7 +31,12 @@ public sealed class TrayIconService : IDisposable
         _notifyIcon.Text = "YTools";
         _notifyIcon.DoubleClick += (_, _) => ShowLauncherRequested?.Invoke();
 
-        var menu = new System.Windows.Forms.ContextMenuStrip();
+        _menu = new System.Windows.Forms.ContextMenuStrip
+        {
+            ShowImageMargin = false,
+            ShowCheckMargin = false,
+            Padding = new System.Windows.Forms.Padding(4)
+        };
         _launcherItem = new System.Windows.Forms.ToolStripMenuItem("显示启动器");
         _launcherItem.Click += (_, _) => ShowLauncherRequested?.Invoke();
         _clipboardItem = new System.Windows.Forms.ToolStripMenuItem("剪贴板历史");
@@ -50,7 +56,7 @@ public sealed class TrayIconService : IDisposable
         var quit = new System.Windows.Forms.ToolStripMenuItem("退出 YTools");
         quit.Click += (_, _) => QuitRequested?.Invoke();
 
-        menu.Items.AddRange(
+        _menu.Items.AddRange(
         [
             _launcherItem,
             _clipboardItem,
@@ -62,7 +68,9 @@ public sealed class TrayIconService : IDisposable
             separator3,
             quit
         ]);
-        _notifyIcon.ContextMenuStrip = menu;
+        _notifyIcon.ContextMenuStrip = _menu;
+        ThemeService.ThemeApplied += ApplyTheme;
+        ApplyTheme();
         UpdateVisibility();
         _preferences.PropertyChanged += (_, args) =>
         {
@@ -96,6 +104,7 @@ public sealed class TrayIconService : IDisposable
 
     public void Dispose()
     {
+        ThemeService.ThemeApplied -= ApplyTheme;
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
     }
@@ -103,5 +112,68 @@ public sealed class TrayIconService : IDisposable
     private void UpdateVisibility()
     {
         _notifyIcon.Visible = _preferences.ShowTrayIcon;
+    }
+
+    private void ApplyTheme()
+    {
+        var dark = ThemeService.IsDarkEffective(_preferences);
+        var background = dark
+            ? Color.FromArgb(43, 43, 49)
+            : Color.FromArgb(254, 254, 255);
+        var foreground = dark
+            ? Color.FromArgb(241, 241, 244)
+            : Color.FromArgb(26, 26, 30);
+        var disabled = dark
+            ? Color.FromArgb(140, 140, 152)
+            : Color.FromArgb(122, 122, 133);
+        var border = dark
+            ? Color.FromArgb(82, 82, 90)
+            : Color.FromArgb(205, 205, 211);
+        var selection = dark
+            ? Color.FromArgb(62, 62, 70)
+            : Color.FromArgb(232, 232, 237);
+
+        _menu.BackColor = background;
+        _menu.ForeColor = foreground;
+        _menu.Renderer = new System.Windows.Forms.ToolStripProfessionalRenderer(
+            new TrayColorTable(background, selection, border));
+        foreach (System.Windows.Forms.ToolStripItem item in _menu.Items)
+        {
+            item.BackColor = background;
+            item.ForeColor = item.Enabled ? foreground : disabled;
+        }
+    }
+
+    private sealed class TrayColorTable : System.Windows.Forms.ProfessionalColorTable
+    {
+        private readonly Color _background;
+        private readonly Color _selection;
+        private readonly Color _border;
+
+        public TrayColorTable(Color background, Color selection, Color border)
+        {
+            _background = background;
+            _selection = selection;
+            _border = border;
+            UseSystemColors = false;
+        }
+
+        public override Color ToolStripDropDownBackground => _background;
+
+        public override Color ImageMarginGradientBegin => _background;
+
+        public override Color ImageMarginGradientMiddle => _background;
+
+        public override Color ImageMarginGradientEnd => _background;
+
+        public override Color MenuItemSelected => _selection;
+
+        public override Color MenuItemBorder => _border;
+
+        public override Color MenuBorder => _border;
+
+        public override Color SeparatorDark => _border;
+
+        public override Color SeparatorLight => _background;
     }
 }

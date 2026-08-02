@@ -24,6 +24,17 @@ public sealed class DictionaryModule : IYToolsModule
             return Task.FromResult<IReadOnlyList<LauncherResult>>([]);
         }
 
+        // Building CC-CEDICT takes noticeably longer than the launcher input
+        // budget.  Do not let an implicit Latin query such as "we" hold the
+        // application result batch behind that one-time initialization.  An
+        // explicit dictionary request still waits and therefore remains
+        // deterministic for the user.
+        if (!parsed.Value.Explicit && !_dictionary.IsReady)
+        {
+            _ = _dictionary.WarmAsync();
+            return Task.FromResult<IReadOnlyList<LauncherResult>>([]);
+        }
+
         var entries = _dictionary.Search(parsed.Value.Word, 8);
         var results = entries.Select(entry =>
         {

@@ -6,8 +6,8 @@
 
 - C# / .NET 8 / WPF 全量移植：启动器、剪贴板面板、设置窗口、大字显示、预览面板、托盘。
 - `dotnet build -warnaserror` 严格编译通过（0 警告 0 错误）。
-- 58 项 xUnit 单元测试全部通过（计算器、拼音规范化、命令路由、模块策略、别名、位置、文本策略）。
-- 23 项无 UI 自检全部通过（含离线词典 CC-CEDICT 加载、Hunspell 拼写、Everything 探测）。
+- 76 项 xUnit 单元测试全部通过（计算器、拼音规范化、命令路由、模块策略、应用索引、Everything 协议、词典冷启动、文件查询模式、使用频次、位置、文本策略）。
+- 27 项无 UI 自检全部通过（含离线词典 CC-CEDICT 加载、Hunspell 拼写和 Everything IPC 协议解析）。
 - Release 自包含单文件发布：`dist/YTools.Windows/YTools.exe`（约 71 MB），无需预装 .NET。
 - 发布版冒烟：进程稳定运行、空闲无异常、`%APPDATA%\YTools\error.log` 为空。
 - 全局热键（`RegisterHotKey`）、剪贴板监听（`WM_CLIPBOARDUPDATE` + 轮询回退）、开机启动（Run 键）、托盘图标已实现并冒烟。

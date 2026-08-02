@@ -6,13 +6,13 @@ YTools 是一个面向个人使用的 **Windows 原生启动器与本地效率�
 
 ## 功能
 
-- **应用启动**：索引开始菜单快捷方式（.lnk，经 Shell COM 解析）与 WindowsApps 应用执行别名，支持名称、英文缩写、中文拼音全拼及首字母搜索；可在设置中为任意应用添加中文名、简称或拼音别名。
-- **本地文件搜索**：已安装 [Everything](https://www.voidtools.com/) 时自动使用 Everything 引擎（文件名、`in/内容` 内容与 `tag/标签` 语法）；未安装时回退到内置文件名扫描。支持 `open/打开`、`find/查找` 前缀与 `/`、`~`、盘符目录导航。
+- **应用启动**：索引开始菜单可启动入口（`.lnk` / `.appref-ms` / `.exe`）、WindowsApps 应用执行别名和 AppsFolder 中的系统已注册应用（包括 Microsoft Store 与传统桌面程序）；也可在设置中添加任意现有的本机 `.exe`、`.lnk` 或 `.appref-ms` 为自定义应用并配置别名。快捷方式按自身启动，不再丢失 UWP、带参数入口或共用宿主的应用；支持名称、英文缩写、中文拼音全拼及首字母搜索。
+- **本地文件搜索**：已运行 [Everything](https://www.voidtools.com/) 时直接使用其只读本机 IPC（无需额外 SDK DLL）；可设置是否把文件加入默认结果，关闭后仅 `open/打开`、`find/查找`、`in/内容`、`tag/标签` 等显式前缀触发文件搜索。不可用时在后台回退到内置文件名扫描，不阻塞启动器 UI；支持 `/`、`~`、盘符目录导航。
 - **文件操作**：目录导航、资源管理器显示、打开方式、复制/移动、路径复制及 Option（Alt）文件缓冲。
 - **剪贴板历史**：独立快捷键、类型筛选、忽略进程、暂停、固定、分段清理、文本长度限制及 AES-GCM 加密存储（密钥由 DPAPI 保护）。
-- **本地工具**：安全表达式计算、白名单数学函数、离线单位换算、离线中英词典（CC-CEDICT）、英文拼写建议（Hunspell）、大字显示、Snippets 和最近文档。
+- **本地工具**：安全表达式计算、白名单数学函数、离线单位换算、离线中英词典（CC-CEDICT，后台预热）、英文拼写建议（Hunspell）、大字显示、Snippets 和最近文档。
 - **系统命令**：可配置关键词；显示/清空回收站、启动屏幕保护、关闭显示器、专注模式与外观设置入口。
-- **原生设置**：开机启动、面板外观样式、位置、宽度、快捷键、剪贴板、片段、系统命令、应用别名与隐私控制。
+- **原生设置与启动器交互**：开机启动、面板外观样式、位置、宽度、快捷键、剪贴板、片段、系统命令、自定义应用、应用别名与隐私控制；亮色/暗色/跟随系统均使用完整的动态控件主题。支持设置 50–400 毫秒“输入停止后搜索”，连续输入会取消并重新计时，只为最终查询展开结果；启动器还包含搜索进度、清除按钮、空结果提示、鼠标双击启动、高 DPI 多屏位置校正，以及后台应用图标预取缓存。
 - **源码工具模块**：内置与个人工具通过 `IYToolsModule` 契约编译进应用，结果由宿主校验，不动态加载外部代码。
 
 默认快捷键：
@@ -34,7 +34,7 @@ YTools 是一个面向个人使用的 **Windows 原生启动器与本地效率�
 需要 .NET 8 SDK：
 
 ```powershell
-./scripts/check.ps1      # 严格编译、58 项单元测试、23 项自检与禁止 API 扫描
+./scripts/check.ps1      # 严格编译、80 项单元测试、27 项自检与禁止 API 扫描
 ./scripts/build.ps1      # 生成 dist/YTools.Windows/YTools.exe 单文件发布版
 ```
 
@@ -47,7 +47,7 @@ dotnet run --project src/YTools.Windows
 自检模式（无 UI，CI 冒烟用）：
 
 ```powershell
-src\YTools.Windows\bin\Debug\net8.0-windows\YTools.exe --selftest
+src\YTools.Windows\bin\Release\net8.0-windows\YTools.exe --selftest
 ```
 
 ## 安全与隐私
@@ -56,7 +56,7 @@ src\YTools.Windows\bin\Debug\net8.0-windows\YTools.exe --selftest
 - 剪贴板、Snippets 与最近文档分别用 AES-GCM 加密，随机密钥由 Windows DPAPI（当前用户）保护；数据目录 ACL 仅允许当前用户。
 - 查询文本不能成为 Shell、脚本、可执行路径或任意 URL 参数；系统动作是编译期白名单。
 - 清空回收站只在用户确认后调用固定的 `SHEmptyRecycleBin`；文件移入回收站使用系统 `IFileOperation` 等价 API，不提供永久删除。
-- 不动态加载未签名的库；仅当本机已安装 Everything 时加载其官方 `Everything64.dll` 做只读查询。
+- 不动态加载未签名的库；Everything 集成仅通过 `WM_COPYDATA` 连接本机已运行实例，发送与回复等待各设置 800ms 上限并校验返回缓冲区，不读取其数据库文件。
 - 快捷键、剪贴板监听均为本机 Win32 消息；不申请辅助功能权限。
 
 ## 项目结构

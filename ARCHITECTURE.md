@@ -48,8 +48,8 @@ ModuleKit（无 UI 的公共边界）
 | `NSPasteboard` 轮询 | `AddClipboardFormatListener` + 序列号轮询回退 |
 | Keychain（Security） | DPAPI `ProtectedData`（CurrentUser） |
 | ServiceManagement 登录启动 | HKCU `...\CurrentVersion\Run` 固定值 |
-| Spotlight `NSMetadataQuery` | Everything SDK（可选）+ 内置文件名扫描 |
-| `/Applications` 应用扫描 | 开始菜单 `.lnk`（IShellLink）+ WindowsApps 别名 |
+| Spotlight `NSMetadataQuery` | Everything `WM_COPYDATA` 本机 IPC（可选）+ 后台文件名扫描 |
+| `/Applications` 应用扫描 | 开始菜单可启动入口（IShellLink）+ WindowsApps 别名 + AppsFolder（IApplicationActivationManager）+ 用户选择的本机自定义应用 |
 | `NSWorkspace` 打开/显示 | `Process.Start`（ShellExecute）与 `explorer.exe /select` |
 | Quick Look | 内置预览面板（图片/文本/元信息） |
 | 系统词典 `DCSCopyTextDefinition` | 离线 CC-CEDICT 索引 |
@@ -61,11 +61,12 @@ ModuleKit（无 UI 的公共边界）
 ## 性能与响应性契约
 
 - 文本输入热路径只能更新轻量状态、取消任务和推进请求代次；不得同步扫描磁盘、加密或全量过滤。
-- 普通本地模块使用用户配置的输入防抖；文件搜索额外等待至少 300ms 的稳定窗口。
+- 普通本地模块使用用户配置的 50–400ms 输入停止窗口；每次输入都会取消旧代次，回调即使已经投递到 UI 队列也会在执行前复查取消状态。文件搜索额外等待至少 300ms 的稳定窗口。
 - 空查询直接重置内存状态；后台请求同时使用 `CancellationToken` 与查询文本校验，迟到结果不能覆盖新查询。
 - 面板高度只随结果数量、pending、动作菜单和样式变化；连续输入时保持输入行高度，最终查询完成后一次性展开。
 - 剪贴板过滤在后台执行、支持取消并限制 UI 同时呈现最近 100 条；持久化仍保留完整加密历史。
 - 边界必须明确：模块最多返回 40 条、文件搜索最多 100 条、应用结果最多 12 条。
+- 自定义应用只在路径集合变化时规范化并构建内存条目；普通按键搜索直接复用快照，不扫描自定义目录，也不新增文件监视器。
 
 ## 明确不包含
 
@@ -84,13 +85,14 @@ ModuleKit（无 UI 的公共边界）
 ## 权限策略
 
 - 计算器/单位换算/文本统计：无权限。
-- 词典：只读内嵌 CC-CEDICT。
-- 应用启动：只索引固定的开始菜单与 WindowsApps 目录，由宿主用 ShellExecute 启动。
-- 文件搜索：Everything 只读 IPC；回退扫描器跳过 AppData、node_modules、系统目录并限制访问条目数。
+- 词典：只读内嵌 CC-CEDICT，索引在启动阶段后台预热；自动词典查询不会阻塞首字符结果，显式 `dict/词典` 查询仍保证完整结果。
+- 应用启动：自动索引固定的开始菜单、WindowsApps 目录和系统 AppsFolder 命名空间；用户还可通过文件选择器显式加入现有本机 `.exe`、`.lnk`、`.appref-ms`。自定义项拒绝相对路径、UNC 和其他扩展名，只保存规范化路径，不接受参数或查询文本作为路径。文件型入口由宿主用 ShellExecute 启动；AppsFolder 已注册应用使用受类型约束的 `ActivateApplication(AppUserModelId)` 动作和系统 `IApplicationActivationManager`。
+- 文件搜索：Everything 使用官方 QUERY2 `WM_COPYDATA` 只读本机 IPC，无需 SDK DLL；请求发送与回复等待均有 800ms 上限，支持取消，返回数量、偏移、长度和绝对路径均经校验。若两端完整性级别不同则显示诊断并使用回退扫描器。回退扫描器在后台运行，跳过 AppData、node_modules、系统目录并限制访问条目数。
 - 剪贴板：单一管理器读取系统剪贴板；默认排除密码管理器进程与敏感格式（含 Windows 的 `ExcludeClipboardContentFromMonitorProcessing`），支持自定义忽略进程、暂停、固定和分段清理。持久化使用 AES-GCM，密钥由 DPAPI 保护；文本/文件默认记录，图片默认关闭且单项限制 5 MB。
 - 窗口位置：拖动后的左上角换算为显示器工作区中的比例并保存；显示器变化时自动钳制在可见区域。
 - 托盘：可按偏好隐藏，隐藏后全局快捷键、剪贴板监听与后台运行不受影响。
-- 启动器样式：极简（默认）、经典、现代、玻璃四种原生预设，通过布局令牌与半透明画刷实现，不加载外部主题资源。
+- 启动器样式：极简（默认）、经典、现代、玻璃四种原生预设，通过布局令牌与半透明画刷实现，不加载外部主题资源。面板坐标统一换算为 WPF DIP，在高 DPI 和多显示器工作区内钳制；文件预览展开时保留主结果区宽度。
+- 应用图标：结果首帧使用通用字形，Shell/AppsFolder 图标在后台提取并冻结后写入进程缓存；缓存完成只刷新结果图标，不阻塞输入和排序。
 - 系统命令：只允许编译期固定的动作；关键词可在设置中修改或关闭，但永远不会成为 Shell、URL 或可执行参数。清空回收站始终二次确认；不读取受保护目录内容。
 - 网络：主程序默认没有任何网络模块。
 

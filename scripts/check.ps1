@@ -6,14 +6,26 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-Write-Host '==> dotnet build (warnings as errors)'
-dotnet build YTools.Windows.sln -c Debug -warnaserror
+function Invoke-NativeCommand {
+    param(
+        [string]$Description,
+        [scriptblock]$Command
+    )
 
-Write-Host '==> dotnet test'
-dotnet test YTools.Windows.sln -c Debug --no-build
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description failed with exit code $LASTEXITCODE"
+    }
+}
+
+Write-Host '==> dotnet build (Release, warnings as errors)'
+Invoke-NativeCommand 'dotnet build' { dotnet build YTools.Windows.sln -c Release -warnaserror }
+
+Write-Host '==> dotnet test (Release)'
+Invoke-NativeCommand 'dotnet test' { dotnet test YTools.Windows.sln -c Release --no-build }
 
 Write-Host '==> Release self-test'
-$exe = Join-Path $root 'src\YTools.Windows\bin\Debug\net8.0-windows\YTools.exe'
+$exe = Join-Path $root 'src\YTools.Windows\bin\Release\net8.0-windows\YTools.exe'
 $log = Join-Path $env:TEMP 'ytools-selftest.log'
 if (Test-Path $log) { Remove-Item $log }
 $process = Start-Process -FilePath $exe -ArgumentList '--selftest' -Wait -PassThru

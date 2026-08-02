@@ -47,7 +47,8 @@
                            FontSize="15"
                            VerticalAlignment="Center"
                            HorizontalAlignment="Center"
-                           Foreground="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert, FallbackValue=Collapsed}" />
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           Visibility="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert, FallbackValue=Collapsed}" />
                 <TextBlock Grid.Column="0"
                            Text="{Binding Glyph}"
                            FontFamily="Segoe MDL2 Assets"

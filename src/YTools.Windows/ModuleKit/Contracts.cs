@@ -5,6 +5,7 @@ namespace YTools.ModuleKit;
 public enum ModuleCapability
 {
     LocalFileRead,
+    ApplicationLaunch,
     ClipboardRead,
     ContactsRead,
     CalendarRead
@@ -48,6 +49,8 @@ public abstract record ResultIcon
 
     public sealed record Application(string Path) : ResultIcon;
 
+    public sealed record RegisteredApplication(string AppUserModelId) : ResultIcon;
+
     public sealed record File(string Path) : ResultIcon;
 }
 
@@ -60,6 +63,8 @@ public abstract record ResultAction
     public sealed record Copy(string Text) : ResultAction;
 
     public sealed record Open(string Path) : ResultAction;
+
+    public sealed record ActivateApplication(string AppUserModelId) : ResultAction;
 
     public sealed record Reveal(string Path) : ResultAction;
 
@@ -108,7 +113,7 @@ public sealed record LauncherResult(
         _ => null
     };
 
-    public bool IsApplication => Icon is ResultIcon.Application;
+    public bool IsApplication => Icon is ResultIcon.Application or ResultIcon.RegisteredApplication;
 
     public LauncherResult WithScore(int newScore)
     {
@@ -188,6 +193,9 @@ public sealed class ModuleResultPolicy
             case ResultIcon.Application application:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
                     && Path.IsPathRooted(application.Path);
+            case ResultIcon.RegisteredApplication application:
+                return descriptor.Capabilities.Contains(ModuleCapability.ApplicationLaunch)
+                    && IsValidAppUserModelId(application.AppUserModelId);
             case ResultIcon.File file:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
                     && Path.IsPathRooted(file.Path);
@@ -208,6 +216,9 @@ public sealed class ModuleResultPolicy
             case ResultAction.Open open:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
                     && Path.IsPathRooted(open.Path);
+            case ResultAction.ActivateApplication application:
+                return descriptor.Capabilities.Contains(ModuleCapability.ApplicationLaunch)
+                    && IsValidAppUserModelId(application.AppUserModelId);
             case ResultAction.Reveal reveal:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
                     && Path.IsPathRooted(reveal.Path);
@@ -229,5 +240,12 @@ public sealed class ModuleResultPolicy
             default:
                 return false;
         }
+    }
+
+    private static bool IsValidAppUserModelId(string value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+            && value.Length <= 512
+            && value.All(character => !char.IsControl(character));
     }
 }

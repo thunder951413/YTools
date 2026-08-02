@@ -17,11 +17,24 @@ public sealed class UsageRankingStore
     private Dictionary<string, Latch> _latches;
 
     public UsageRankingStore()
+        : this(AppPaths.UsageRankingFile)
+    {
+    }
+
+    internal UsageRankingStore(string filePath)
     {
         AppPaths.EnsureDirectories();
-        _filePath = AppPaths.UsageRankingFile;
+        _filePath = filePath;
         (_entries, _latches) = Load();
         Prune();
+    }
+
+    public int Count(string identifier)
+    {
+        lock (_lock)
+        {
+            return _entries.TryGetValue(Hash(identifier), out var entry) ? entry.Count : 0;
+        }
     }
 
     public void Record(string identifier, string query)

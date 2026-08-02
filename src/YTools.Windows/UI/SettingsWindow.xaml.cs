@@ -24,6 +24,7 @@ public partial class SettingsWindow : Window
     private readonly List<NavItem> _navItems = [];
     private readonly ObservableCollection<string> _scopePaths = [];
     private readonly ObservableCollection<AliasEntry> _aliasEntries = [];
+    private readonly ObservableCollection<CustomApplicationEntry> _customApplications = [];
     private readonly ObservableCollection<string> _ignoredApps = [];
     private readonly ObservableCollection<SnippetItem> _snippetItems = [];
     private HotKeyRecorder? _launcherRecorder;
@@ -32,6 +33,8 @@ public partial class SettingsWindow : Window
     public SettingsWindow()
     {
         InitializeComponent();
+        ThemeService.ThemeApplied += OnThemeApplied;
+        Closed += (_, _) => ThemeService.ThemeApplied -= OnThemeApplied;
         NavList.SelectionChanged += (_, _) =>
         {
             if (NavList.SelectedItem is NavItem item && _pages.TryGetValue(item, out var page))
@@ -65,6 +68,8 @@ public partial class SettingsWindow : Window
             _aliasEntries.Add(new AliasEntry(pair.Key, pair.Value));
         }
 
+        RefreshCustomApplications();
+
         _ignoredApps.Clear();
         foreach (var name in preferences.ClipboardIgnoredProcessNames)
         {
@@ -90,6 +95,14 @@ public partial class SettingsWindow : Window
         ApplyDarkTitleBar();
     }
 
+    private void OnThemeApplied()
+    {
+        if (IsInitialized)
+        {
+            ApplyDarkTitleBar();
+        }
+    }
+
     public void SelectFirstTab()
     {
         if (_navItems.Count > 0)
@@ -100,11 +113,14 @@ public partial class SettingsWindow : Window
 
     private void BuildPages()
     {
+        _navItems.Clear();
+        _pages.Clear();
         _navItems.AddRange(
         [
             new NavItem("通用", "\uE713"),
             new NavItem("搜索", "\uE721"),
             new NavItem("应用别名", "\uE8F1"),
+            new NavItem("自定义应用", "\uE8F1"),
             new NavItem("外观", "\uE790"),
             new NavItem("快捷键", "\uE765"),
             new NavItem("剪贴板", "\uE8C8"),
@@ -116,12 +132,13 @@ public partial class SettingsWindow : Window
         _pages[_navItems[0]] = SafePage("通用", BuildGeneralPage);
         _pages[_navItems[1]] = SafePage("搜索", BuildSearchPage);
         _pages[_navItems[2]] = SafePage("应用别名", BuildAliasesPage);
-        _pages[_navItems[3]] = SafePage("外观", BuildAppearancePage);
-        _pages[_navItems[4]] = SafePage("快捷键", BuildHotKeysPage);
-        _pages[_navItems[5]] = SafePage("剪贴板", BuildClipboardPage);
-        _pages[_navItems[6]] = SafePage("片段", BuildSnippetsPage);
-        _pages[_navItems[7]] = SafePage("系统命令", BuildSystemCommandsPage);
-        _pages[_navItems[8]] = SafePage("隐私", BuildPrivacyPage);
+        _pages[_navItems[3]] = SafePage("自定义应用", BuildCustomApplicationsPage);
+        _pages[_navItems[4]] = SafePage("外观", BuildAppearancePage);
+        _pages[_navItems[5]] = SafePage("快捷键", BuildHotKeysPage);
+        _pages[_navItems[6]] = SafePage("剪贴板", BuildClipboardPage);
+        _pages[_navItems[7]] = SafePage("片段", BuildSnippetsPage);
+        _pages[_navItems[8]] = SafePage("系统命令", BuildSystemCommandsPage);
+        _pages[_navItems[9]] = SafePage("隐私", BuildPrivacyPage);
     }
 
     private UserControl SafePage(string name, Func<UserControl> build)
@@ -134,12 +151,13 @@ public partial class SettingsWindow : Window
         {
             AppPaths.LogException(exception);
             var page = new UserControl();
-            page.Content = new TextBlock
+            var error = new TextBlock
             {
                 Text = $"页面“{name}”加载失败：{exception.Message}",
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Brushes.OrangeRed
+                TextWrapping = TextWrapping.Wrap
             };
+            error.SetResourceReference(TextBlock.ForegroundProperty, "ErrorBrush");
+            page.Content = error;
             return page;
         }
     }
@@ -155,9 +173,9 @@ public partial class SettingsWindow : Window
         stack.Children.Add(ComboRow("强调色", "AccentColor", EnumMetadata.AccentOptions()));
         var launchError = new TextBlock
         {
-            Style = (Style)FindResource("HintText"),
-            Foreground = System.Windows.Media.Brushes.OrangeRed
+            Style = (Style)FindResource("HintText")
         };
+        launchError.SetResourceReference(TextBlock.ForegroundProperty, "ErrorBrush");
         launchError.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(AppPreferences.LaunchAtLoginError)));
         stack.Children.Add(launchError);
         var restore = Button("恢复默认设置", () => _preferences?.RestoreDefaults());
@@ -188,7 +206,15 @@ public partial class SettingsWindow : Window
         stack.Children.Add(panel);
         stack.Children.Add(CheckBox("默认结果包含文件", "IncludeFilesInDefaultResults", "关闭后仅输入 open/打开 等前缀时返回文件"));
         stack.Children.Add(SliderRow("最大结果数", "MaximumSearchResults", 3, 20, 1));
-        stack.Children.Add(SliderRow("输入防抖（秒）", "SearchInputDelay", 0.05, 0.4, 0.05));
+        stack.Children.Add(SliderRow(
+            "输入停止后搜索",
+            "SearchInputDelay",
+            0.05,
+            0.4,
+            0.025,
+            valueMultiplier: 1_000,
+            valueSuffix: " 毫秒",
+            detail: "连续输入会重新计时；停顿达到该时间后才开始并显示最终搜索结果。"));
         stack.Children.Add(SubHeader("搜索范围"));
         stack.Children.Add(new TextBlock
         {
@@ -258,7 +284,7 @@ public partial class SettingsWindow : Window
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "应用 (*.exe;*.lnk)|*.exe;*.lnk",
+                Filter = "应用 (*.exe;*.lnk;*.appref-ms)|*.exe;*.lnk;*.appref-ms",
                 Multiselect = false
             };
             if (dialog.ShowDialog(this) == true)
@@ -299,6 +325,105 @@ public partial class SettingsWindow : Window
         return page;
     }
 
+    private UserControl BuildCustomApplicationsPage()
+    {
+        var page = new UserControl();
+        var stack = new StackPanel();
+        stack.Children.Add(Header("自定义应用"));
+        stack.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("HintText"),
+            Text = "添加本机应用或快捷方式后，它们会作为应用搜索结果显示。可为选中的应用设置搜索别名。"
+        });
+
+        var applicationList = new ListBox
+        {
+            ItemsSource = _customApplications,
+            Height = 160,
+            Margin = new Thickness(0, 6, 0, 0)
+        };
+        applicationList.ItemTemplate = CreateCustomApplicationTemplate();
+        stack.Children.Add(applicationList);
+
+        var applicationButtons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        applicationButtons.Children.Add(Button("添加应用…", () =>
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "应用 (*.exe;*.lnk;*.appref-ms)|*.exe;*.lnk;*.appref-ms",
+                Multiselect = false
+            };
+            if (dialog.ShowDialog(this) == true && _preferences is not null)
+            {
+                var normalizedPath = _preferences.AddCustomApplication(dialog.FileName);
+                if (normalizedPath is not null)
+                {
+                    _preferences.AddApplicationAliasTarget(normalizedPath);
+                }
+                RefreshCustomApplications();
+            }
+        }));
+        applicationButtons.Children.Add(Button("移除", () =>
+        {
+            if (applicationList.SelectedItem is CustomApplicationEntry entry)
+            {
+                _preferences?.RemoveCustomApplication(entry.Path);
+                RefreshCustomApplications();
+            }
+        }));
+        stack.Children.Add(applicationButtons);
+
+        stack.Children.Add(SubHeader("搜索别名"));
+        var aliasText = new TextBox
+        {
+            ToolTip = "别名，如：微信,wechat"
+        };
+        stack.Children.Add(aliasText);
+        stack.Children.Add(Button("保存别名", () =>
+        {
+            if (applicationList.SelectedItem is CustomApplicationEntry entry)
+            {
+                _preferences?.AddApplicationAliasTarget(entry.Path);
+                _preferences?.SetApplicationAliases(entry.Path, aliasText.Text);
+                entry.Aliases = aliasText.Text;
+                applicationList.Items.Refresh();
+            }
+        }));
+        applicationList.SelectionChanged += (_, _) =>
+        {
+            aliasText.Text = applicationList.SelectedItem is CustomApplicationEntry entry
+                ? entry.Aliases
+                : "";
+        };
+
+        page.Content = Scroll(stack);
+        return page;
+    }
+
+    private DataTemplate CreateCustomApplicationTemplate()
+    {
+        var template = new DataTemplate(typeof(CustomApplicationEntry));
+        var panel = new FrameworkElementFactory(typeof(StackPanel));
+        var name = new FrameworkElementFactory(typeof(TextBlock));
+        name.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(CustomApplicationEntry.Name)));
+        name.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
+        name.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+        panel.AppendChild(name);
+
+        var path = new FrameworkElementFactory(typeof(TextBlock));
+        path.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(CustomApplicationEntry.Path)));
+        path.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+        path.SetValue(TextBlock.FontSizeProperty, 12d);
+        path.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        panel.AppendChild(path);
+        template.VisualTree = panel;
+        return template;
+    }
+
     private UserControl BuildAppearancePage()
     {
         var page = new UserControl();
@@ -337,6 +462,7 @@ public partial class SettingsWindow : Window
                 _preferences.LauncherHotKey = definition;
             }
         };
+        _launcherRecorder.Bind(_preferences?.LauncherHotKey ?? HotKeyDefinition.LauncherDefault);
         stack.Children.Add(_launcherRecorder);
         _clipboardRecorder = new HotKeyRecorder("剪贴板历史快捷键");
         _clipboardRecorder.Changed += definition =>
@@ -346,12 +472,13 @@ public partial class SettingsWindow : Window
                 _preferences.ClipboardHotKey = definition;
             }
         };
+        _clipboardRecorder.Bind(_preferences?.ClipboardHotKey ?? HotKeyDefinition.ClipboardDefault);
         stack.Children.Add(_clipboardRecorder);
         var hotKeyError = new TextBlock
         {
-            Style = (Style)FindResource("HintText"),
-            Foreground = System.Windows.Media.Brushes.OrangeRed
+            Style = (Style)FindResource("HintText")
         };
+        hotKeyError.SetResourceReference(TextBlock.ForegroundProperty, "ErrorBrush");
         hotKeyError.SetBinding(
             TextBlock.TextProperty,
             new System.Windows.Data.Binding(nameof(AppPreferences.HotKeyError)));
@@ -415,18 +542,15 @@ public partial class SettingsWindow : Window
     private UserControl BuildSnippetsPage()
     {
         var page = new UserControl();
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var left = new StackPanel();
-        left.Children.Add(Header("文本片段"));
+        var stack = new StackPanel();
+        stack.Children.Add(Header("文本片段"));
         var snippetList = new ListBox
         {
             ItemsSource = _snippetItems,
             DisplayMemberPath = nameof(SnippetItem.Title),
-            Height = 320
+            Height = 180
         };
-        left.Children.Add(snippetList);
+        stack.Children.Add(snippetList);
         var leftButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
         leftButtons.Children.Add(Button("新建", () =>
         {
@@ -441,10 +565,8 @@ public partial class SettingsWindow : Window
                 RefreshSnippets();
             }
         }));
-        left.Children.Add(leftButtons);
-        grid.Children.Add(left);
-        var right = new StackPanel { Margin = new Thickness(16, 0, 0, 0) };
-        right.Children.Add(SubHeader("编辑"));
+        stack.Children.Add(leftButtons);
+        stack.Children.Add(SubHeader("编辑"));
         var title = LabeledTextBox("标题", 200);
         var keyword = LabeledTextBox("关键词", 200);
         var collection = LabeledTextBox("分类", 200);
@@ -457,15 +579,15 @@ public partial class SettingsWindow : Window
             Margin = new Thickness(0, 6, 0, 0)
         };
         var contentLabel = new TextBlock { Text = "内容（支持 {date} {time} {clipboard} {cursor}）", Style = (Style)FindResource("RowLabel") };
-        right.Children.Add(title.Label);
-        right.Children.Add(title.Box);
-        right.Children.Add(keyword.Label);
-        right.Children.Add(keyword.Box);
-        right.Children.Add(collection.Label);
-        right.Children.Add(collection.Box);
-        right.Children.Add(contentLabel);
-        right.Children.Add(content);
-        right.Children.Add(Button("保存修改", () =>
+        stack.Children.Add(title.Label);
+        stack.Children.Add(title.Box);
+        stack.Children.Add(keyword.Label);
+        stack.Children.Add(keyword.Box);
+        stack.Children.Add(collection.Label);
+        stack.Children.Add(collection.Box);
+        stack.Children.Add(contentLabel);
+        stack.Children.Add(content);
+        stack.Children.Add(Button("保存修改", () =>
         {
             if (snippetList.SelectedItem is SnippetItem item)
             {
@@ -478,7 +600,6 @@ public partial class SettingsWindow : Window
                 RefreshSnippets();
             }
         }, margin: new Thickness(0, 10, 0, 0)));
-        grid.Children.Add(right);
         snippetList.SelectionChanged += (_, _) =>
         {
             if (snippetList.SelectedItem is SnippetItem item)
@@ -489,7 +610,7 @@ public partial class SettingsWindow : Window
                 content.Text = item.Content;
             }
         };
-        page.Content = grid;
+        page.Content = Scroll(stack);
         return page;
     }
 
@@ -558,27 +679,27 @@ public partial class SettingsWindow : Window
         stack.Children.Add(SubHeader("加密存储状态"));
         var clipboardError = new TextBlock
         {
-            Style = (Style)FindResource("HintText"),
-            Foreground = System.Windows.Media.Brushes.OrangeRed
+            Style = (Style)FindResource("HintText")
         };
+        clipboardError.SetResourceReference(TextBlock.ForegroundProperty, "ErrorBrush");
         clipboardError.SetBinding(
             TextBlock.TextProperty,
             new System.Windows.Data.Binding(nameof(ClipboardHistoryManager.StorageError)) { Source = _clipboard });
         stack.Children.Add(clipboardError);
         var snippetError = new TextBlock
         {
-            Style = (Style)FindResource("HintText"),
-            Foreground = System.Windows.Media.Brushes.OrangeRed
+            Style = (Style)FindResource("HintText")
         };
+        snippetError.SetResourceReference(TextBlock.ForegroundProperty, "ErrorBrush");
         snippetError.SetBinding(
             TextBlock.TextProperty,
             new System.Windows.Data.Binding(nameof(SnippetManager.StorageError)) { Source = _snippets });
         stack.Children.Add(snippetError);
         var recentError = new TextBlock
         {
-            Style = (Style)FindResource("HintText"),
-            Foreground = System.Windows.Media.Brushes.OrangeRed
+            Style = (Style)FindResource("HintText")
         };
+        recentError.SetResourceReference(TextBlock.ForegroundProperty, "ErrorBrush");
         recentError.SetBinding(
             TextBlock.TextProperty,
             new System.Windows.Data.Binding(nameof(RecentDocumentsManager.StorageError)) { Source = _recentDocuments });
@@ -612,12 +733,13 @@ public partial class SettingsWindow : Window
     {
         var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 2) };
         panel.Children.Add(new TextBlock { Text = text, Style = (Style)FindResource("SectionHeader") });
-        panel.Children.Add(new Border
+        var separator = new Border
         {
             Height = 1,
-            Background = (Brush)Application.Current.Resources["BorderBrush"],
             Margin = new Thickness(0, 0, 0, 10)
-        });
+        };
+        separator.SetResourceReference(Border.BackgroundProperty, "BorderBrush");
+        panel.Children.Add(separator);
         return panel;
     }
 
@@ -644,7 +766,15 @@ public partial class SettingsWindow : Window
         return box;
     }
 
-    private static UIElement SliderRow(string label, string binding, double min, double max, double tick)
+    private UIElement SliderRow(
+        string label,
+        string binding,
+        double min,
+        double max,
+        double tick,
+        double valueMultiplier = 1,
+        string valueSuffix = "",
+        string? detail = null)
     {
         var grid = new Grid { Margin = new Thickness(0, 6, 0, 6) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
@@ -654,9 +784,9 @@ public partial class SettingsWindow : Window
         {
             Text = label,
             VerticalAlignment = VerticalAlignment.Center,
-            FontSize = 13,
-            Foreground = (System.Windows.Media.Brush)Application.Current.Resources["TextPrimaryBrush"]
+            FontSize = 13
         };
+        labelText.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
         grid.Children.Add(labelText);
         var slider = new Slider
         {
@@ -679,18 +809,36 @@ public partial class SettingsWindow : Window
         {
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right,
-            FontSize = 12,
-            Foreground = (System.Windows.Media.Brush)Application.Current.Resources["TextSecondaryBrush"]
+            FontSize = 12
         };
+        valueText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
         valueText.SetBinding(
             TextBlock.TextProperty,
             new System.Windows.Data.Binding(binding)
             {
-                StringFormat = "{0:0.##}"
+                Converter = new ScaledValueTextConverter(valueMultiplier, valueSuffix)
             });
         Grid.SetColumn(valueText, 2);
         grid.Children.Add(valueText);
-        return grid;
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            return grid;
+        }
+
+        return new StackPanel
+        {
+            Children =
+            {
+                grid,
+                new TextBlock
+                {
+                    Text = detail,
+                    Style = (Style)FindResource("HintText"),
+                    Margin = new Thickness(170, -4, 0, 6),
+                    TextWrapping = TextWrapping.Wrap
+                }
+            }
+        };
     }
 
     private UIElement ComboRow(string label, string binding, IReadOnlyList<EnumOption> options)
@@ -702,9 +850,9 @@ public partial class SettingsWindow : Window
         {
             Text = label,
             VerticalAlignment = VerticalAlignment.Center,
-            FontSize = 13,
-            Foreground = (System.Windows.Media.Brush)Application.Current.Resources["TextPrimaryBrush"]
+            FontSize = 13
         };
+        labelText.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
         grid.Children.Add(labelText);
         var combo = new ComboBox
         {
@@ -774,6 +922,22 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void RefreshCustomApplications()
+    {
+        _customApplications.Clear();
+        if (_preferences is null)
+        {
+            return;
+        }
+
+        foreach (var path in _preferences.CustomApplicationPaths)
+        {
+            _customApplications.Add(new CustomApplicationEntry(
+                path,
+                _preferences.ApplicationAliases.TryGetValue(path, out var aliases) ? aliases : ""));
+        }
+    }
+
     private void ApplyDarkTitleBar()
     {
         var dark = _preferences is { } preferences
@@ -800,44 +964,106 @@ public partial class SettingsWindow : Window
         public string Aliases { get; set; }
     }
 
+    private sealed class CustomApplicationEntry
+    {
+        public CustomApplicationEntry(string path, string aliases)
+        {
+            Path = path;
+            Name = System.IO.Path.GetFileName(path);
+            Aliases = aliases;
+        }
+
+        public string Name { get; }
+
+        public string Path { get; }
+
+        public string Aliases { get; set; }
+    }
+
+    private sealed class ScaledValueTextConverter : System.Windows.Data.IValueConverter
+    {
+        private readonly double _multiplier;
+        private readonly string _suffix;
+
+        public ScaledValueTextConverter(double multiplier, string suffix)
+        {
+            _multiplier = multiplier;
+            _suffix = suffix;
+        }
+
+        public object Convert(
+            object? value,
+            Type targetType,
+            object? parameter,
+            System.Globalization.CultureInfo culture)
+        {
+            if (value is not IConvertible convertible)
+            {
+                return "";
+            }
+
+            var scaled = convertible.ToDouble(culture) * _multiplier;
+            var format = _multiplier == 1 ? "0.##" : "0";
+            return scaled.ToString(format, culture) + _suffix;
+        }
+
+        public object ConvertBack(
+            object? value,
+            Type targetType,
+            object? parameter,
+            System.Globalization.CultureInfo culture)
+        {
+            throw new NotSupportedException();
+        }
+    }
+
     private sealed class HotKeyRecorder : Border
     {
         private readonly TextBlock _display = new()
         {
             VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Center
+            HorizontalAlignment = HorizontalAlignment.Center,
+            FontWeight = FontWeights.SemiBold
         };
 
         public HotKeyRecorder(string title)
         {
+            var titleText = new TextBlock
+            {
+                Text = title,
+                FontSize = 12,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            titleText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            _display.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
             Child = new StackPanel
             {
                 Children =
                 {
-                    new TextBlock
-                    {
-                        Text = title,
-                        FontSize = 12,
-                        Foreground = (System.Windows.Media.Brush)Application.Current.Resources["TextSecondaryBrush"],
-                        HorizontalAlignment = HorizontalAlignment.Center
-                    },
+                    titleText,
                     _display
                 }
             };
-            Background = (System.Windows.Media.Brush)Application.Current.Resources["InputBackgroundBrush"];
+            SetResourceReference(BackgroundProperty, "InputBackgroundBrush");
+            SetResourceReference(BorderBrushProperty, "BorderBrush");
+            BorderThickness = new Thickness(1);
             CornerRadius = new CornerRadius(8);
             Padding = new Thickness(12, 8, 12, 8);
             Margin = new Thickness(0, 6, 0, 6);
             MinHeight = 54;
             Focusable = true;
-            KeyDown += OnKeyDown;
+            Cursor = Cursors.Hand;
+            MouseLeftButtonDown += OnMouseLeftButtonDown;
+            PreviewKeyDown += OnPreviewKeyDown;
             GotKeyboardFocus += (_, _) =>
             {
-                Background = (System.Windows.Media.Brush)Application.Current.Resources["SelectionBrush"];
+                SetResourceReference(BackgroundProperty, "SelectionBrush");
+                SetResourceReference(BorderBrushProperty, "AccentBrush");
             };
             LostKeyboardFocus += (_, _) =>
             {
-                Background = (System.Windows.Media.Brush)Application.Current.Resources["InputBackgroundBrush"];
+                SetResourceReference(BackgroundProperty, "InputBackgroundBrush");
+                SetResourceReference(BorderBrushProperty, "BorderBrush");
             };
         }
 
@@ -848,11 +1074,22 @@ public partial class SettingsWindow : Window
             _display.Text = definition.DisplayString;
         }
 
-        private void OnKeyDown(object sender, KeyEventArgs e)
+        private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            // Border does not take keyboard focus on mouse clicks by default.
+            // Explicitly focusing it makes the recorder reliably usable even
+            // when a child TextBlock is the original hit-test target.
+            Focus();
+            Keyboard.Focus(this);
+            e.Handled = true;
+        }
+
+        private void OnPreviewKeyDown(object sender, KeyEventArgs e)
         {
             var modifiers = Keyboard.Modifiers;
             var hasModifier = modifiers != ModifierKeys.None;
-            var isModifierKey = e.Key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+            var key = e.Key == Key.System ? e.SystemKey : e.Key;
+            var isModifierKey = key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
                 or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin;
             if (!hasModifier || isModifierKey)
             {
@@ -881,7 +1118,7 @@ public partial class SettingsWindow : Window
             }
 
             var definition = new HotKeyDefinition(
-                KeyInterop.VirtualKeyFromKey(e.Key),
+                KeyInterop.VirtualKeyFromKey(key),
                 hotKeyModifiers);
             _display.Text = definition.DisplayString;
             Changed?.Invoke(definition);

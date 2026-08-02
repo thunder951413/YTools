@@ -81,6 +81,22 @@ public static class SelfTest
                     fileResult with { Action = new ResultAction.EmptyTrash(), Icon = new ResultIcon.System("trash") },
                     module) is not null);
 
+            const string registeredAppId = "Contoso.Sample_123!App";
+            var applicationCapabilities = new HashSet<ModuleCapability> { ModuleCapability.ApplicationLaunch };
+            var applicationPolicy = new ModuleResultPolicy(allowedCapabilities: applicationCapabilities);
+            var applicationModule = new ModuleDescriptor("applications", "应用程序", applicationCapabilities);
+            var registeredApplication = new LauncherResult(
+                $"application:registered:{registeredAppId}",
+                "applications",
+                "Sample",
+                "Microsoft Store 应用",
+                new ResultIcon.RegisteredApplication(registeredAppId),
+                900,
+                new ResultAction.ActivateApplication(registeredAppId));
+            Check(
+                "policy.registeredApplication",
+                applicationPolicy.Sanitize(registeredApplication, applicationModule) is not null);
+
             var clipboardPolicy = new ClipboardTextPolicy(100);
             Check("clipboardPolicy.limit", !clipboardPolicy.ShouldStore(new string('a', 101)));
 
@@ -101,20 +117,50 @@ public static class SelfTest
             var statsResults = textStats.SearchAsync(new ModuleSearchRequest("统计 hello world", 5)).GetAwaiter().GetResult();
             Check("module.textStatistics", statsResults.Count == 1 && statsResults[0].Title.Contains("字符"));
 
-            var applicationIndex = new ApplicationIndexService();
-            applicationIndex.Prepare();
-            var applicationResults = applicationIndex.Search("note", new Dictionary<string, string>());
-            Check("applications.index", applicationResults.Count > 0);
+            var searchFixture = Path.Combine(Path.GetTempPath(), "ytools-selftest-search-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(searchFixture);
+            try
+            {
+                var fixtureApp = Path.Combine(searchFixture, "YTools SelfTest.exe");
+                File.WriteAllText(fixtureApp, "fixture");
+                var applicationIndex = new ApplicationIndexService(
+                    [searchFixture],
+                    Path.Combine(searchFixture, "WindowsApps"),
+                    includesRegisteredApplications: false);
+                applicationIndex.Prepare();
+                var applicationResults = applicationIndex.Search("selftest", new Dictionary<string, string>());
+                Check("applications.index", applicationResults.Count > 0);
 
-            var fileSearch = new FileSearchService();
-            var fileResults = fileSearch.SearchAsync(
-                "documents",
-                FileSearchMode.Default,
-                [],
-                5,
-                CancellationToken.None).GetAwaiter().GetResult();
-            Check("files.index", fileResults.Count > 0);
-            fileSearch.Dispose();
+                var fixtureFile = Path.Combine(searchFixture, "selftest-document.txt");
+                File.WriteAllText(fixtureFile, "fixture");
+                using var fileSearch = new FileSearchService(enableEverything: false);
+                IReadOnlyList<LauncherResult> fileResults = [];
+                for (var attempt = 0; attempt < 20 && fileResults.Count == 0; attempt++)
+                {
+                    fileResults = fileSearch.SearchAsync(
+                        "selftest-document",
+                        FileSearchMode.Default,
+                        [searchFixture],
+                        5,
+                        CancellationToken.None).GetAwaiter().GetResult();
+                    if (fileResults.Count == 0)
+                    {
+                        Thread.Sleep(25);
+                    }
+                }
+                Check("files.index", fileResults.Count > 0);
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(searchFixture, recursive: true);
+                }
+                catch
+                {
+                    // Best-effort cleanup.
+                }
+            }
 
             var dictionary = new DictionaryService();
             var englishResults = dictionary.Search("hello", 5);
@@ -160,10 +206,24 @@ public static class SelfTest
             }
 
             var everything = EverythingClient.TryCreate();
+            var ipcTestPath = @"C:\Tools\YTools.exe";
+            var ipcText = Encoding.Unicode.GetBytes(ipcTestPath + '\0');
+            var ipcBuffer = new byte[28 + sizeof(uint) + ipcText.Length];
+            BitConverter.GetBytes(1u).CopyTo(ipcBuffer, 0);
+            BitConverter.GetBytes(1u).CopyTo(ipcBuffer, 4);
+            BitConverter.GetBytes(4u).CopyTo(ipcBuffer, 12);
+            BitConverter.GetBytes(1u).CopyTo(ipcBuffer, 16);
+            BitConverter.GetBytes(28u).CopyTo(ipcBuffer, 24);
+            BitConverter.GetBytes((uint)ipcTestPath.Length).CopyTo(ipcBuffer, 28);
+            ipcText.CopyTo(ipcBuffer, 32);
+            Check(
+                "everything.ipcParser",
+                EverythingClient.ParseResultBuffer(ipcBuffer).SequenceEqual([ipcTestPath]));
             Console.WriteLine(
-                everything?.IsAvailable == true
-                    ? "[INFO] Everything 引擎可用"
-                    : "[INFO] Everything 未安装，将使用内置文件名扫描");
+                everything is null
+                    ? "[INFO] Everything 未运行，将使用内置文件名扫描"
+                    : $"[INFO] Everything 状态={everything.AvailabilityStatus} PID={everything.EverythingProcessId}，" +
+                        (everything.IsAvailable ? "使用本机 IPC" : "使用内置文件名扫描"));
             everything?.Dispose();
         }
         catch (Exception exception)

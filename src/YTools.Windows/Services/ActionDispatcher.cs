@@ -68,6 +68,8 @@ public sealed class ActionDispatcher
                 }
 
                 return OpenLocal(open.Path);
+            case ResultAction.ActivateApplication application:
+                return ActivateApplication(application.AppUserModelId);
             case ResultAction.Reveal reveal:
                 if (Path.IsPathRooted(reveal.Path))
                 {
@@ -192,6 +194,29 @@ public sealed class ActionDispatcher
         catch (Exception exception)
         {
             ShowAlert("无法打开项目", exception.Message);
+            return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);
+        }
+    }
+
+    private ActionExecutionResult ActivateApplication(string appUserModelId)
+    {
+        try
+        {
+            var manager = (IApplicationActivationManager)new ApplicationActivationManager();
+            try
+            {
+                manager.ActivateApplication(appUserModelId, null, 0, out _);
+            }
+            finally
+            {
+                _ = Marshal.FinalReleaseComObject(manager);
+            }
+
+            return new ActionExecutionResult(ActionExecutionOutcome.HidePanel);
+        }
+        catch (Exception exception)
+        {
+            ShowAlert("无法启动应用", exception.Message);
             return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);
         }
     }
@@ -506,4 +531,33 @@ public sealed class ActionDispatcher
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [ComImport]
+    [Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
+    private class ApplicationActivationManager
+    {
+    }
+
+    [ComImport]
+    [Guid("2e941141-7f97-4756-ba1d-9decde894a3d")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IApplicationActivationManager
+    {
+        void ActivateApplication(
+            [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+            [MarshalAs(UnmanagedType.LPWStr)] string? arguments,
+            uint options,
+            out uint processId);
+
+        void ActivateForFile(
+            [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+            IntPtr itemArray,
+            [MarshalAs(UnmanagedType.LPWStr)] string? verb,
+            out uint processId);
+
+        void ActivateForProtocol(
+            [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+            IntPtr itemArray,
+            out uint processId);
+    }
 }

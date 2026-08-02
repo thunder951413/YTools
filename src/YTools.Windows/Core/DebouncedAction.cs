@@ -25,9 +25,21 @@ public sealed class DebouncedAction
 
                 if (context is not null)
                 {
-                    context.Post(_ => action(), null);
+                    context.Post(
+                        _ =>
+                        {
+                            // A newer keystroke can cancel this generation after
+                            // its delay elapsed but before the UI thread processes
+                            // the posted callback. Re-check here so that queued,
+                            // stale searches never bypass the idle interval.
+                            if (!cancellation.IsCancellationRequested)
+                            {
+                                action();
+                            }
+                        },
+                        null);
                 }
-                else
+                else if (!cancellation.IsCancellationRequested)
                 {
                     action();
                 }

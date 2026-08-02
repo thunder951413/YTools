@@ -39,6 +39,7 @@ public sealed class AppPreferences : ObservableObject
     private IReadOnlyList<string> _searchScopePaths = [];
     private IReadOnlyDictionary<string, string> _applicationAliases =
         new Dictionary<string, string>();
+    private IReadOnlyList<string> _customApplicationPaths = [];
     private bool _fileNavigationShowsHiddenFiles;
     private FileNavigationSort _fileNavigationSort = FileNavigationSort.Name;
     private bool _fileNavigationSortAscending = true;
@@ -387,7 +388,20 @@ public sealed class AppPreferences : ObservableObject
         get => _applicationAliases;
         set
         {
-            if (SetField(ref _applicationAliases, value))
+            var aliases = new Dictionary<string, string>(value, StringComparer.OrdinalIgnoreCase);
+            if (SetField(ref _applicationAliases, aliases))
+            {
+                Save();
+            }
+        }
+    }
+
+    public IReadOnlyList<string> CustomApplicationPaths
+    {
+        get => _customApplicationPaths;
+        set
+        {
+            if (SetField(ref _customApplicationPaths, ValidCustomApplications(value)))
             {
                 Save();
             }
@@ -659,6 +673,51 @@ public sealed class AppPreferences : ObservableObject
         ApplicationAliases = updated;
     }
 
+    public string? AddCustomApplication(string path)
+    {
+        var application = ValidCustomApplications([path]);
+        if (application.Count == 0)
+        {
+            return null;
+        }
+
+        var normalizedPath = application[0];
+        if (!_customApplicationPaths.Contains(normalizedPath, StringComparer.OrdinalIgnoreCase))
+        {
+            CustomApplicationPaths = _customApplicationPaths.Append(normalizedPath).ToList();
+        }
+
+        return normalizedPath;
+    }
+
+    public void RemoveCustomApplication(string path)
+    {
+        var normalizedPath = NormalizeCustomApplicationPath(path, requireExists: false);
+        if (normalizedPath is null)
+        {
+            return;
+        }
+
+        var updatedPaths = _customApplicationPaths
+            .Where(item => !string.Equals(item, normalizedPath, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var updatedAliases = _applicationAliases
+            .Where(pair => !string.Equals(pair.Key, normalizedPath, StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var pathsChanged = updatedPaths.Count != _customApplicationPaths.Count;
+        var aliasesChanged = updatedAliases.Count != _applicationAliases.Count;
+        if (!pathsChanged && !aliasesChanged)
+        {
+            return;
+        }
+
+        _customApplicationPaths = ValidCustomApplications(updatedPaths);
+        _applicationAliases = updatedAliases;
+        RaisePropertyChanged(nameof(CustomApplicationPaths));
+        RaisePropertyChanged(nameof(ApplicationAliases));
+        Save();
+    }
+
     public void AddClipboardIgnoredApplication(string processName)
     {
         ClipboardIgnoredProcessNames = _clipboardIgnoredProcessNames.Append(processName).ToList();
@@ -753,6 +812,7 @@ public sealed class AppPreferences : ObservableObject
         MaximumSearchResults = 8;
         SearchScopePaths = [];
         ApplicationAliases = new Dictionary<string, string>();
+        CustomApplicationPaths = [];
         FileNavigationShowsHiddenFiles = false;
         FileNavigationSort = FileNavigationSort.Name;
         FileNavigationSortAscending = true;
@@ -840,7 +900,10 @@ public sealed class AppPreferences : ObservableObject
             _includeAutomaticDictionary = data.IncludeAutomaticDictionary ?? true;
             _maximumSearchResults = Math.Clamp(data.MaximumSearchResults ?? 8, 3, 20);
             _searchScopePaths = ValidSearchScopes(data.SearchScopePaths ?? []);
-            _applicationAliases = data.ApplicationAliases ?? new Dictionary<string, string>();
+            _applicationAliases = new Dictionary<string, string>(
+                data.ApplicationAliases ?? new Dictionary<string, string>(),
+                StringComparer.OrdinalIgnoreCase);
+            _customApplicationPaths = ValidCustomApplicationReferences(data.CustomApplicationPaths ?? []);
             _fileNavigationShowsHiddenFiles = data.FileNavigationShowsHiddenFiles ?? false;
             _fileNavigationSort = data.FileNavigationSort ?? FileNavigationSort.Name;
             _fileNavigationSortAscending = data.FileNavigationSortAscending ?? true;
@@ -883,6 +946,7 @@ public sealed class AppPreferences : ObservableObject
         _enabledSearchContentTypes = AllContentTypes();
         _enabledSystemCommands = AllCommands();
         _systemCommandKeywords = DefaultKeywords();
+        _customApplicationPaths = [];
         Save();
     }
 
@@ -925,6 +989,7 @@ public sealed class AppPreferences : ObservableObject
                 ApplicationAliases = _applicationAliases.ToDictionary(
                     pair => pair.Key,
                     pair => pair.Value),
+                CustomApplicationPaths = _customApplicationPaths.ToList(),
                 FileNavigationShowsHiddenFiles = _fileNavigationShowsHiddenFiles,
                 FileNavigationSort = _fileNavigationSort,
                 FileNavigationSortAscending = _fileNavigationSortAscending,
@@ -992,6 +1057,66 @@ public sealed class AppPreferences : ObservableObject
         }
 
         return output;
+    }
+
+    private static IReadOnlyList<string> ValidCustomApplications(IEnumerable<string> paths)
+    {
+        return ValidCustomApplicationReferences(paths, requireExists: true);
+    }
+
+    private static IReadOnlyList<string> ValidCustomApplicationReferences(
+        IEnumerable<string> paths,
+        bool requireExists = false)
+    {
+        var output = new List<string>();
+        foreach (var path in paths)
+        {
+            var normalizedPath = NormalizeCustomApplicationPath(path, requireExists);
+            if (normalizedPath is not null)
+            {
+                output.Add(normalizedPath);
+            }
+        }
+
+        return output
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(path => path, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static string? NormalizeCustomApplicationPath(string path, bool requireExists)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || !Path.IsPathFullyQualified(path)
+            || path.StartsWith("\\\\", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var extension = Path.GetExtension(fullPath);
+            var supported = extension.Equals(".exe", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".appref-ms", StringComparison.OrdinalIgnoreCase);
+            return supported && (!requireExists || File.Exists(fullPath))
+                ? fullPath
+                : null;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+        catch (PathTooLongException)
+        {
+            return null;
+        }
     }
 
     private static IReadOnlySet<SearchContentType> AllContentTypes()
@@ -1074,6 +1199,8 @@ public sealed class AppPreferences : ObservableObject
         public List<string>? SearchScopePaths { get; set; }
 
         public Dictionary<string, string>? ApplicationAliases { get; set; }
+
+        public List<string>? CustomApplicationPaths { get; set; }
 
         public bool? FileNavigationShowsHiddenFiles { get; set; }
 

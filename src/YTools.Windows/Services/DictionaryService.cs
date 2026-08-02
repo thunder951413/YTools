@@ -31,8 +31,41 @@ public sealed class DictionaryService
     private readonly Lazy<DictionaryIndex> _index = new(
         BuildIndex,
         LazyThreadSafetyMode.ExecutionAndPublication);
+    private readonly object _warmLock = new();
+    private Task? _warmTask;
 
-    public bool IsReady => _index.IsValueCreated;
+    /// <summary>
+    /// True only after a background warm-up has completed.  Lazy's
+    /// IsValueCreated can become true while another thread is still parsing
+    /// the dictionary, which would make an automatic query block on that
+    /// thread.
+    /// </summary>
+    public bool IsReady
+    {
+        get
+        {
+            var warmTask = Volatile.Read(ref _warmTask);
+            return warmTask is null
+                ? _index.IsValueCreated
+                : warmTask.IsCompletedSuccessfully;
+        }
+    }
+
+    /// <summary>
+    /// Starts loading the bundled dictionary without making the caller wait.
+    /// The launcher uses this during startup; automatic dictionary results
+    /// deliberately stay out of the first keystroke while it is loading.
+    /// </summary>
+    public Task WarmAsync()
+    {
+        lock (_warmLock)
+        {
+            return _warmTask ??= Task.Run(() =>
+            {
+                _ = _index.Value;
+            });
+        }
+    }
 
     public IReadOnlyList<DictionaryEntry> Search(string query, int limit)
     {

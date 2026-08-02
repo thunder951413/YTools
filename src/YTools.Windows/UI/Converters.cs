@@ -48,6 +48,21 @@ public sealed class CountToVisibilityConverter : IValueConverter
     }
 }
 
+public sealed class StringEmptyToVisibilityConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var invert = string.Equals(parameter as string, "invert", StringComparison.OrdinalIgnoreCase);
+        var isEmpty = string.IsNullOrWhiteSpace(value as string);
+        return (invert ? !isEmpty : isEmpty) ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}
+
 public sealed class FilterTitleConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)

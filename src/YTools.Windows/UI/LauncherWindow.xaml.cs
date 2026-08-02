@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using YTools.Core;
@@ -14,6 +15,14 @@ namespace YTools.UI;
 
 public partial class LauncherWindow : Window
 {
+    private const double PreviewWidth = 280;
+
+    public static readonly DependencyProperty ResultRowHeightProperty = DependencyProperty.Register(
+        nameof(ResultRowHeight),
+        typeof(double),
+        typeof(LauncherWindow),
+        new PropertyMetadata(DesignTokens.ComfortableRowHeight));
+
     private readonly PanelCommandRouter _router = new();
     private readonly DebouncedAction _positionSaveDebouncer = new();
     private DispatcherTimer? _shiftPreviewTimer;
@@ -21,12 +30,19 @@ public partial class LauncherWindow : Window
     private AppPreferences? _preferences;
     private bool _isApplyingPosition;
 
+    public double ResultRowHeight
+    {
+        get => (double)GetValue(ResultRowHeightProperty);
+        private set => SetValue(ResultRowHeightProperty, value);
+    }
+
     public LauncherWindow()
     {
         InitializeComponent();
         SourceInitialized += (_, _) => PositionPanel();
         LocationChanged += OnLocationChanged;
         PreviewKeyUp += OnPreviewKeyUp;
+        IconService.IconAvailable += OnIconAvailable;
     }
 
     public void Attach(LauncherModel model, AppPreferences preferences)
@@ -64,6 +80,19 @@ public partial class LauncherWindow : Window
         Hide();
     }
 
+    private void OnIconAvailable(object? sender, EventArgs e)
+    {
+        if (!IsVisible)
+        {
+            return;
+        }
+
+        // Converters return a glyph immediately and request this refresh only after
+        // the shell icon has been decoded on a worker thread.
+        ResultsList.Items.Refresh();
+        ActionsList.Items.Refresh();
+    }
+
     private void OnModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
@@ -77,9 +106,15 @@ public partial class LauncherWindow : Window
             case nameof(LauncherModel.ShowsPreview):
             case nameof(LauncherModel.DisplayedPreviewPath):
             case nameof(LauncherModel.VisibleItemCount):
+            case nameof(LauncherModel.FileSearchBackendDescription):
                 AdjustPanelSize();
                 UpdateEmptyState();
                 UpdatePreview();
+                UpdateFooter();
+                if (e.PropertyName == nameof(LauncherModel.Results) && _model is { } model)
+                {
+                    IconService.Preload(model.Results.Select(result => result.Icon));
+                }
                 break;
         }
     }
@@ -266,9 +301,41 @@ public partial class LauncherWindow : Window
 
     private void OnHeaderMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton == MouseButton.Left && e.ClickCount == 1)
+        if (e.ChangedButton == MouseButton.Left
+            && e.ClickCount == 1
+            && e.OriginalSource is DependencyObject source
+            && FindAncestor<TextBox>(source) is null
+            && FindAncestor<Button>(source) is null)
         {
             DragMove();
+        }
+    }
+
+    private void OnClearSearchClick(object sender, RoutedEventArgs e)
+    {
+        _model?.ClearQuery();
+        SearchBox.Focus();
+    }
+
+    private void OnResultsDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left
+            && e.OriginalSource is DependencyObject source
+            && FindAncestor<ListBoxItem>(source) is not null
+            && _model?.ActivateSelected() == true)
+        {
+            HidePanel();
+        }
+    }
+
+    private void OnActionsDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left
+            && e.OriginalSource is DependencyObject source
+            && FindAncestor<ListBoxItem>(source) is not null
+            && _model?.ActivateSelected() == true)
+        {
+            HidePanel();
         }
     }
 
@@ -283,14 +350,15 @@ public partial class LauncherWindow : Window
         {
             var left = Left;
             var top = Top;
+            var center = PointToScreen(new Point(Width / 2, Height / 2));
             var screen = System.Windows.Forms.Screen.FromPoint(
-                new System.Drawing.Point((int)(left + Width / 2), (int)(top + Height / 2)));
-            var area = screen.WorkingArea;
+                new System.Drawing.Point((int)center.X, (int)center.Y));
+            var area = WorkingAreaInDips(screen);
             _preferences.SavePanelPosition(
                 left,
                 top,
-                area.X,
-                area.Y,
+                area.Left,
+                area.Top,
                 area.Width,
                 area.Height,
                 screen.DeviceName);
@@ -309,10 +377,14 @@ public partial class LauncherWindow : Window
         var rowHeight = _preferences.CompactResults
             ? DesignTokens.CompactRowHeight
             : DesignTokens.ComfortableRowHeight;
+        ResultRowHeight = rowHeight;
 
         double contentHeight;
         if (_model.IsSearchPending)
         {
+            // Match macOS: while the idle timer/search is pending, keep only the
+            // input row visible. The result body is published and expanded once
+            // for the final query instead of flashing stale intermediate results.
             contentHeight = headerHeight;
         }
         else if (string.IsNullOrWhiteSpace(_model.Query)
@@ -333,7 +405,7 @@ public partial class LauncherWindow : Window
                 Math.Max(headerHeight + bodyHeight + footerHeight, DesignTokens.PanelMinimumHeight));
         }
 
-        var width = _preferences.PanelWidth;
+        var width = _preferences.PanelWidth + (_model.ShowsPreview && _model.SelectedFilePath is not null ? PreviewWidth : 0);
         var cornerRadius = _preferences.PanelCornerRadius;
         PanelBorder.CornerRadius = new CornerRadius(cornerRadius);
         SearchBox.FontSize = DesignTokens.SearchFontSizeFor(style);
@@ -342,6 +414,7 @@ public partial class LauncherWindow : Window
         if (Math.Abs(Width - width) > 0.5)
         {
             Width = width;
+            ClampPanelToWorkingArea();
         }
 
         if (Math.Abs(Height - contentHeight) > 0.5)
@@ -355,12 +428,14 @@ public partial class LauncherWindow : Window
                     Duration = TimeSpan.FromSeconds(duration),
                     EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
                 };
+                animation.Completed += (_, _) => ClampPanelToWorkingArea();
                 BeginAnimation(HeightProperty, animation);
             }
             else
             {
                 BeginAnimation(HeightProperty, null);
                 Height = contentHeight;
+                ClampPanelToWorkingArea();
             }
         }
     }
@@ -375,6 +450,8 @@ public partial class LauncherWindow : Window
         FooterBar.Visibility = DesignTokens.ShowsFooter(_preferences.LauncherAppearanceStyle)
             ? Visibility.Visible
             : Visibility.Collapsed;
+        BackendStatusText.Text = _model?.FileSearchBackendDescription ?? "";
+        BackendStatusText.ToolTip = "Everything 需要与 YTools 使用相同权限级别；若以管理员运行，请在 Everything 设置中关闭“以管理员运行”或安装 Everything Service。";
     }
 
     private void UpdateEmptyState()
@@ -402,7 +479,7 @@ public partial class LauncherWindow : Window
         var showPreview = _model.ShowsPreview && _model.SelectedFilePath is not null;
         if (showPreview)
         {
-            PreviewColumn.Width = new GridLength(280);
+            PreviewColumn.Width = new GridLength(PreviewWidth);
             PreviewPane.Visibility = Visibility.Visible;
             PreviewPane.ShowPath(_model.DisplayedPreviewPath ?? _model.SelectedFilePath);
         }
@@ -435,7 +512,7 @@ public partial class LauncherWindow : Window
                 return;
             }
 
-            var area = screen.WorkingArea;
+            var area = WorkingAreaInDips(screen);
             var savedPlacement = _preferences.SavedPanelPlacement;
             var savedTopLeft = _preferences.SavedPanelTopLeft;
 
@@ -450,15 +527,15 @@ public partial class LauncherWindow : Window
                     placement.SourceVisibleHeight);
                 if (relative is { } resolved)
                 {
-                    x = resolved.ResolvedLeft(area.X, area.Width);
-                    y = resolved.ResolvedTop(area.Y, area.Height);
+                    x = resolved.ResolvedLeft(area.Left, area.Width);
+                    y = resolved.ResolvedTop(area.Top, area.Height);
                 }
                 else
                 {
-                    x = area.X + (area.Width - Width) / 2;
+                    x = area.Left + (area.Width - Width) / 2;
                     y = _preferences.PanelPosition == PanelPosition.Upper
-                        ? area.Y + Math.Max(0, area.Height - Height - 110)
-                        : area.Y + (area.Height - Height) / 2;
+                        ? area.Top + Math.Max(24, area.Height * 0.18)
+                        : area.Top + (area.Height - Height) / 2;
                 }
             }
             else if (savedTopLeft is { Length: 2 } saved)
@@ -468,14 +545,14 @@ public partial class LauncherWindow : Window
             }
             else
             {
-                x = area.X + (area.Width - Width) / 2;
+                x = area.Left + (area.Width - Width) / 2;
                 y = _preferences.PanelPosition == PanelPosition.Upper
-                    ? area.Y + Math.Max(0, area.Height - Height - 110)
-                    : area.Y + (area.Height - Height) / 2;
+                    ? area.Top + Math.Max(24, area.Height * 0.18)
+                    : area.Top + (area.Height - Height) / 2;
             }
 
-            x = Math.Clamp(x, area.X, Math.Max(area.X, area.Right - Width));
-            y = Math.Clamp(y, area.Y, Math.Max(area.Y, area.Bottom - Height));
+            x = Math.Clamp(x, area.Left, Math.Max(area.Left, area.Right - Width));
+            y = Math.Clamp(y, area.Top, Math.Max(area.Top, area.Bottom - Height));
             Left = x;
             Top = y;
         }
@@ -483,6 +560,55 @@ public partial class LauncherWindow : Window
         {
             _isApplyingPosition = false;
         }
+    }
+
+    private void ClampPanelToWorkingArea()
+    {
+        if (!IsVisible || _isApplyingPosition)
+        {
+            return;
+        }
+
+        var center = PointToScreen(new Point(Width / 2, Height / 2));
+        var screen = System.Windows.Forms.Screen.FromPoint(
+            new System.Drawing.Point((int)center.X, (int)center.Y));
+        var area = WorkingAreaInDips(screen);
+        _isApplyingPosition = true;
+        try
+        {
+            Left = Math.Clamp(Left, area.Left, Math.Max(area.Left, area.Right - Width));
+            Top = Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - Height));
+        }
+        finally
+        {
+            _isApplyingPosition = false;
+        }
+    }
+
+    private Rect WorkingAreaInDips(System.Windows.Forms.Screen screen)
+    {
+        var area = screen.WorkingArea;
+        var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice
+            ?? Matrix.Identity;
+        var topLeft = transform.Transform(new Point(area.Left, area.Top));
+        var bottomRight = transform.Transform(new Point(area.Right, area.Bottom));
+        return new Rect(topLeft, bottomRight);
+    }
+
+    private static T? FindAncestor<T>(DependencyObject source) where T : DependencyObject
+    {
+        var current = source;
+        while (current is not null)
+        {
+            if (current is T match)
+            {
+                return match;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
     }
 
     private static PanelKeyModifiers PanelModifiers(ModifierKeys modifiers)

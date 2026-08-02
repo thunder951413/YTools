@@ -13,6 +13,8 @@
         ResizeMode="NoResize"
         Width="720"
         Height="196"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         PreviewKeyDown="OnPreviewKeyDown"
         Deactivated="OnDeactivated">
     <Window.Resources>
@@ -21,6 +23,7 @@
         <ui:BoolToVisibilityConverter x:Key="BoolToVisibility" />
         <ui:CountToVisibilityConverter x:Key="CountToVisibility" />
         <ui:NumberBadgeConverter x:Key="NumberBadge" />
+        <ui:StringEmptyToVisibilityConverter x:Key="StringEmptyToVisibility" />
         <Style x:Key="ResultItemStyle" TargetType="ListBoxItem">
             <Setter Property="Template">
                 <Setter.Value>
@@ -32,11 +35,11 @@
                             <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource SelectionBrush}" />
-                            </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Row" Property="Background" Value="{DynamicResource HoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource SelectionBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -44,6 +47,7 @@
             </Setter>
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="MinHeight" Value="{Binding ResultRowHeight, RelativeSource={RelativeSource AncestorType=Window}}" />
         </Style>
         <DataTemplate x:Key="ResultTemplate" DataType="{x:Type ModuleKit:LauncherResult}">
             <Grid>
@@ -111,7 +115,7 @@
             </Grid>
         </DataTemplate>
     </Window.Resources>
-    <Grid>
+    <Grid ClipToBounds="True">
         <Border x:Name="PanelBorder"
                 CornerRadius="14"
                 Background="{DynamicResource PanelBackgroundBrush}"
@@ -121,7 +125,7 @@
                 <DropShadowEffect BlurRadius="28" ShadowDepth="4" Opacity="0.35" Color="Black" />
             </Border.Effect>
         </Border>
-        <Grid Margin="1">
+        <Grid Margin="1" ClipToBounds="True">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="MainColumn" Width="*" />
                 <ColumnDefinition x:Name="PreviewColumn" Width="0" />
@@ -135,27 +139,67 @@
                 <Border x:Name="HeaderBorder"
                         Grid.Row="0"
                         Background="Transparent"
-                        MouseLeftButtonDown="OnHeaderMouseDown"
-                        Cursor="SizeAll">
-                    <StackPanel Margin="18,0">
-                        <Grid>
+                        MouseLeftButtonDown="OnHeaderMouseDown">
+                    <StackPanel Margin="18,0"
+                                VerticalAlignment="Center">
+                        <!-- Keep the input row's measure stable.  Without an explicit
+                             height the StackPanel is stretched by an idle header and
+                             lays its first child out at the top, which makes the text
+                             look off-centre while the results row is collapsed. -->
+                        <Grid Height="40"
+                              VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="&#xE721;"
+                                       FontFamily="Segoe MDL2 Assets"
+                                       FontSize="18"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Margin="0,0,10,0"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False" />
+                            <Grid Grid.Column="1">
+                                <TextBlock Text="搜索应用、文件和工具"
+                                           FontSize="16"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           VerticalAlignment="Center"
+                                           IsHitTestVisible="False"
+                                           Visibility="{Binding Query, Converter={StaticResource StringEmptyToVisibility}}" />
                             <TextBox x:Name="SearchBox"
-                                     Grid.Column="0"
                                      Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
+                                     Height="40"
                                      FontSize="18"
                                      Foreground="{DynamicResource TextPrimaryBrush}"
                                      CaretBrush="{DynamicResource TextPrimaryBrush}"
                                      Background="Transparent"
                                      BorderThickness="0"
-                                     Padding="0,8"
+                                     Padding="0"
                                      VerticalContentAlignment="Center"
+                                     VerticalAlignment="Center"
                                      SpellCheck.IsEnabled="False"
-                                     ContextMenu="{x:Null}" />
-                            <Border Grid.Column="1"
+                                     ContextMenu="{x:Null}"
+                                     AutomationProperties.Name="搜索" />
+                            </Grid>
+                            <Button Grid.Column="2"
+                                    Width="30"
+                                    Height="30"
+                                    Margin="6,0,0,0"
+                                    Padding="0"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                    FontFamily="Segoe MDL2 Assets"
+                                    FontSize="13"
+                                    Content="&#xE711;"
+                                    ToolTip="清除搜索 (Esc)"
+                                    Cursor="Hand"
+                                    Click="OnClearSearchClick"
+                                    Visibility="{Binding Query, Converter={StaticResource StringEmptyToVisibility}, ConverterParameter=invert}" />
+                            <Border Grid.Column="3"
                                     Margin="8,0,0,0"
                                     Padding="10,3"
                                     CornerRadius="10"
@@ -167,15 +211,26 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}" />
                             </Border>
                         </Grid>
+                        <ProgressBar Height="2"
+                                     Margin="28,0,0,0"
+                                     BorderThickness="0"
+                                     Foreground="{DynamicResource AccentBrush}"
+                                     Background="Transparent"
+                                     IsIndeterminate="True"
+                                     IsHitTestVisible="False"
+                                     Visibility="{Binding IsSearchPending, Converter={StaticResource BoolToVisibility}}" />
                         <TextBlock x:Name="HotKeyErrorText"
-                                   Foreground="#E07030"
+                                   Foreground="{DynamicResource ErrorBrush}"
                                    FontSize="11"
                                    TextWrapping="Wrap"
                                    Margin="0,0,0,6"
                                    Visibility="Collapsed" />
                     </StackPanel>
                 </Border>
-                <Grid Grid.Row="1">
+                <!-- A zero-height body can still arrange ListBox children outside its
+                     allocated row.  Clip it so an idle/collapsed launcher never paints
+                     stale result text underneath the search field. -->
+                <Grid Grid.Row="1" ClipToBounds="True">
                     <ListBox x:Name="ResultsList"
                              ItemsSource="{Binding Results}"
                              SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}"
@@ -187,7 +242,11 @@
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              KeyboardNavigation.TabNavigation="None"
-                             Visibility="{Binding VisibleItemCount, Converter={StaticResource CountToVisibility}}" />
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             MouseDoubleClick="OnResultsDoubleClick"
+                             AutomationProperties.Name="搜索结果"
+                             Visibility="{Binding IsShowingActions, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}" />
                     <ListBox x:Name="ActionsList"
                              ItemsSource="{Binding Actions}"
                              SelectedIndex="{Binding SelectedActionIndex, Mode=TwoWay}"
@@ -197,12 +256,34 @@
                              BorderThickness="0"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              KeyboardNavigation.TabNavigation="None"
+                             MouseDoubleClick="OnActionsDoubleClick"
+                             AutomationProperties.Name="可用操作"
                              Visibility="{Binding IsShowingActions, Converter={StaticResource BoolToVisibility}}" />
                     <StackPanel x:Name="EmptyState"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
                                 Visibility="Collapsed">
-                        <TextBlock Text="输入以搜索应用、文件、计算、词典和工具"
+                        <TextBlock Text="&#xE721;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="24"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   Opacity="0.65" />
+                        <TextBlock Text="没有找到匹配结果"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   Margin="0,8,0,0"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock Text="试试更短的名称、拼音或应用别名"
+                                   FontSize="12"
+                                   Margin="0,4,0,0"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+                    <StackPanel HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                IsHitTestVisible="False"
+                                Visibility="{Binding IsSearchPending, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="正在搜索…"
                                    FontSize="13"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                     </StackPanel>
@@ -212,11 +293,17 @@
                         Height="34"
                         Background="Transparent"
                         Visibility="Collapsed">
-                    <TextBlock Text="↑↓ 选择 · Enter 打开 · → 动作 · ⇧ 预览 · Ctrl+数字 直达"
-                               FontSize="11"
-                               Foreground="{DynamicResource TextSecondaryBrush}"
-                               Margin="18,8"
-                               HorizontalAlignment="Left" />
+                    <Grid Margin="18,8">
+                        <TextBlock Text="↑↓ 选择 · Enter 打开 · → 动作 · ⇧ 预览 · Ctrl+数字 直达"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Left" />
+                        <TextBlock x:Name="BackendStatusText"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Right"
+                                   TextTrimming="CharacterEllipsis" />
+                    </Grid>
                 </Border>
             </Grid>
             <ui:PreviewPanel x:Name="PreviewPane" Grid.Column="1" />

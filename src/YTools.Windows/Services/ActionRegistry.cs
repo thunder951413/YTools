@@ -145,6 +145,15 @@ public sealed class ActionRegistry
                         LauncherActionKind.Perform,
                         new ResultAction.OpenSettings()));
                     break;
+                case ResultAction.ActivateApplication activate:
+                    actions.Add(Action(
+                        "launch-registered-application",
+                        "启动应用",
+                        result.Subtitle,
+                        "arrow.up.forward.app",
+                        LauncherActionKind.Perform,
+                        activate));
+                    break;
                 default:
                     if (!string.IsNullOrEmpty(result.Title))
                     {

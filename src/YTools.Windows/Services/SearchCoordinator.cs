@@ -18,6 +18,7 @@ public sealed record BackgroundSearchRequest(
     bool FileNavigationFoldersFirst,
     IReadOnlySet<SearchContentType> EnabledContentTypes,
     IReadOnlyDictionary<string, string> ApplicationAliases,
+    IReadOnlyList<string> CustomApplicationPaths,
     IReadOnlyList<string> SearchScopePaths,
     int MaximumSearchResults,
     bool IncludeFilesInDefaultResults,
@@ -43,7 +44,8 @@ public sealed class SearchCoordinator
             new(new CalculatorModule(), SearchContentType.Calculations, new ModuleResultPolicy()),
             new(new UnitConversionModule(), SearchContentType.Calculations, new ModuleResultPolicy()),
             new(new SpellingModule(spelling), SearchContentType.Dictionary, new ModuleResultPolicy()),
-            new(new SettingsModule(), SearchContentType.SystemTools, new ModuleResultPolicy())
+            new(new SettingsModule(), SearchContentType.SystemTools, new ModuleResultPolicy()),
+            new(new TextStatisticsModule(), SearchContentType.TextTools, new ModuleResultPolicy())
         };
         standards.AddRange((personalModules ?? []).Select(module =>
             new RegisteredSearchModule(module, SearchContentType.TextTools, new ModuleResultPolicy())));
@@ -88,7 +90,7 @@ public sealed class SearchCoordinator
         if (request.EnabledContentTypes.Contains(SearchContentType.Applications))
         {
             tasks.Add(Task.Run(
-                () => SearchApplications(request.Query, request.ApplicationAliases),
+                () => SearchApplications(request.Query, request.ApplicationAliases, request.CustomApplicationPaths),
                 cancellationToken));
         }
 
@@ -117,20 +119,29 @@ public sealed class SearchCoordinator
 
     private IReadOnlyList<LauncherResult> SearchApplications(
         string query,
-        IReadOnlyDictionary<string, string> aliases)
+        IReadOnlyDictionary<string, string> aliases,
+        IReadOnlyList<string> customApplicationPaths)
     {
         try
         {
             var descriptor = new ModuleDescriptor(
                 "applications",
                 "应用程序",
-                new HashSet<ModuleCapability> { ModuleCapability.LocalFileRead });
-            var results = _applications.Search(query, aliases);
+                new HashSet<ModuleCapability>
+                {
+                    ModuleCapability.LocalFileRead,
+                    ModuleCapability.ApplicationLaunch
+                });
+            var results = _applications.Search(query, aliases, customApplicationPaths);
             return Sanitize(
                 results,
                 descriptor,
                 new ModuleResultPolicy(
-                    allowedCapabilities: new HashSet<ModuleCapability> { ModuleCapability.LocalFileRead }));
+                    allowedCapabilities: new HashSet<ModuleCapability>
+                    {
+                        ModuleCapability.LocalFileRead,
+                        ModuleCapability.ApplicationLaunch
+                    }));
         }
         catch
         {

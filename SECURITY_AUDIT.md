@@ -6,6 +6,8 @@
 
 YTools Windows 版主程序是离线单文件应用：不包含任何网络客户端、Shell 执行、动态模块加载或遥测。数据在磁盘上加密，密钥由 Windows DPAPI 按当前用户保护。构建流水线强制 `warnings-as-errors` 并扫描禁止 API。
 
+可配置的输入停止延迟只取消和调度本机搜索任务；连续输入期间不会新增文件、网络或进程访问，查询文本也不会离开本机。
+
 ## 外联面
 
 - 主程序没有 `HttpClient`、`WebClient`、`TcpClient`、`UdpClient`、`NetworkStream`、`Socket` 或 `AppDomain` 动态加载调用（`scripts/check.ps1` 与 CI 强制扫描）。
@@ -14,8 +16,11 @@ YTools Windows 版主程序是离线单文件应用：不包含任何网络客�
   - `rundll32.exe shell32.dll,OpenAs_RunDLL "<路径>"`：系统“打开方式”对话框（路径仅作为对话框参数，不执行）。
   - `ms-settings:` URI：打开系统设置页。
   - `shell:RecycleBinFolder`：打开回收站。
-  - Everything64.dll（仅当本机已安装 Everything）：`Everything_SetSearchW` 等只读查询 API。
+  - Everything（仅本机已运行实例）：向固定窗口类 `EVERYTHING_TASKBAR_NOTIFICATION` 发送官方 QUERY2 `WM_COPYDATA` 只读查询；不加载 DLL、不读取数据库、不联网，响应缓冲区有大小和边界校验。
+  - Windows AppsFolder / `IApplicationActivationManager`：只枚举本机已注册的桌面与打包应用，并用枚举得到且经过格式校验的 AppUserModelId 启动；查询文本不进入激活参数。
+  - 应用图标：只读本机 AppsFolder、包注册表中的 `PackageRootFolder` 和包清单 Logo 资源；所有读取均在后台进行，不联网、不执行清单内容。
 - 以上调用不使用用户输入作为命令名，路径参数不经过任何 Shell 解释。
+- 自定义应用只能由设置页文件选择器加入，且必须是现有的本机绝对 `.exe`、`.lnk` 或 `.appref-ms`；偏好层和索引层都会拒绝相对路径、UNC、URL、目录、其他扩展名与启动参数。搜索只复用已验证的内存条目。
 
 ## 数据存储
 

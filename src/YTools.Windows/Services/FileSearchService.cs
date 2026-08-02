@@ -20,17 +20,60 @@ public enum FileSearchMode
 public sealed class FileSearchService : IDisposable
 {
     private readonly EverythingClient? _everything;
+    private readonly object _indexLock = new();
+    private readonly Dictionary<string, FileNameIndex> _indexes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CancellationTokenSource _disposeCancellation = new();
 
     public FileSearchService()
+        : this(enableEverything: true)
     {
-        _everything = EverythingClient.TryCreate();
+    }
+
+    internal FileSearchService(bool enableEverything)
+    {
+        _everything = enableEverything ? EverythingClient.TryCreate() : null;
     }
 
     public bool UsesEverything => _everything?.IsAvailable == true;
 
-    public string BackendDescription => UsesEverything ? "Everything" : "内置文件名扫描";
+    public string BackendDescription
+    {
+        get
+        {
+            if (_everything is null)
+            {
+                return "文件搜索：内置扫描";
+            }
+
+            return _everything.AvailabilityStatus switch
+            {
+                EverythingAvailabilityStatus.Available => "文件搜索：Everything",
+                EverythingAvailabilityStatus.IntegrityMismatch => "文件搜索：Everything 权限不匹配",
+                EverythingAvailabilityStatus.AccessDenied => "文件搜索：Everything 无法访问",
+                EverythingAvailabilityStatus.IpcUnavailable => "文件搜索：Everything IPC 不可用",
+                _ => "文件搜索：内置扫描"
+            };
+        }
+    }
 
     public Task<IReadOnlyList<LauncherResult>> SearchAsync(
+        string rawQuery,
+        FileSearchMode mode,
+        IReadOnlyList<string> scopePaths,
+        int maximumResults,
+        CancellationToken cancellationToken)
+    {
+        return Task.Run(
+            () => Search(rawQuery, mode, scopePaths, maximumResults, cancellationToken),
+            cancellationToken);
+    }
+
+    public static bool HasExplicitMode(string rawQuery)
+    {
+        return ParseQuery(rawQuery).Mode is not null;
+    }
+
+    private IReadOnlyList<LauncherResult> Search(
         string rawQuery,
         FileSearchMode mode,
         IReadOnlyList<string> scopePaths,
@@ -42,8 +85,10 @@ public sealed class FileSearchService : IDisposable
         var term = parsed.Term;
         if (string.IsNullOrEmpty(term))
         {
-            return Task.FromResult<IReadOnlyList<LauncherResult>>([]);
+            return [];
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         var paths = new List<string>();
         var usedEverything = false;
@@ -55,7 +100,7 @@ public sealed class FileSearchService : IDisposable
                 FileSearchMode.Tag => $"tag:{term}",
                 _ => term
             };
-            if (_everything!.Query(search, Math.Max(30, maximumResults), out var everythingPaths)
+            if (_everything!.Query(search, Math.Max(30, maximumResults), out var everythingPaths, cancellationToken)
                 && _everything.LastError() == 0)
             {
                 paths = everythingPaths;
@@ -65,26 +110,8 @@ public sealed class FileSearchService : IDisposable
 
         if (!usedEverything)
         {
-            var roots = scopePaths.Count > 0
-                ? scopePaths.ToList()
-                : new List<string>
-                {
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-                };
-            var scanned = 0;
-            foreach (var root in roots)
-            {
-                if (!Directory.Exists(root))
-                {
-                    continue;
-                }
-
-                Walk(root, term, maximumResults, cancellationToken, ref scanned, paths);
-                if (paths.Count >= maximumResults || cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-            }
+            var roots = EffectiveRoots(scopePaths);
+            paths = GetOrStartIndex(roots).Match(term, maximumResults, cancellationToken);
         }
 
         var explicitMode = effectiveMode != FileSearchMode.Default;
@@ -108,7 +135,7 @@ public sealed class FileSearchService : IDisposable
             })
             .Cast<LauncherResult>()
             .ToList();
-        return Task.FromResult<IReadOnlyList<LauncherResult>>(output);
+        return output;
     }
 
     private static (FileSearchMode? Mode, string Term) ParseQuery(string rawQuery)
@@ -142,55 +169,53 @@ public sealed class FileSearchService : IDisposable
         return (null, normalized.Trim());
     }
 
-    private static void Walk(
-        string directory,
-        string term,
-        int limit,
-        CancellationToken cancellationToken,
-        ref int scanned,
-        List<string> output)
+    private FileNameIndex GetOrStartIndex(IReadOnlyList<string> roots)
     {
-        if (cancellationToken.IsCancellationRequested || output.Count >= limit || scanned > 200_000)
+        var key = string.Join("|", roots);
+        lock (_indexLock)
         {
-            return;
+            if (!_indexes.TryGetValue(key, out var index))
+            {
+                index = new FileNameIndex(roots);
+                _indexes.Add(key, index);
+            }
+
+            index.EnsureBuilding(_disposeCancellation.Token);
+            return index;
+        }
+    }
+
+    private static IReadOnlyList<string> EffectiveRoots(IReadOnlyList<string> scopePaths)
+    {
+        var candidates = scopePaths.Count > 0
+            ? scopePaths
+            : [Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)];
+        return candidates
+            .Select(NormalizeLocalDirectory)
+            .Where(path => path is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string? NormalizeLocalDirectory(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || !Path.IsPathRooted(path)
+            || path.StartsWith("\\\\", StringComparison.Ordinal))
+        {
+            return null;
         }
 
-        IEnumerable<FileSystemInfo> entries;
         try
         {
-            entries = new DirectoryInfo(directory).EnumerateFileSystemInfos();
+            var fullPath = Path.GetFullPath(path);
+            return Path.IsPathRooted(fullPath) && Directory.Exists(fullPath) ? fullPath : null;
         }
         catch
         {
-            return;
-        }
-
-        foreach (var entry in entries)
-        {
-            if (cancellationToken.IsCancellationRequested || output.Count >= limit || scanned > 200_000)
-            {
-                return;
-            }
-
-            scanned += 1;
-            if (entry is DirectoryInfo childDirectory)
-            {
-                if (ShouldSkipDirectory(childDirectory.Name))
-                {
-                    continue;
-                }
-
-                if (childDirectory.Name.Contains(term, StringComparison.OrdinalIgnoreCase))
-                {
-                    output.Add(childDirectory.FullName);
-                }
-
-                Walk(childDirectory.FullName, term, limit, cancellationToken, ref scanned, output);
-            }
-            else if (entry.Name.Contains(term, StringComparison.OrdinalIgnoreCase))
-            {
-                output.Add(entry.FullName);
-            }
+            return null;
         }
     }
 
@@ -223,6 +248,128 @@ public sealed class FileSearchService : IDisposable
 
     public void Dispose()
     {
+        _disposeCancellation.Cancel();
+        _disposeCancellation.Dispose();
         _everything?.Dispose();
+    }
+
+    /// <summary>Process-local, best-effort filename cache for the non-Everything fallback.</summary>
+    private sealed class FileNameIndex
+    {
+        private readonly object _lock = new();
+        private readonly IReadOnlyList<string> _roots;
+        private IReadOnlyList<string> _paths = [];
+        private Task? _buildTask;
+
+        public FileNameIndex(IReadOnlyList<string> roots)
+        {
+            _roots = roots;
+        }
+
+        public void EnsureBuilding(CancellationToken cancellationToken)
+        {
+            lock (_lock)
+            {
+                if (_buildTask is null)
+                {
+                    _buildTask = Task.Run(() => Build(cancellationToken), cancellationToken);
+                }
+            }
+        }
+
+        public List<string> Match(string term, int limit, CancellationToken cancellationToken)
+        {
+            if (limit <= 0)
+            {
+                return [];
+            }
+
+            IReadOnlyList<string> snapshot;
+            lock (_lock)
+            {
+                snapshot = _paths;
+            }
+
+            var matches = new List<string>();
+            foreach (var path in snapshot)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (Path.GetFileName(path).Contains(term, StringComparison.OrdinalIgnoreCase))
+                {
+                    matches.Add(path);
+                    if (matches.Count >= limit)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return matches;
+        }
+
+        private void Build(CancellationToken cancellationToken)
+        {
+            var paths = new List<string>();
+            var scanned = 0;
+            foreach (var root in _roots)
+            {
+                Walk(root, cancellationToken, ref scanned, paths);
+                if (cancellationToken.IsCancellationRequested || scanned > 200_000)
+                {
+                    break;
+                }
+            }
+
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                lock (_lock)
+                {
+                    _paths = paths;
+                }
+            }
+        }
+
+        private static void Walk(string directory, CancellationToken cancellationToken, ref int scanned, List<string> output)
+        {
+            if (cancellationToken.IsCancellationRequested || scanned > 200_000)
+            {
+                return;
+            }
+
+            IEnumerable<FileSystemInfo> entries;
+            try
+            {
+                entries = new DirectoryInfo(directory).EnumerateFileSystemInfos();
+            }
+            catch
+            {
+                return;
+            }
+
+            foreach (var entry in entries)
+            {
+                if (cancellationToken.IsCancellationRequested || scanned > 200_000)
+                {
+                    return;
+                }
+
+                scanned += 1;
+                if (entry is DirectoryInfo childDirectory)
+                {
+                    if (ShouldSkipDirectory(childDirectory.Name)
+                        || childDirectory.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    {
+                        continue;
+                    }
+
+                    output.Add(childDirectory.FullName);
+                    Walk(childDirectory.FullName, cancellationToken, ref scanned, output);
+                }
+                else
+                {
+                    output.Add(entry.FullName);
+                }
+            }
+        }
     }
 }

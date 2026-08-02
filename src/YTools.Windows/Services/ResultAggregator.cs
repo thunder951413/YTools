@@ -29,6 +29,7 @@ public sealed class ResultAggregator
         var results = background.Concat(fileResults)
             .Select(result => result.WithScore(result.Score + _usage.Boost(result.Id, query)))
             .OrderByDescending(result => result.Score)
+            .ThenByDescending(result => result.ModuleId == "applications" ? _usage.Count(result.Id) : 0)
             .ThenBy(result => result.Title, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
