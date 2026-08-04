@@ -528,4 +528,15 @@ final class LauncherModel: ObservableObject {
             return true
         }
     }
+
+    func shutdown() {
+        searchDebouncer.cancel()
+        spotlightDebouncer.cancel()
+        searchTask?.cancel()
+        searchTask = nil
+        previewTask?.cancel()
+        previewTask = nil
+        spotlight.shutdown()
+        cancellables.removeAll()
+    }
 }

@@ -108,10 +108,15 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
-    isolated deinit {
+    func shutdown() {
         shiftPreviewTimer?.invalidate()
+        shiftPreviewTimer = nil
         positionSaveDebouncer.cancel()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        cancellables.removeAll()
+        launcher.shutdown()
+        clipboard.shutdown()
     }
 
     func toggleLauncher() {

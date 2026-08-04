@@ -169,6 +169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit() { NSApp.terminate(nil) }
 
     func applicationWillTerminate(_ notification: Notification) {
+        panelController?.shutdown()
+        settingsController?.shutdown()
+        hotKeyManager?.shutdown()
+        themeCancellable?.cancel()
         snippets?.flushPendingChanges()
     }
 

@@ -103,9 +103,13 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         }.store(in: &cancellables)
     }
 
-    isolated deinit {
+    func shutdown() {
         timer?.invalidate()
+        timer = nil
+        filterDebouncer.cancel()
         filterTask?.cancel()
+        filterTask = nil
+        cancellables.removeAll()
     }
 
     func prepareForPresentation() {

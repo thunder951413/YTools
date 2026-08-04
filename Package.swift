@@ -29,9 +29,6 @@ let package = Package(
             name: "YTools",
             dependencies: ["YToolsCore", "YToolsModuleKit"],
             path: "Sources/YTools",
-            swiftSettings: [
-                .enableExperimentalFeature("IsolatedDeinit")
-            ],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Carbon"),
