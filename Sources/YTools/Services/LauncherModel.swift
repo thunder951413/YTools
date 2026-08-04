@@ -99,6 +99,18 @@ final class LauncherModel: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in self?.refreshImmediately() }
             .store(in: &cancellables)
+        preferences.$customApplicationPaths
+            .dropFirst()
+            .sink { [weak self] _ in self?.refreshImmediately() }
+            .store(in: &cancellables)
+        Publishers.CombineLatest3(
+            preferences.$includeFilesInDefaultResults,
+            preferences.$maximumSearchResults,
+            preferences.$searchScopePaths
+        )
+        .dropFirst()
+        .sink { [weak self] _ in self?.refreshImmediately() }
+        .store(in: &cancellables)
         preferences.$searchInputDelay
             .dropFirst()
             .sink { [weak self] _ in self?.scheduleSearch() }
@@ -168,6 +180,8 @@ final class LauncherModel: ObservableObject {
             fileNavigationFoldersFirst: preferences.fileNavigationFoldersFirst,
             enabledContentTypes: preferences.enabledSearchContentTypes,
             applicationAliases: preferences.applicationAliases,
+            customApplicationPaths: preferences.customApplicationPaths,
+            maximumResults: preferences.maximumSearchResults,
             requestModules: makeRequestModules(for: requestedQuery)
         )
         searchTask = Task { [weak self, searchCoordinator] in

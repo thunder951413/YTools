@@ -66,7 +66,9 @@ ModuleKit（无 UI 的公共边界）
 - 面板高度只随结果数量、pending、动作菜单和样式变化；连续输入时保持输入行高度，最终查询完成后一次性展开。
 - 剪贴板过滤在后台执行、支持取消并限制 UI 同时呈现最近 100 条；持久化仍保留完整加密历史。
 - 边界必须明确：模块最多返回 40 条、文件搜索最多 100 条、应用结果最多 12 条。
-- 自定义应用只在路径集合变化时规范化并构建内存条目；普通按键搜索直接复用快照，不扫描自定义目录，也不新增文件监视器。
+- 自定义应用只在路径集合变化时规范化并构建内存条目；普通按键搜索直接复用快照，不扫描自定义目录，也不新增文件监视器。Windows 限定本机 `.exe`/`.lnk`/`.appref-ms`，macOS 限定解析符号链接后仍为有效 bundle 的绝对 `.app`。
+- 两端的使用学习只持久化结果 ID/查询的 SHA-256 哈希、计数和时间；排序依次考虑基础匹配、频率/新近度/查询记忆、应用启动次数同分项和本地化标题。macOS 的排名写盘通过串行后台队列完成，不占用 MainActor 输入/激活路径。
+- 应用目录发生变化时，macOS 首次准备会建立完整快照；后续失效或 5 分钟刷新只排队后台扫描，当前搜索继续使用旧快照，并用 generation 防止扫描期间的新变化被误清除。
 
 ## 明确不包含
 
@@ -86,7 +88,7 @@ ModuleKit（无 UI 的公共边界）
 
 - 计算器/单位换算/文本统计：无权限。
 - 词典：只读内嵌 CC-CEDICT，索引在启动阶段后台预热；自动词典查询不会阻塞首字符结果，显式 `dict/词典` 查询仍保证完整结果。
-- 应用启动：自动索引固定的开始菜单、WindowsApps 目录和系统 AppsFolder 命名空间；用户还可通过文件选择器显式加入现有本机 `.exe`、`.lnk`、`.appref-ms`。自定义项拒绝相对路径、UNC 和其他扩展名，只保存规范化路径，不接受参数或查询文本作为路径。文件型入口由宿主用 ShellExecute 启动；AppsFolder 已注册应用使用受类型约束的 `ActivateApplication(AppUserModelId)` 动作和系统 `IApplicationActivationManager`。
+- 应用启动：Windows 自动索引开始菜单、WindowsApps 与 AppsFolder，并允许用户显式加入本机 `.exe`、`.lnk`、`.appref-ms`；macOS 自动索引 `/Applications`、`/System/Applications`、`~/Applications`，并允许显式加入其他位置的有效 `.app` bundle。自定义项拒绝相对路径、URL、其他扩展名和启动参数；macOS 还会解析符号链接并验证 bundle identifier。Windows AppsFolder 使用受类型约束的 `ActivateApplication(AppUserModelId)`，macOS 使用类型化 `.open(URL)`，不机械共享平台激活动作。
 - 文件搜索：Everything 使用官方 QUERY2 `WM_COPYDATA` 只读本机 IPC，无需 SDK DLL；请求发送与回复等待均有 800ms 上限，支持取消，返回数量、偏移、长度和绝对路径均经校验。若两端完整性级别不同则显示诊断并使用回退扫描器。回退扫描器在后台运行，跳过 AppData、node_modules、系统目录并限制访问条目数。
 - 剪贴板：单一管理器读取系统剪贴板；默认排除密码管理器进程与敏感格式（含 Windows 的 `ExcludeClipboardContentFromMonitorProcessing`），支持自定义忽略进程、暂停、固定和分段清理。持久化使用 AES-GCM，密钥由 DPAPI 保护；文本/文件默认记录，图片默认关闭且单项限制 5 MB。
 - 窗口位置：拖动后的左上角换算为显示器工作区中的比例并保存；显示器变化时自动钳制在可见区域。

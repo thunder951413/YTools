@@ -280,6 +280,9 @@ final class AppPreferences: ObservableObject {
     @Published var includeAutomaticDictionary: Bool { didSet { defaults.set(includeAutomaticDictionary, forKey: Keys.includeAutomaticDictionary) } }
     @Published var maximumSearchResults: Int { didSet { defaults.set(maximumSearchResults, forKey: Keys.maximumSearchResults) } }
     @Published var searchScopePaths: [String] { didSet { defaults.set(searchScopePaths, forKey: Keys.searchScopePaths) } }
+    @Published var customApplicationPaths: [String] {
+        didSet { defaults.set(customApplicationPaths, forKey: Keys.customApplicationPaths) }
+    }
     @Published var applicationAliases: [String: String] {
         didSet { defaults.set(applicationAliases, forKey: Keys.applicationAliases) }
     }
@@ -371,6 +374,10 @@ final class AppPreferences: ObservableObject {
             20
         )
         self.searchScopePaths = Self.validSearchScopes(defaults.stringArray(forKey: Keys.searchScopePaths) ?? [])
+        self.customApplicationPaths = MacApplicationPathPolicy.normalize(
+            paths: defaults.stringArray(forKey: Keys.customApplicationPaths) ?? [],
+            requireExistingBundle: false
+        )
         self.applicationAliases = Self.validApplicationAliases(
             defaults.dictionary(forKey: Keys.applicationAliases) as? [String: String] ?? [:]
         )
@@ -426,6 +433,8 @@ final class AppPreferences: ObservableObject {
         includeAutomaticDictionary = true
         maximumSearchResults = 8
         searchScopePaths = []
+        customApplicationPaths = []
+        applicationAliases = [:]
         fileNavigationShowsHiddenFiles = false
         fileNavigationSort = .name
         fileNavigationSortAscending = true
@@ -545,9 +554,32 @@ final class AppPreferences: ObservableObject {
         searchScopePaths.removeAll { $0 == path }
     }
 
+    func addCustomApplication(_ url: URL) -> String? {
+        guard let path = MacApplicationPathPolicy.normalize(url: url, requireExistingBundle: true) else {
+            return nil
+        }
+        customApplicationPaths = MacApplicationPathPolicy.normalize(
+            paths: customApplicationPaths + [path],
+            requireExistingBundle: false
+        )
+        return path
+    }
+
+    func removeCustomApplication(_ path: String) {
+        guard let canonicalPath = MacApplicationPathPolicy.normalize(
+            path: path,
+            requireExistingBundle: false
+        ) else { return }
+        let comparisonPath = canonicalPath.lowercased()
+        customApplicationPaths.removeAll { $0.lowercased() == comparisonPath }
+        applicationAliases.keys
+            .filter { $0.lowercased() == comparisonPath }
+            .forEach { applicationAliases.removeValue(forKey: $0) }
+    }
+
     func addApplicationAliasTarget(_ url: URL) {
-        let path = url.standardizedFileURL.path
-        guard url.pathExtension.lowercased() == "app", applicationAliases[path] == nil else { return }
+        guard let path = MacApplicationPathPolicy.normalize(url: url, requireExistingBundle: true),
+              applicationAliases[path] == nil else { return }
         applicationAliases[path] = ""
     }
 
@@ -609,11 +641,16 @@ final class AppPreferences: ObservableObject {
     }
 
     private static func validApplicationAliases(_ aliases: [String: String]) -> [String: String] {
-        Dictionary(uniqueKeysWithValues: aliases.compactMap { path, value in
-            let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
-            guard URL(fileURLWithPath: standardized).pathExtension.lowercased() == "app" else { return nil }
-            return (standardized, value)
-        })
+        var normalized: [String: String] = [:]
+        var seen: Set<String> = []
+        for path in aliases.keys.sorted() {
+            guard let canonicalPath = MacApplicationPathPolicy.normalize(
+                path: path,
+                requireExistingBundle: false
+            ), seen.insert(canonicalPath.lowercased()).inserted else { continue }
+            normalized[canonicalPath] = aliases[path]
+        }
+        return normalized
     }
 
     private static func migrateIfNeeded(_ defaults: UserDefaults) {
@@ -682,6 +719,7 @@ final class AppPreferences: ObservableObject {
         static let includeAutomaticDictionary = "preferences.search.includeAutomaticDictionary"
         static let maximumSearchResults = "preferences.search.maximumResults"
         static let searchScopePaths = "preferences.search.scopePaths"
+        static let customApplicationPaths = "preferences.search.customApplicationPaths"
         static let applicationAliases = "preferences.search.applicationAliases"
         static let fileNavigationShowsHiddenFiles = "preferences.files.showHidden"
         static let fileNavigationSort = "preferences.files.sort"

@@ -6,7 +6,7 @@ YTools 是一个面向个人使用的 **Windows 原生启动器与本地效率�
 
 ## 功能
 
-- **应用启动**：索引开始菜单可启动入口（`.lnk` / `.appref-ms` / `.exe`）、WindowsApps 应用执行别名和 AppsFolder 中的系统已注册应用（包括 Microsoft Store 与传统桌面程序）；也可在设置中添加任意现有的本机 `.exe`、`.lnk` 或 `.appref-ms` 为自定义应用并配置别名。快捷方式按自身启动，不再丢失 UWP、带参数入口或共用宿主的应用；支持名称、英文缩写、中文拼音全拼及首字母搜索。
+- **应用启动**：Windows 索引开始菜单入口、WindowsApps 别名与 AppsFolder 注册应用，并可加入本机 `.exe`、`.lnk`、`.appref-ms`；macOS 索引三个标准 Applications 目录，也可加入其他位置的有效 `.app` bundle。两端都支持自定义别名、拼音/缩写/模糊搜索，以及按频率、新近度、查询记忆和应用启动次数动态排名。
 - **本地文件搜索**：已运行 [Everything](https://www.voidtools.com/) 时直接使用其只读本机 IPC（无需额外 SDK DLL）；可设置是否把文件加入默认结果，关闭后仅 `open/打开`、`find/查找`、`in/内容`、`tag/标签` 等显式前缀触发文件搜索。不可用时在后台回退到内置文件名扫描，不阻塞启动器 UI；支持 `/`、`~`、盘符目录导航。
 - **文件操作**：目录导航、资源管理器显示、打开方式、复制/移动、路径复制及 Option（Alt）文件缓冲。
 - **剪贴板历史**：独立快捷键、类型筛选、忽略进程、暂停、固定、分段清理、文本长度限制及 AES-GCM 加密存储（密钥由 DPAPI 保护）。
@@ -70,7 +70,7 @@ src/YTools.Windows/       # WPF 应用（C# / .NET 8）
   UI/                     # 启动器、剪贴板面板、设置、大字显示、预览
 Tests/YTools.Windows.Tests/  # xUnit 回归测试
 scripts/                  # check.ps1 / build.ps1
-Sources/                  # macOS 原版 Swift 源码（仅作移植参考，本分支不参与构建）
+Sources/                  # macOS Swift 6/AppKit/SwiftUI 实现（Windows 构建忽略，macOS CI 独立验证）
 ```
 
 ## 文档

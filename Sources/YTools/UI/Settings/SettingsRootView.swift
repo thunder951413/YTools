@@ -98,6 +98,8 @@ struct SettingsRootView: View {
             GeneralSettingsView(preferences: preferences, recentDocuments: recentDocuments)
         case .search:
             SearchSettingsView(preferences: preferences)
+        case .customApplications:
+            CustomApplicationsSettingsView(preferences: preferences)
         case .applicationAliases:
             ApplicationAliasesSettingsView(preferences: preferences)
         case .systemCommands:

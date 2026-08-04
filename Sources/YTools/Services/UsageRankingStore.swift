@@ -1,9 +1,12 @@
 import CryptoKit
 import Foundation
+import OSLog
 
 /// Stores only SHA-256 hashes of result identifiers, so usage learning does not
 /// create a second plaintext index of private file paths.
+@MainActor
 final class UsageRankingStore {
+    private static let logger = Logger(subsystem: "com.ytools.app", category: "UsageRankingStore")
     private struct Entry: Codable {
         var count: Int
         var lastUsed: Date
@@ -22,6 +25,7 @@ final class UsageRankingStore {
     }
 
     private let fileURL: URL
+    private let persistenceQueue = DispatchQueue(label: "com.ytools.usage-ranking.persistence")
     private var entries: [String: Entry]
     private var latches: [String: Latch]
 
@@ -34,6 +38,23 @@ final class UsageRankingStore {
         let directory = applicationSupport.appendingPathComponent("ZToolsNative", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         self.fileURL = directory.appendingPathComponent("usage-ranking.json")
+        if let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode(StoreData.self, from: data) {
+            self.entries = decoded.entries
+            self.latches = decoded.latches
+        } else if let data = try? Data(contentsOf: fileURL),
+                  let legacy = try? JSONDecoder().decode([String: Entry].self, from: data) {
+            self.entries = legacy
+            self.latches = [:]
+        } else {
+            self.entries = [:]
+            self.latches = [:]
+        }
+        prune()
+    }
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
         if let data = try? Data(contentsOf: fileURL),
            let decoded = try? JSONDecoder().decode(StoreData.self, from: data) {
             self.entries = decoded.entries
@@ -95,10 +116,20 @@ final class UsageRankingStore {
         return frequency + recency + latchBoost
     }
 
+    func count(for identifier: String) -> Int {
+        entries[hash(identifier)]?.count ?? 0
+    }
+
     func clear() {
         entries.removeAll()
         latches.removeAll()
-        try? FileManager.default.removeItem(at: fileURL)
+        enqueueRemoval()
+    }
+
+    /// Waits until the serial persistence queue has applied all previously
+    /// enqueued snapshots. Used by deterministic tests with temporary stores.
+    func waitForPendingPersistence() {
+        persistenceQueue.sync {}
     }
 
     private func hash(_ value: String) -> String {
@@ -118,11 +149,26 @@ final class UsageRankingStore {
     private func save() {
         let payload = StoreData(entries: entries, latches: latches)
         guard let data = try? JSONEncoder().encode(payload) else { return }
-        do {
-            try data.write(to: fileURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
-        } catch {
-            // Ranking is optional and must never prevent launching a result.
+        let fileURL = fileURL
+        persistenceQueue.async {
+            do {
+                try data.write(to: fileURL, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            } catch {
+                Self.logger.error("Unable to persist optional usage ranking: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private func enqueueRemoval() {
+        let fileURL = fileURL
+        persistenceQueue.async {
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+            do {
+                try FileManager.default.removeItem(at: fileURL)
+            } catch {
+                Self.logger.error("Unable to remove optional usage ranking: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 }

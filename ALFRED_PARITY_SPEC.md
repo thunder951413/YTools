@@ -4,7 +4,7 @@
 
 | Alfred 能力 | YTools Windows 对应 | 状态 |
 |---|---|---|
-| 应用启动与模糊搜索 | 开始菜单入口/WindowsApps/AppsFolder 注册应用索引 + 用户自定义本机应用 + 拼音/缩写/别名/模糊分；支持 UWP、传统桌面注册入口、带参数快捷方式与 ClickOnce 入口 | 已实现 |
+| 应用启动与模糊搜索 | Windows 开始菜单/WindowsApps/AppsFolder 与 macOS Applications 目录索引 + 两端自定义本机应用 + 拼音/缩写/别名/模糊分 + 频率/新近度/查询记忆/启动次数动态排名 | 已实现 |
 | 连续输入与结果发布 | 50–400ms 可配置“输入停止后搜索”；新输入取消旧代次，最终查询完成后一次性展开结果 | 已实现 |
 | 关键词（Keyword）工作流 | 源码模块 `IYToolsModule`（需编译，不做运行时安装） | 已实现 |
 | 文件搜索 | Everything（可选）或内置文件名扫描 | 已实现（内容/标签搜索依赖 Everything） |

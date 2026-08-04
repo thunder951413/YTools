@@ -20,7 +20,7 @@ YTools Windows 版主程序是离线单文件应用：不包含任何网络客�
   - Windows AppsFolder / `IApplicationActivationManager`：只枚举本机已注册的桌面与打包应用，并用枚举得到且经过格式校验的 AppUserModelId 启动；查询文本不进入激活参数。
   - 应用图标：只读本机 AppsFolder、包注册表中的 `PackageRootFolder` 和包清单 Logo 资源；所有读取均在后台进行，不联网、不执行清单内容。
 - 以上调用不使用用户输入作为命令名，路径参数不经过任何 Shell 解释。
-- 自定义应用只能由设置页文件选择器加入，且必须是现有的本机绝对 `.exe`、`.lnk` 或 `.appref-ms`；偏好层和索引层都会拒绝相对路径、UNC、URL、目录、其他扩展名与启动参数。搜索只复用已验证的内存条目。
+- 自定义应用只能由设置页文件选择器加入。Windows 仅接受现有的本机绝对 `.exe`、`.lnk`、`.appref-ms`；macOS 仅接受绝对本机 `.app`，解析符号链接后再次验证目录、扩展名和 bundle identifier。偏好层和索引层都会拒绝相对路径、URL、其他扩展名与启动参数，搜索只复用已验证的内存条目。
 
 ## 数据存储
 
