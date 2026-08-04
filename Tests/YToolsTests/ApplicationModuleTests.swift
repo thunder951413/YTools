@@ -120,7 +120,7 @@ final class ApplicationModuleTests: XCTestCase {
 private final class ControlledScanner: @unchecked Sendable {
     private let lock = NSLock()
     private let blockedScanStarted = DispatchSemaphore(value: 0)
-    private let releaseBlockedScan = DispatchSemaphore(value: 0)
+    private let releaseBlockedScanSignal = DispatchSemaphore(value: 0)
     private var snapshots: [[URL]]
     private var shouldBlockNextScan = false
 
@@ -136,7 +136,7 @@ private final class ControlledScanner: @unchecked Sendable {
         lock.unlock()
         if shouldBlock {
             blockedScanStarted.signal()
-            releaseBlockedScan.wait()
+            releaseBlockedScanSignal.wait()
         }
         return snapshot
     }
@@ -152,6 +152,6 @@ private final class ControlledScanner: @unchecked Sendable {
     }
 
     func releaseBlockedScan() {
-        releaseBlockedScan.signal()
+        releaseBlockedScanSignal.signal()
     }
 }
