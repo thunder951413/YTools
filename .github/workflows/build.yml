@@ -23,4 +23,4 @@ jobs:
       - name: Build ad-hoc signed app
         run: ./scripts/build-app.sh
       - name: Verify app signature
-        run: codesign --verify --deep --strict --verbose=2 dist/ZToolsNative.app
+        run: codesign --verify --deep --strict --verbose=2 dist/YTools.app
