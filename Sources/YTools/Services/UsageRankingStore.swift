@@ -6,7 +6,10 @@ import OSLog
 /// create a second plaintext index of private file paths.
 @MainActor
 final class UsageRankingStore {
-    private static let logger = Logger(subsystem: "com.ytools.app", category: "UsageRankingStore")
+    private nonisolated static let logger = Logger(
+        subsystem: "com.ytools.app",
+        category: "UsageRankingStore"
+    )
     private struct Entry: Codable {
         var count: Int
         var lastUsed: Date
