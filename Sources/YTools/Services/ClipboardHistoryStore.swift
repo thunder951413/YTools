@@ -43,6 +43,8 @@ final class ClipboardHistoryStore {
         let contentHash: String
         let encryptedByteCount: Int
         var isPinned: Bool
+        var updatedAt: Date?
+        var copyCount: Int?
     }
 
     private struct Record: Codable {
@@ -131,7 +133,9 @@ final class ClipboardHistoryStore {
                         sourceApplication: item.sourceApplication,
                         contentHash: item.contentHash ?? old.contentHash,
                         encryptedByteCount: old.encryptedByteCount,
-                        isPinned: item.pinned
+                        isPinned: item.pinned,
+                        updatedAt: item.updatedAt ?? old.updatedAt,
+                        copyCount: item.copyCount
                     ))
                     normalizedByID[item.id] = item
                     continue
@@ -158,7 +162,9 @@ final class ClipboardHistoryStore {
                         sourceApplication: item.sourceApplication,
                         binaryData: thumbnail.isEmpty ? nil : thumbnail,
                         contentHash: item.contentHash ?? hash(clear),
-                        isPinned: item.pinned
+                        isPinned: item.pinned,
+                        updatedAt: item.updatedAt,
+                        copyCount: item.copyCount
                     )
                 }
                 normalizedByID[item.id] = normalized
@@ -170,7 +176,9 @@ final class ClipboardHistoryStore {
                     sourceApplication: item.sourceApplication,
                     contentHash: item.contentHash ?? hash(clear),
                     encryptedByteCount: encrypted.count,
-                    isPinned: item.pinned
+                    isPinned: item.pinned,
+                    updatedAt: item.updatedAt,
+                    copyCount: item.copyCount
                 ))
             }
 
@@ -276,7 +284,9 @@ final class ClipboardHistoryStore {
                     sourceApplication: entry.sourceApplication,
                     binaryData: thumbnail,
                     contentHash: entry.contentHash,
-                    isPinned: entry.isPinned
+                    isPinned: entry.isPinned,
+                    updatedAt: entry.updatedAt,
+                    copyCount: entry.copyCount ?? 1
                 ))
             } catch {
                 skipped += 1
@@ -324,7 +334,9 @@ final class ClipboardHistoryStore {
             sourceApplication: item.sourceApplication,
             binaryData: item.binaryData,
             contentHash: hash(data),
-            isPinned: item.pinned
+            isPinned: item.pinned,
+            updatedAt: item.updatedAt,
+            copyCount: item.copyCount
         )
     }
 

@@ -48,6 +48,26 @@ public class ClipboardTextPolicyTests
     }
 }
 
+public class ClipboardHistoryItemTests
+{
+    [Fact]
+    public void SameContent_IsIndependentFromItsLocalCopyCount()
+    {
+        var id = Guid.NewGuid();
+        var original = new ClipboardHistoryItem(
+            id,
+            ClipboardItemKind.Text,
+            ["same text"],
+            DateTimeOffset.UtcNow,
+            "test",
+            ContentHash: "hash");
+        var copiedAgain = original with { Id = Guid.NewGuid(), CopyCount = 2 };
+
+        Assert.True(original.HasSameContent(copiedAgain));
+        Assert.Equal(2, copiedAgain.CopyCount);
+    }
+}
+
 public class RelativePanelPlacementTests
 {
     [Fact]

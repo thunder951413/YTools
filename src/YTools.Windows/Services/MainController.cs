@@ -101,6 +101,7 @@ public sealed class MainController
         _preferences.HotKeysChanged -= ConfigureHotKeys;
         _snippets?.FlushPendingChanges();
         _launcher?.Dispose();
+        _clipboard?.Dispose();
         _tray?.Dispose();
         _showLauncherEvent?.Dispose();
         _showLauncherEvent = null;

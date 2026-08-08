@@ -141,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         pauseClipboardMenuItem = pauseItem
         menu.addItem(.separator())
-        let privacyItem = menu.addItem(withTitle: "本机模式 · 无网络模块", action: nil, keyEquivalent: "")
+        let privacyItem = menu.addItem(withTitle: "默认本机模式 · 坚果云同步默认关闭", action: nil, keyEquivalent: "")
         privacyItem.isEnabled = false
         menu.addItem(.separator())
         menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ",")

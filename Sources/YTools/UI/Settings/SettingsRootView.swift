@@ -69,7 +69,7 @@ struct SettingsRootView: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            Text("本机模式 · 无联网")
+            Text("默认本机模式 · 同步默认关闭")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)

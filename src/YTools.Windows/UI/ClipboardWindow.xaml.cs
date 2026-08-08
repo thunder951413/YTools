@@ -147,6 +147,14 @@ public partial class ClipboardWindow : Window
         _manager?.ClearRecent(30);
     }
 
+    private async void SyncNow_Click(object sender, RoutedEventArgs e)
+    {
+        if (_manager is not null)
+        {
+            await _manager.SyncCloudNowAsync();
+        }
+    }
+
     private void ClearAll_Click(object sender, RoutedEventArgs e)
     {
         if (_manager is null)

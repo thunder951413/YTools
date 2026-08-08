@@ -297,6 +297,9 @@ final class AppPreferences: ObservableObject {
     @Published var clipboardMaximumTextCharacters: Int { didSet { defaults.set(clipboardMaximumTextCharacters, forKey: Keys.clipboardMaximumTextCharacters) } }
     @Published var clipboardStoreImages: Bool { didSet { defaults.set(clipboardStoreImages, forKey: Keys.clipboardStoreImages) } }
     @Published var clipboardIgnoredBundleIDs: [String] { didSet { defaults.set(clipboardIgnoredBundleIDs, forKey: Keys.clipboardIgnoredBundleIDs) } }
+    @Published var clipboardCloudSyncEnabled: Bool { didSet { defaults.set(clipboardCloudSyncEnabled, forKey: Keys.clipboardCloudSyncEnabled) } }
+    @Published var clipboardCloudSyncFolder: String { didSet { defaults.set(clipboardCloudSyncFolder, forKey: Keys.clipboardCloudSyncFolder) } }
+    @Published var clipboardCloudSyncIntervalMinutes: Int { didSet { defaults.set(clipboardCloudSyncIntervalMinutes, forKey: Keys.clipboardCloudSyncIntervalMinutes) } }
     @Published var hotKeyError: String?
     @Published var launchAtLoginError: String?
     @Published var keyboardInputSourceError: String?
@@ -403,6 +406,12 @@ final class AppPreferences: ObservableObject {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
                 .filter { !$0.isEmpty }
         )).sorted()
+        self.clipboardCloudSyncEnabled = defaults.object(forKey: Keys.clipboardCloudSyncEnabled) as? Bool ?? false
+        self.clipboardCloudSyncFolder = defaults.string(forKey: Keys.clipboardCloudSyncFolder) ?? "YTools/clipboard-sync"
+        self.clipboardCloudSyncIntervalMinutes = min(
+            max(defaults.object(forKey: Keys.clipboardCloudSyncIntervalMinutes) as? Int ?? 15, 15),
+            240
+        )
     }
 
     func restoreDefaults() {
@@ -446,6 +455,9 @@ final class AppPreferences: ObservableObject {
         clipboardMaximumTextCharacters = 1_000
         clipboardStoreImages = false
         clipboardIgnoredBundleIDs = []
+        clipboardCloudSyncEnabled = false
+        clipboardCloudSyncFolder = "YTools/clipboard-sync"
+        clipboardCloudSyncIntervalMinutes = 15
     }
 
     func savePanelPosition(
@@ -688,7 +700,7 @@ final class AppPreferences: ObservableObject {
         )
     }
 
-    private static let currentSchemaVersion = 7
+    private static let currentSchemaVersion = 8
 
     private enum Keys {
         static let schemaVersion = "preferences.schemaVersion"
@@ -732,5 +744,8 @@ final class AppPreferences: ObservableObject {
         static let clipboardMaximumTextCharacters = "preferences.clipboard.maximumTextCharacters"
         static let clipboardStoreImages = "preferences.clipboard.storeImages"
         static let clipboardIgnoredBundleIDs = "preferences.clipboard.ignoredBundleIDs"
+        static let clipboardCloudSyncEnabled = "preferences.clipboard.cloudSyncEnabled"
+        static let clipboardCloudSyncFolder = "preferences.clipboard.cloudSyncFolder"
+        static let clipboardCloudSyncIntervalMinutes = "preferences.clipboard.cloudSyncIntervalMinutes"
     }
 }

@@ -10,8 +10,12 @@ public sealed record ClipboardHistoryItem(
     string? SourceApplication,
     byte[]? BinaryData = null,
     string? ContentHash = null,
-    bool IsPinned = false)
+    bool IsPinned = false,
+    DateTimeOffset? UpdatedAt = null,
+    int CopyCount = 1)
 {
+    public DateTimeOffset EffectiveUpdatedAt => UpdatedAt ?? CreatedAt;
+
     public string DisplayText => Kind switch
     {
         ClipboardItemKind.Text => Payload.FirstOrDefault() ?? "",

@@ -8,7 +8,7 @@ namespace YTools.Models;
 
 public sealed class AppPreferences : ObservableObject
 {
-    private const int CurrentSchemaVersion = 7;
+    private const int CurrentSchemaVersion = 8;
 
     private bool _launchAtLogin;
     private HotKeyDefinition _launcherHotKey;
@@ -51,6 +51,9 @@ public sealed class AppPreferences : ObservableObject
     private int _clipboardMaximumTextCharacters = 1_000;
     private bool _clipboardStoreImages;
     private IReadOnlyList<string> _clipboardIgnoredProcessNames = [];
+    private bool _clipboardCloudSyncEnabled;
+    private string _clipboardCloudSyncFolder = "YTools/clipboard-sync";
+    private int _clipboardCloudSyncIntervalMinutes = 15;
     private string? _hotKeyError;
     private string? _launchAtLoginError;
 
@@ -548,6 +551,43 @@ public sealed class AppPreferences : ObservableObject
         }
     }
 
+    public bool ClipboardCloudSyncEnabled
+    {
+        get => _clipboardCloudSyncEnabled;
+        set
+        {
+            if (SetField(ref _clipboardCloudSyncEnabled, value))
+            {
+                Save();
+            }
+        }
+    }
+
+    public string ClipboardCloudSyncFolder
+    {
+        get => _clipboardCloudSyncFolder;
+        set
+        {
+            var normalized = value.Trim().Replace('\\', '/');
+            if (SetField(ref _clipboardCloudSyncFolder, normalized))
+            {
+                Save();
+            }
+        }
+    }
+
+    public int ClipboardCloudSyncIntervalMinutes
+    {
+        get => _clipboardCloudSyncIntervalMinutes;
+        set
+        {
+            if (SetField(ref _clipboardCloudSyncIntervalMinutes, Math.Clamp(value, 15, 240)))
+            {
+                Save();
+            }
+        }
+    }
+
     public string? HotKeyError
     {
         get => _hotKeyError;
@@ -925,6 +965,11 @@ public sealed class AppPreferences : ObservableObject
                 .Distinct()
                 .OrderBy(name => name)
                 .ToList();
+            _clipboardCloudSyncEnabled = data.ClipboardCloudSyncEnabled ?? false;
+            _clipboardCloudSyncFolder = string.IsNullOrWhiteSpace(data.ClipboardCloudSyncFolder)
+                ? "YTools/clipboard-sync"
+                : data.ClipboardCloudSyncFolder.Trim().Replace('\\', '/');
+            _clipboardCloudSyncIntervalMinutes = Math.Clamp(data.ClipboardCloudSyncIntervalMinutes ?? 15, 15, 240);
             Save();
         }
         catch
@@ -947,6 +992,9 @@ public sealed class AppPreferences : ObservableObject
         _enabledSystemCommands = AllCommands();
         _systemCommandKeywords = DefaultKeywords();
         _customApplicationPaths = [];
+        _clipboardCloudSyncEnabled = false;
+        _clipboardCloudSyncFolder = "YTools/clipboard-sync";
+        _clipboardCloudSyncIntervalMinutes = 15;
         Save();
     }
 
@@ -1000,7 +1048,10 @@ public sealed class AppPreferences : ObservableObject
                 ClipboardMaximumItems = _clipboardMaximumItems,
                 ClipboardMaximumTextCharacters = _clipboardMaximumTextCharacters,
                 ClipboardStoreImages = _clipboardStoreImages,
-                ClipboardIgnoredProcessNames = _clipboardIgnoredProcessNames.ToList()
+                ClipboardIgnoredProcessNames = _clipboardIgnoredProcessNames.ToList(),
+                ClipboardCloudSyncEnabled = _clipboardCloudSyncEnabled,
+                ClipboardCloudSyncFolder = _clipboardCloudSyncFolder,
+                ClipboardCloudSyncIntervalMinutes = _clipboardCloudSyncIntervalMinutes
             };
             var json = JsonSerializer.Serialize(data, JsonOptions);
             File.WriteAllText(AppPaths.SettingsFile, json);
@@ -1223,5 +1274,11 @@ public sealed class AppPreferences : ObservableObject
         public bool? ClipboardStoreImages { get; set; }
 
         public List<string>? ClipboardIgnoredProcessNames { get; set; }
+
+        public bool? ClipboardCloudSyncEnabled { get; set; }
+
+        public string? ClipboardCloudSyncFolder { get; set; }
+
+        public int? ClipboardCloudSyncIntervalMinutes { get; set; }
     }
 }

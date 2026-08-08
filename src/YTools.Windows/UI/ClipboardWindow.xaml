@@ -19,6 +19,7 @@
         <ui:ClipboardThumbnailConverter x:Key="Thumbnail" />
         <ui:ClipboardKindVisibilityConverter x:Key="KindVisibility" />
         <ui:CountToVisibilityConverter x:Key="CountToVisibility" />
+        <ui:ClipboardCopyCountConverter x:Key="CopyCount" />
         <Style x:Key="ClipboardItemStyle" TargetType="ListBoxItem">
             <Setter Property="Template">
                 <Setter.Value>
@@ -73,6 +74,9 @@
                                    FontSize="12"
                                    Foreground="{DynamicResource AccentBrush}"
                                    Visibility="{Binding IsPinned, Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock Text="{Binding CopyCount, Converter={StaticResource CopyCount}}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
                     </StackPanel>
                     <TextBlock FontSize="11"
                                Foreground="{DynamicResource TextSecondaryBrush}"
@@ -115,6 +119,7 @@
                              Padding="10,7"
                              VerticalContentAlignment="Center" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0">
+                        <Button Content="立即同步" Click="SyncNow_Click" Margin="0,0,6,0" Padding="10,6" />
                         <Button Content="清空 30 分钟" Click="ClearRecent_Click" Margin="0,0,6,0" Padding="10,6" />
                         <Button Content="清空全部" Click="ClearAll_Click" Margin="0" Padding="10,6" />
                     </StackPanel>
@@ -144,11 +149,21 @@
                            VerticalAlignment="Center"
                            Visibility="{Binding FilteredItems.Count, Converter={StaticResource CountToVisibility}, ConverterParameter=invert}" />
             </Grid>
-            <TextBlock Grid.Row="2"
-                       Text="Enter 复制 · Ctrl+D 删除 · Ctrl+S 保存为片段 · Esc 关闭"
-                       FontSize="11"
-                       Foreground="{DynamicResource TextSecondaryBrush}"
-                       Margin="18,8" />
+            <Grid Grid.Row="2" Margin="18,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Enter 复制 · Ctrl+D 删除 · Ctrl+S 保存为片段 · Esc 关闭"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding CloudSyncStatus}"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="240" />
+            </Grid>
         </Grid>
     </Grid>
 </Window>

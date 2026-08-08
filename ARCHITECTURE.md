@@ -35,6 +35,7 @@ ModuleKit（无 UI 的公共边界）
  ├─ SecureCodableStore（Snippets / 最近文档）
  ├─ ClipboardHistoryStore（增量清单 + 独立记录与缩略图密文）
  ├─ ClipboardPersistenceService（串行化 + 修订号防旧快照覆盖）
+ ├─ ClipboardCloudSyncService（可选坚果云 WebDAV，每条变更加密、每设备轻量标记）
  └─ UsageRankingStore（仅存 SHA-256 哈希）
 ```
 
@@ -82,7 +83,7 @@ ModuleKit（无 UI 的公共边界）
 
 所有工具实现 `IYToolsModule` 并注册到 `SearchCoordinator`。内置系统模块由宿主显式授予所需能力；个人模块默认无权限。所有模块都需要重新编译，不存在运行时安装。完整示例见 `MODULE_DEVELOPMENT.md`。
 
-无权限个人模块只能返回复制文本、空动作或打开 YTools 设置。文件动作必须声明并获得 `LocalFileRead`，且路径必须是本机绝对路径。主程序当前不授予网络能力；构建检查会拒绝网络、动态代码和 Shell API。
+无权限个人模块只能返回复制文本、空动作或打开 YTools 设置。文件动作必须声明并获得 `LocalFileRead`，且路径必须是本机绝对路径。个人模块不授予网络能力；构建检查会拒绝直接网络、动态代码和 Shell API。
 
 ## 权限策略
 
@@ -90,13 +91,13 @@ ModuleKit（无 UI 的公共边界）
 - 词典：只读内嵌 CC-CEDICT，索引在启动阶段后台预热；自动词典查询不会阻塞首字符结果，显式 `dict/词典` 查询仍保证完整结果。
 - 应用启动：Windows 自动索引开始菜单、WindowsApps 与 AppsFolder，并允许用户显式加入本机 `.exe`、`.lnk`、`.appref-ms`；macOS 自动索引 `/Applications`、`/System/Applications`、`~/Applications`，并允许显式加入其他位置的有效 `.app` bundle。自定义项拒绝相对路径、URL、其他扩展名和启动参数；macOS 还会解析符号链接并验证 bundle identifier。Windows AppsFolder 使用受类型约束的 `ActivateApplication(AppUserModelId)`，macOS 使用类型化 `.open(URL)`，不机械共享平台激活动作。
 - 文件搜索：Everything 使用官方 QUERY2 `WM_COPYDATA` 只读本机 IPC，无需 SDK DLL；请求发送与回复等待均有 800ms 上限，支持取消，返回数量、偏移、长度和绝对路径均经校验。若两端完整性级别不同则显示诊断并使用回退扫描器。回退扫描器在后台运行，跳过 AppData、node_modules、系统目录并限制访问条目数。
-- 剪贴板：单一管理器读取系统剪贴板；默认排除密码管理器进程与敏感格式（含 Windows 的 `ExcludeClipboardContentFromMonitorProcessing`），支持自定义忽略进程、暂停、固定和分段清理。持久化使用 AES-GCM，密钥由 DPAPI 保护；文本/文件默认记录，图片默认关闭且单项限制 5 MB。
+- 剪贴板：单一管理器读取系统剪贴板；默认排除密码管理器进程与敏感格式（含 Windows 的 `ExcludeClipboardContentFromMonitorProcessing`），支持自定义忽略进程、暂停、固定和分段清理。持久化使用 AES-GCM，本机密钥由 Windows DPAPI 或 macOS 登录钥匙串保护；文本/文件默认记录，图片默认关闭且单项限制 5 MB。两端使用相同的可选坚果云同步协议：固定 HTTPS WebDAV 端点和应用密码；同步口令经 PBKDF2 派生 AES-GCM 密钥。每条新增内容是独立密文文件，重复复制仅增加本机计数。客户端每 15 分钟只读取每设备的 4 KiB 变更标记，标记序号未前进时不下载加密记录；历史面板可手动强制同步。
 - 窗口位置：拖动后的左上角换算为显示器工作区中的比例并保存；显示器变化时自动钳制在可见区域。
 - 托盘：可按偏好隐藏，隐藏后全局快捷键、剪贴板监听与后台运行不受影响。
 - 启动器样式：极简（默认）、经典、现代、玻璃四种原生预设，通过布局令牌与半透明画刷实现，不加载外部主题资源。面板坐标统一换算为 WPF DIP，在高 DPI 和多显示器工作区内钳制；文件预览展开时保留主结果区宽度。
 - 应用图标：结果首帧使用通用字形，Shell/AppsFolder 图标在后台提取并冻结后写入进程缓存；缓存完成只刷新结果图标，不阻塞输入和排序。
 - 系统命令：只允许编译期固定的动作；关键词可在设置中修改或关闭，但永远不会成为 Shell、URL 或可执行参数。清空回收站始终二次确认；不读取受保护目录内容。
-- 网络：主程序默认没有任何网络模块。
+- 网络：主程序默认没有任何网络模块。用户明确开启坚果云剪贴板同步后，唯一允许的外联是固定 HTTPS WebDAV 端点；同步内容在离开设备前端到端加密。
 
 ## 沙箱取舍
 

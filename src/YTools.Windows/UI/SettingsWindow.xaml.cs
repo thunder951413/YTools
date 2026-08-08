@@ -535,6 +535,61 @@ public partial class SettingsWindow : Window
             }
         }));
         stack.Children.Add(ignoredRow);
+        stack.Children.Add(SubHeader("坚果云加密同步"));
+        stack.Children.Add(CheckBox("启用坚果云剪贴板同步", "ClipboardCloudSyncEnabled", "仅在已保存凭据后启用；内容始终先加密再上传"));
+        stack.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("HintText"),
+            Text = "通过 https://dav.jianguoyun.com/dav/ 使用坚果云应用密码。每条新内容独立加密上传；每 15 分钟仅拉取轻量变更标记，无变化时不下载内容。"
+        });
+        var syncFolder = LabeledTextBox("坚果云目录（仅字母、数字、点、下划线、连字符）", 260);
+        syncFolder.Box.Text = _preferences?.ClipboardCloudSyncFolder ?? "YTools/clipboard-sync";
+        syncFolder.Box.LostFocus += (_, _) =>
+        {
+            if (_preferences is not null)
+            {
+                _preferences.ClipboardCloudSyncFolder = syncFolder.Box.Text;
+            }
+        };
+        stack.Children.Add(syncFolder.Label);
+        stack.Children.Add(syncFolder.Box);
+        stack.Children.Add(SliderRow("后台拉取间隔（分钟）", "ClipboardCloudSyncIntervalMinutes", 15, 240, 15));
+        var username = LabeledTextBox("坚果云用户名", 260);
+        var appPasswordLabel = new TextBlock { Text = "坚果云应用密码", Style = (Style)FindResource("RowLabel") };
+        var appPassword = new PasswordBox { Width = 260, Margin = new Thickness(0, 4, 0, 0) };
+        var syncPasswordLabel = new TextBlock { Text = "同步口令（至少 12 个字符；所有设备必须相同）", Style = (Style)FindResource("RowLabel") };
+        var syncPassword = new PasswordBox { Width = 260, Margin = new Thickness(0, 4, 0, 0) };
+        stack.Children.Add(username.Label);
+        stack.Children.Add(username.Box);
+        stack.Children.Add(appPasswordLabel);
+        stack.Children.Add(appPassword);
+        stack.Children.Add(syncPasswordLabel);
+        stack.Children.Add(syncPassword);
+        var syncStatus = new TextBlock { Style = (Style)FindResource("HintText") };
+        syncStatus.SetBinding(
+            TextBlock.TextProperty,
+            new System.Windows.Data.Binding(nameof(ClipboardHistoryManager.CloudSyncStatus)) { Source = _clipboard });
+        stack.Children.Add(Button("加密保存凭据并启用同步", () =>
+        {
+            if (_clipboard is null || _preferences is null)
+            {
+                return;
+            }
+
+            if (_clipboard.SaveCloudSyncCredentials(username.Box.Text, appPassword.Password, syncPassword.Password, out var error))
+            {
+                _preferences.ClipboardCloudSyncEnabled = true;
+                appPassword.Clear();
+                syncPassword.Clear();
+                MessageBox.Show(this, "凭据已加密保存在当前 Windows 用户的数据保险库中。", "坚果云同步", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                MessageBox.Show(this, error, "坚果云同步", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }));
+        stack.Children.Add(Button("立即同步一次", async () => await (_clipboard?.SyncCloudNowAsync() ?? Task.CompletedTask), margin: new Thickness(0, 8, 0, 0)));
+        stack.Children.Add(syncStatus);
         page.Content = Scroll(stack);
         return page;
     }
@@ -674,7 +729,7 @@ public partial class SettingsWindow : Window
         stack.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("HintText"),
-            Text = "YTools 是本机应用：主程序不包含任何网络客户端，不发送查询、剪贴板、文件名、使用记录或设备信息。"
+            Text = "YTools 默认完全离线。仅当你明确启用坚果云剪贴板同步时，程序才会向固定的坚果云 WebDAV 地址发送经端到端加密的剪贴板变更记录。"
         });
         stack.Children.Add(SubHeader("加密存储状态"));
         var clipboardError = new TextBlock

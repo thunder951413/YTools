@@ -29,6 +29,15 @@ struct ClipboardHistoryView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 210)
                 Button {
+                    Task { await manager.syncCloudNow() }
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("立即同步坚果云剪贴板")
+                .disabled(!preferences.clipboardCloudSyncEnabled || manager.isLoading)
+                Button {
                     manager.showsClearConfirmation = true
                 } label: {
                     Image(systemName: "trash")
@@ -102,6 +111,10 @@ struct ClipboardHistoryView: View {
                 } else {
                     Text("\(manager.items.count) 条")
                 }
+                if !manager.cloudSyncStatus.isEmpty {
+                    Text(manager.cloudSyncStatus)
+                        .lineLimit(1)
+                }
                 Text(preferences.clipboardHotKey.displayString)
             }
             .font(.caption)
@@ -146,6 +159,9 @@ private struct ClipboardHistoryRow: View {
                         Text(source)
                     }
                     Text(item.createdAt, style: .relative)
+                    if item.copyCount > 1 {
+                        Text("×\(item.copyCount)")
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)

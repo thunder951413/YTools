@@ -130,7 +130,9 @@ public sealed class ClipboardHistoryStore
                     entry.SourceApplication,
                     thumbnail,
                     entry.ContentHash,
-                    entry.IsPinned));
+                    entry.IsPinned,
+                    entry.UpdatedAt,
+                    Math.Max(1, entry.CopyCount)));
             }
             catch
             {
@@ -167,7 +169,9 @@ public sealed class ClipboardHistoryStore
                         item.SourceApplication,
                         item.ContentHash ?? old.ContentHash,
                         old.EncryptedByteCount,
-                        item.IsPinned));
+                        item.IsPinned,
+                        item.UpdatedAt ?? old.UpdatedAt,
+                        Math.Max(1, item.CopyCount)));
                     normalizedById[item.Id] = item;
                     continue;
                 }
@@ -203,7 +207,9 @@ public sealed class ClipboardHistoryStore
                     item.SourceApplication,
                     item.ContentHash ?? Hash(clear),
                     encrypted.Length,
-                    item.IsPinned));
+                    item.IsPinned,
+                    item.UpdatedAt,
+                    Math.Max(1, item.CopyCount)));
             }
 
             var retainedEntries = new List<Entry>();
@@ -401,7 +407,9 @@ public sealed class ClipboardHistoryStore
             string? sourceApplication,
             string contentHash,
             int encryptedByteCount,
-            bool isPinned)
+            bool isPinned,
+            DateTimeOffset? updatedAt,
+            int copyCount)
         {
             Id = id;
             Kind = kind;
@@ -411,6 +419,8 @@ public sealed class ClipboardHistoryStore
             ContentHash = contentHash;
             EncryptedByteCount = encryptedByteCount;
             IsPinned = isPinned;
+            UpdatedAt = updatedAt;
+            CopyCount = copyCount;
         }
 
         public Guid Id { get; set; }
@@ -428,6 +438,10 @@ public sealed class ClipboardHistoryStore
         public int EncryptedByteCount { get; set; }
 
         public bool IsPinned { get; set; }
+
+        public DateTimeOffset? UpdatedAt { get; set; }
+
+        public int CopyCount { get; set; } = 1;
     }
 
     private sealed class Record

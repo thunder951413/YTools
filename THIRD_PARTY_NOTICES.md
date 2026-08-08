@@ -26,6 +26,12 @@ YTools Windows 版使用以下第三方组件与数据。本仓库的 YTools 代
 - 许可证：Apache-2.0
 - 用途：汉字转拼音（无网、本地运行）。
 
+## WebDAVClient
+
+- 作者：Sagui Itay（https://github.com/saguiitay/WebDAVClient）
+- 许可证：MIT
+- 用途：仅在用户明确启用坚果云剪贴板同步后访问固定的 WebDAV 端点。
+
 ## Everything SDK（可选，运行时探测）
 
 - 来源：https://www.voidtools.com/
