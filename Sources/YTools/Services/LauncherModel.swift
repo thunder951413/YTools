@@ -120,6 +120,14 @@ final class LauncherModel: ObservableObject {
             .sink { [weak self] _ in self?.schedulePreviewUpdate() }
             .store(in: &cancellables)
         Task { [searchCoordinator] in await searchCoordinator.prepare() }
+
+        // Restore the previous session's query so the panel opens with it
+        // pre-selected (the controller selects the field text on show):
+        // typing replaces it and doing nothing re-runs the search.
+        let lastQuery = preferences.lastLauncherQuery
+        if !lastQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            query = lastQuery
+        }
     }
 
     private func queryDidChange() {
@@ -498,6 +506,11 @@ final class LauncherModel: ObservableObject {
         guard !query.isEmpty else { return false }
         query = ""
         return true
+    }
+
+    /// Persists the current query so the next launch restores it.
+    func persistLastQuery() {
+        preferences.lastLauncherQuery = String(query.prefix(512))
     }
 
     var selectedLargeTypeText: String? {

@@ -100,6 +100,7 @@ public sealed class MainController
     {
         _preferences.HotKeysChanged -= ConfigureHotKeys;
         _snippets?.FlushPendingChanges();
+        _launcher?.PersistLastQuery();
         _launcher?.Dispose();
         _clipboard?.Dispose();
         _tray?.Dispose();

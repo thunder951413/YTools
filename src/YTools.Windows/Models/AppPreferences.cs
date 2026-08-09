@@ -44,6 +44,7 @@ public sealed class AppPreferences : ObservableObject
     private FileNavigationSort _fileNavigationSort = FileNavigationSort.Name;
     private bool _fileNavigationSortAscending = true;
     private bool _fileNavigationFoldersFirst = true;
+    private string _lastLauncherQuery = "";
     private bool _clipboardEnabled = true;
     private bool _clipboardPaused;
     private int _clipboardRetentionDays = 7;
@@ -296,6 +297,18 @@ public sealed class AppPreferences : ObservableObject
         set
         {
             if (SetField(ref _resultExpansionDuration, Math.Clamp(value, 0, 0.4)))
+            {
+                Save();
+            }
+        }
+    }
+
+    public string LastLauncherQuery
+    {
+        get => _lastLauncherQuery;
+        set
+        {
+            if (SetField(ref _lastLauncherQuery, value))
             {
                 Save();
             }
@@ -924,6 +937,7 @@ public sealed class AppPreferences : ObservableObject
             _searchInputDelay = Math.Clamp(data.SearchInputDelay ?? 0.15, 0.05, 0.4);
             _previewSelectionDelay = Math.Clamp(data.PreviewSelectionDelay ?? 0.3, 0, 0.8);
             _resultExpansionDuration = Math.Clamp(data.ResultExpansionDuration ?? 0.15, 0, 0.4);
+            _lastLauncherQuery = data.LastLauncherQuery ?? "";
             _enabledSearchContentTypes = data.EnabledSearchContentTypes is { Count: > 0 }
                 ? data.EnabledSearchContentTypes.ToHashSet()
                 : AllContentTypes();
@@ -1025,6 +1039,7 @@ public sealed class AppPreferences : ObservableObject
                 SearchInputDelay = _searchInputDelay,
                 PreviewSelectionDelay = _previewSelectionDelay,
                 ResultExpansionDuration = _resultExpansionDuration,
+                LastLauncherQuery = _lastLauncherQuery,
                 EnabledSearchContentTypes = _enabledSearchContentTypes.ToList(),
                 EnabledSystemCommands = _enabledSystemCommands.ToList(),
                 SystemCommandKeywords = _systemCommandKeywords.ToDictionary(
@@ -1234,6 +1249,8 @@ public sealed class AppPreferences : ObservableObject
         public double? PreviewSelectionDelay { get; set; }
 
         public double? ResultExpansionDuration { get; set; }
+
+        public string? LastLauncherQuery { get; set; }
 
         public List<SearchContentType>? EnabledSearchContentTypes { get; set; }
 

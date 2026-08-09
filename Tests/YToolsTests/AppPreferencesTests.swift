@@ -56,6 +56,17 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertTrue(preferences.customApplicationPaths.isEmpty)
     }
 
+    func testLastLauncherQueryPersistsAcrossReload() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let preferences = AppPreferences(defaults: fixture.defaults, launchAtLoginService: StubLaunchAtLoginService())
+
+        preferences.lastLauncherQuery = "微信"
+        let reloaded = AppPreferences(defaults: fixture.defaults, launchAtLoginService: StubLaunchAtLoginService())
+
+        XCTAssertEqual(reloaded.lastLauncherQuery, "微信")
+    }
+
     private func makeFixture() throws -> Fixture {
         let suiteName = "com.ytools.tests.preferences.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

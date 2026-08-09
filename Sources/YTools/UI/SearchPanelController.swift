@@ -115,6 +115,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         cancellables.removeAll()
+        launcher.persistLastQuery()
         launcher.shutdown()
         clipboard.shutdown()
     }
@@ -159,11 +160,13 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             preferences.keyboardInputSourceError = "所选输入源当前不可用，已保留系统当前输入源。"
         }
         window.makeKeyAndOrderFront(nil)
+        selectAllInSearchField()
     }
 
     func hide() {
         shiftPreviewTimer?.invalidate()
         launcher.endPreviewSession()
+        launcher.persistLastQuery()
         window?.orderOut(nil)
     }
 
@@ -340,6 +343,33 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
               let textView = window?.firstResponder as? NSTextView else { return false }
         textView.selectAll(nil)
         return true
+    }
+
+    /// Selects the launcher search field's text on show so a fresh keystroke
+    /// replaces the previous query while leaving it visible otherwise.
+    /// `NSTextField.selectText` makes the field first responder and selects
+    /// its content in one call, independent of SwiftUI's focus timing. If the
+    /// hosted field has not been laid out yet, retry on the next runloop turn.
+    private func selectAllInSearchField() {
+        guard state.mode == .launcher, let window else { return }
+        if let field = searchTextField(in: window) {
+            field.selectText(nil)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.selectAllInSearchField()
+            }
+        }
+    }
+
+    private func searchTextField(in window: NSWindow) -> NSTextField? {
+        var queue: [NSView] = window.contentView.map { [$0] } ?? []
+        while let view = queue.popLast() {
+            if let field = view as? NSTextField, field.isEditable {
+                return field
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
     }
 
     private func execute(_ command: PanelCommand) -> Bool {

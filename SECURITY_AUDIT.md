@@ -26,7 +26,7 @@ YTools 两端默认都是离线原生应用：不包含 Shell 执行、动态模
 
 | 数据 | 位置 | 保护 |
 |---|---|---|
-| 偏好 | `%APPDATA%\YTools\settings.json` | 明文 JSON（无敏感内容），ACL 收紧 |
+| 偏好 | Windows：`%APPDATA%\YTools\settings.json`；macOS：`~/Library/Preferences/com.ztools.native.plist` | 明文（含最近一次启动器查询文本，仅存于本机、无网络/Shell 使用），ACL 收紧 |
 | 密钥 | `%APPDATA%\YTools\secure-key.bin` | DPAPI CurrentUser 加密的 32 字节随机密钥 |
 | 剪贴板历史 | `%APPDATA%\YTools\vault\clipboard-vault-v2\` | AES-256-GCM，清单/记录/缩略图分别加密 |
 | 坚果云凭据与同步状态 | `%APPDATA%\YTools\vault\clipboard-cloud-*.v1.enc` | AES-256-GCM，随机本机密钥由 DPAPI CurrentUser 保护 |

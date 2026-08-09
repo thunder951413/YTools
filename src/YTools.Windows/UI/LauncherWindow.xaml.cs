@@ -77,6 +77,7 @@ public partial class LauncherWindow : Window
     {
         _shiftPreviewTimer?.Stop();
         _model?.EndMomentaryPreview();
+        _model?.PersistLastQuery();
         Hide();
     }
 

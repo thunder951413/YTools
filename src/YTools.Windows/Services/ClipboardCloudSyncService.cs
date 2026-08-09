@@ -203,7 +203,7 @@ public sealed class ClipboardCloudSyncService : IDisposable
         {
             await client.CreateDir(parent, name, cancellationToken: cancellationToken);
         }
-        catch (WebDAVException)
+        catch (Exception)
         {
             // MKCOL is intentionally attempted only during setup. Existing
             // folders are the normal result on every subsequent app launch.

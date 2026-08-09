@@ -12,7 +12,7 @@
     <RootNamespace>YTools</RootNamespace>
     <ApplicationIcon>Resources\AppIcon.ico</ApplicationIcon>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <Product>YTools</Product>
     <Description>Windows 原生启动器与本地效率工具</Description>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>

@@ -255,6 +255,7 @@ final class AppPreferences: ObservableObject {
     @Published var resultExpansionDuration: Double {
         didSet { defaults.set(resultExpansionDuration, forKey: Keys.resultExpansionDuration) }
     }
+    @Published var lastLauncherQuery: String { didSet { defaults.set(lastLauncherQuery, forKey: Keys.lastLauncherQuery) } }
     @Published var enabledSearchContentTypes: Set<SearchContentType> {
         didSet {
             defaults.set(
@@ -350,6 +351,7 @@ final class AppPreferences: ObservableObject {
             max(defaults.object(forKey: Keys.resultExpansionDuration) as? Double ?? 0.15, 0),
             0.4
         )
+        self.lastLauncherQuery = defaults.string(forKey: Keys.lastLauncherQuery) ?? ""
         if defaults.object(forKey: Keys.enabledSearchContentTypes) == nil {
             self.enabledSearchContentTypes = Set(SearchContentType.allCases)
         } else {
@@ -724,6 +726,7 @@ final class AppPreferences: ObservableObject {
         static let searchInputDelay = "preferences.search.inputDelay"
         static let previewSelectionDelay = "preferences.appearance.previewSelectionDelay"
         static let resultExpansionDuration = "preferences.appearance.resultExpansionDuration"
+        static let lastLauncherQuery = "preferences.launcher.lastQuery"
         static let enabledSearchContentTypes = "preferences.search.enabledContentTypes"
         static let enabledSystemCommands = "preferences.systemCommands.enabled"
         static let systemCommandKeywords = "preferences.systemCommands.keywords"

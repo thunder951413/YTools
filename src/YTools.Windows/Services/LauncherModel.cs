@@ -82,6 +82,15 @@ public sealed class LauncherModel : ObservableObject
         };
         _ = _searchCoordinator.PrepareAsync();
         _ = _dictionary.WarmAsync();
+
+        // Restore the previous session's query so the panel opens with it
+        // pre-selected (ShowLauncher selects all text): typing replaces it and
+        // doing nothing re-runs the search and shows the previous results.
+        var lastQuery = _preferences.LastLauncherQuery;
+        if (!string.IsNullOrWhiteSpace(lastQuery))
+        {
+            Query = lastQuery;
+        }
     }
 
     public string Query
@@ -462,6 +471,18 @@ public sealed class LauncherModel : ObservableObject
 
         Query = "";
         return true;
+    }
+
+    /// <summary>Persists the current query so the next launch restores it.</summary>
+    public void PersistLastQuery()
+    {
+        var query = _query;
+        if (query.Length > 512)
+        {
+            query = query[..512];
+        }
+
+        _preferences.LastLauncherQuery = query;
     }
 
     public string? SelectedLargeTypeText
