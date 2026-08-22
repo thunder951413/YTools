@@ -70,6 +70,10 @@ public abstract record ResultAction
 
     public sealed record Navigate(string Path) : ResultAction;
 
+    /// <summary>Replaces the launcher query with the given text (calculator
+    /// continuation). Purely a UI edit; never interpreted as a path or command.</summary>
+    public sealed record EditQuery(string Text) : ResultAction;
+
     public sealed record HideApplication(string ProcessName) : ResultAction;
 
     public sealed record QuitApplication(string ProcessName) : ResultAction;
@@ -226,6 +230,8 @@ public sealed class ModuleResultPolicy
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
                     && navigate.Path.Length <= 4_096
                     && (Path.IsPathRooted(navigate.Path) || navigate.Path.StartsWith("~", StringComparison.Ordinal));
+            case ResultAction.EditQuery editQuery:
+                return editQuery.Text.Length <= 1_000;
             case ResultAction.HideApplication hide:
                 return AllowsPrivilegedActions && !string.IsNullOrEmpty(hide.ProcessName) && hide.ProcessName.Length <= 255;
             case ResultAction.QuitApplication quit:

@@ -100,7 +100,7 @@ public sealed class DictionaryService
             AddMatches(index.ByPinyin.TryGetValue(term, out var pinyinMatches) ? pinyinMatches : []);
             if (results.Count < limit)
             {
-                AddMatches(SearchEnglish(index, term));
+                AddMatches(PrefixMatches(index.SortedEnglish, term));
             }
         }
         else
@@ -108,7 +108,7 @@ public sealed class DictionaryService
             AddMatches(index.BySimplified.TryGetValue(term, out var simplified) ? simplified : []);
             if (results.Count < limit)
             {
-                AddMatches(SearchChinesePrefix(index, term));
+                AddMatches(PrefixMatches(index.SortedSimplified, term));
             }
         }
 
@@ -120,41 +120,42 @@ public sealed class DictionaryService
         return character >= 0x4E00 && character <= 0x9FFF;
     }
 
-    private static IEnumerable<DictionaryEntry> SearchEnglish(DictionaryIndex index, string term)
+    /// <summary>
+    /// Prefix lookup over a sorted key range. All keys sharing the prefix are
+    /// contiguous under ordinal order, so a binary-search lower bound replaces
+    /// what used to be a full-index scan on every keystroke.
+    /// </summary>
+    private static IEnumerable<DictionaryEntry> PrefixMatches(
+        IReadOnlyList<KeyValuePair<string, List<DictionaryEntry>>> sorted,
+        string term)
     {
         var matches = new List<DictionaryEntry>();
-        foreach (var (word, entries) in index.English)
+        var low = 0;
+        var high = sorted.Count;
+        while (low < high)
         {
-            if (!word.StartsWith(term, StringComparison.Ordinal))
+            var mid = low + ((high - low) >> 1);
+            if (string.CompareOrdinal(sorted[mid].Key, term) < 0)
             {
-                continue;
+                low = mid + 1;
             }
-
-            foreach (var entry in entries)
+            else
             {
-                matches.Add(entry);
-                if (matches.Count >= 20)
-                {
-                    return matches;
-                }
+                high = mid;
             }
         }
 
-        return matches;
-    }
-
-    private static IEnumerable<DictionaryEntry> SearchChinesePrefix(DictionaryIndex index, string term)
-    {
-        var matches = new List<DictionaryEntry>();
-        foreach (var (key, entries) in index.BySimplified)
+        for (var i = low; i < sorted.Count; i++)
         {
-            if (key.Length >= term.Length && key.StartsWith(term, StringComparison.Ordinal))
+            if (!sorted[i].Key.StartsWith(term, StringComparison.Ordinal))
             {
-                matches.AddRange(entries);
-                if (matches.Count >= 20)
-                {
-                    break;
-                }
+                break;
+            }
+
+            matches.AddRange(sorted[i].Value);
+            if (matches.Count >= 20)
+            {
+                break;
             }
         }
 
@@ -192,7 +193,21 @@ public sealed class DictionaryService
             }
         }
 
-        return new DictionaryIndex(bySimplified, byPinyin, english);
+        return new DictionaryIndex(
+            bySimplified,
+            byPinyin,
+            english,
+            SortedIndex(bySimplified),
+            SortedIndex(english));
+    }
+
+    private static IReadOnlyList<KeyValuePair<string, List<DictionaryEntry>>> SortedIndex(
+        Dictionary<string, List<DictionaryEntry>> index)
+    {
+        return index
+            .ToList()
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .ToList();
     }
 
     private static DictionaryEntry? ParseLine(string line)
@@ -280,5 +295,7 @@ public sealed class DictionaryService
     private sealed record DictionaryIndex(
         IReadOnlyDictionary<string, List<DictionaryEntry>> BySimplified,
         IReadOnlyDictionary<string, List<DictionaryEntry>> ByPinyin,
-        IReadOnlyDictionary<string, List<DictionaryEntry>> English);
+        IReadOnlyDictionary<string, List<DictionaryEntry>> English,
+        IReadOnlyList<KeyValuePair<string, List<DictionaryEntry>>> SortedSimplified,
+        IReadOnlyList<KeyValuePair<string, List<DictionaryEntry>>> SortedEnglish);
 }

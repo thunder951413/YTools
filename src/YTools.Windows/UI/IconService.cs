@@ -160,10 +160,12 @@ public static class IconService
                     ?? ExtractShellItemIconSource(shellPath);
                 if (source is null)
                 {
+                    TrimCaches();
                     UnavailableIconKeys.TryAdd(cacheKey, 0);
                     return;
                 }
 
+                TrimCaches();
                 IconCache[cacheKey] = source;
                 Application.Current?.Dispatcher.BeginInvoke(() => IconAvailable?.Invoke(null, EventArgs.Empty));
             }
@@ -442,6 +444,23 @@ public static class IconService
     {
         IconCache.Clear();
         PendingIconKeys.Clear();
+        UnavailableIconKeys.Clear();
+    }
+
+    /// <summary>
+    /// The icon caches are process-lifetime by design; keep them bounded by
+    /// dropping everything once they grow past a generous ceiling. A purge only
+    /// costs re-extraction on the next request, never correctness.
+    /// </summary>
+    private static void TrimCaches()
+    {
+        const int maximumEntries = 1_024;
+        if (IconCache.Count <= maximumEntries && UnavailableIconKeys.Count <= maximumEntries)
+        {
+            return;
+        }
+
+        IconCache.Clear();
         UnavailableIconKeys.Clear();
     }
 

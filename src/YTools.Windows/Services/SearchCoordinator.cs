@@ -19,9 +19,6 @@ public sealed record BackgroundSearchRequest(
     IReadOnlySet<SearchContentType> EnabledContentTypes,
     IReadOnlyDictionary<string, string> ApplicationAliases,
     IReadOnlyList<string> CustomApplicationPaths,
-    IReadOnlyList<string> SearchScopePaths,
-    int MaximumSearchResults,
-    bool IncludeFilesInDefaultResults,
     IReadOnlyList<RegisteredSearchModule> RequestModules,
     CancellationToken CancellationToken);
 

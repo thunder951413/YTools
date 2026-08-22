@@ -116,15 +116,12 @@ public sealed class RecentDocumentsSearchModule : IYToolsModule
         }
 
         var term = trimmed[prefix.Length..].Trim();
+        // Existence is validated when loading, when recording and again at open
+        // time — not on every keystroke of the search path.
         var results = _items
             .Select((item, index) => (item, index))
             .Where(pair =>
             {
-                if (!File.Exists(pair.item.Path))
-                {
-                    return false;
-                }
-
                 var name = Path.GetFileName(pair.item.Path);
                 return string.IsNullOrEmpty(term)
                     || name.Contains(term, StringComparison.OrdinalIgnoreCase)

@@ -55,6 +55,7 @@ public sealed class AppPreferences : ObservableObject
     private bool _clipboardCloudSyncEnabled;
     private string _clipboardCloudSyncFolder = "YTools/clipboard-sync";
     private int _clipboardCloudSyncIntervalMinutes = 15;
+    private bool _suppressSave;
     private string? _hotKeyError;
     private string? _launchAtLoginError;
 
@@ -840,43 +841,57 @@ public sealed class AppPreferences : ObservableObject
 
     public void RestoreDefaults()
     {
-        LaunchAtLogin = false;
-        LauncherHotKey = HotKeyDefinition.LauncherDefault;
-        ClipboardHotKey = HotKeyDefinition.ClipboardDefault;
-        Theme = AppTheme.System;
-        AccentColor = AppAccentColor.Blue;
-        LauncherAppearanceStyle = LauncherAppearanceStyle.Minimal;
-        PanelPosition = PanelPosition.Upper;
-        ScreenPreference = ScreenPreference.Main;
-        ForcedKeyboardInputSourceID = "";
-        ShowTrayIcon = true;
-        CompactResults = false;
-        PanelWidth = 720;
-        PanelCornerRadius = 14;
-        ShowSubtitles = true;
-        ShowNumberShortcuts = true;
-        SearchInputDelay = 0.15;
-        PreviewSelectionDelay = 0.3;
-        ResultExpansionDuration = 0.15;
-        EnabledSearchContentTypes = AllContentTypes();
-        RestoreSystemCommandDefaults();
-        IncludeFilesInDefaultResults = true;
-        IncludeAutomaticDictionary = true;
-        MaximumSearchResults = 8;
-        SearchScopePaths = [];
-        ApplicationAliases = new Dictionary<string, string>();
-        CustomApplicationPaths = [];
-        FileNavigationShowsHiddenFiles = false;
-        FileNavigationSort = FileNavigationSort.Name;
-        FileNavigationSortAscending = true;
-        FileNavigationFoldersFirst = true;
-        ClipboardEnabled = true;
-        ClipboardPaused = false;
-        ClipboardRetentionDays = 7;
-        ClipboardMaximumItems = 300;
-        ClipboardMaximumTextCharacters = 1_000;
-        ClipboardStoreImages = false;
-        ClipboardIgnoredProcessNames = [];
+        // One write at the end instead of one per property.
+        _suppressSave = true;
+        try
+        {
+            LaunchAtLogin = false;
+            LauncherHotKey = HotKeyDefinition.LauncherDefault;
+            ClipboardHotKey = HotKeyDefinition.ClipboardDefault;
+            Theme = AppTheme.System;
+            AccentColor = AppAccentColor.Blue;
+            LauncherAppearanceStyle = LauncherAppearanceStyle.Minimal;
+            PanelPosition = PanelPosition.Upper;
+            ScreenPreference = ScreenPreference.Main;
+            ForcedKeyboardInputSourceID = "";
+            ShowTrayIcon = true;
+            CompactResults = false;
+            PanelWidth = 720;
+            PanelCornerRadius = 14;
+            ShowSubtitles = true;
+            ShowNumberShortcuts = true;
+            SearchInputDelay = 0.15;
+            PreviewSelectionDelay = 0.3;
+            ResultExpansionDuration = 0.15;
+            EnabledSearchContentTypes = AllContentTypes();
+            RestoreSystemCommandDefaults();
+            IncludeFilesInDefaultResults = true;
+            IncludeAutomaticDictionary = true;
+            MaximumSearchResults = 8;
+            SearchScopePaths = [];
+            ApplicationAliases = new Dictionary<string, string>();
+            CustomApplicationPaths = [];
+            FileNavigationShowsHiddenFiles = false;
+            FileNavigationSort = FileNavigationSort.Name;
+            FileNavigationSortAscending = true;
+            FileNavigationFoldersFirst = true;
+            ClipboardEnabled = true;
+            ClipboardPaused = false;
+            ClipboardRetentionDays = 7;
+            ClipboardMaximumItems = 300;
+            ClipboardMaximumTextCharacters = 1_000;
+            ClipboardStoreImages = false;
+            ClipboardIgnoredProcessNames = [];
+            ClipboardCloudSyncEnabled = false;
+            ClipboardCloudSyncFolder = "YTools/clipboard-sync";
+            ClipboardCloudSyncIntervalMinutes = 15;
+        }
+        finally
+        {
+            _suppressSave = false;
+        }
+
+        Save();
     }
 
     private void NotifyHotKeyChange()
@@ -1014,6 +1029,11 @@ public sealed class AppPreferences : ObservableObject
 
     private void Save()
     {
+        if (_suppressSave)
+        {
+            return;
+        }
+
         try
         {
             var data = new PreferencesData

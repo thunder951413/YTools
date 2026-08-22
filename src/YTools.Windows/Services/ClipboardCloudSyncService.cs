@@ -24,6 +24,7 @@ public sealed class ClipboardCloudSyncService : IDisposable
     private readonly SecureCodableStore _credentialStore = new("clipboard-cloud-credentials");
     private readonly SecureCodableStore _stateStore = new("clipboard-cloud-state");
     private readonly SemaphoreSlim _syncGate = new(1, 1);
+    private readonly object _stateLock = new();
     private ClipboardCloudState _state;
     private System.Threading.Timer? _pullTimer;
     private string? _createdRemoteRoot;
@@ -81,7 +82,11 @@ public sealed class ClipboardCloudSyncService : IDisposable
             return Task.CompletedTask;
         }
 
-        Enqueue(ClipboardCloudEvent.Upsert(NextSequence(), _state.DeviceId, item));
+        lock (_stateLock)
+        {
+            EnqueueLocked(ClipboardCloudEvent.Upsert(NextSequenceLocked(), _state.DeviceId, item));
+        }
+
         return SynchronizeAsync([], completed, pullRemote: false);
     }
 
@@ -99,7 +104,11 @@ public sealed class ClipboardCloudSyncService : IDisposable
             return Task.CompletedTask;
         }
 
-        Enqueue(ClipboardCloudEvent.Delete(NextSequence(), _state.DeviceId, list, DateTimeOffset.UtcNow));
+        lock (_stateLock)
+        {
+            EnqueueLocked(ClipboardCloudEvent.Delete(NextSequenceLocked(), _state.DeviceId, list, DateTimeOffset.UtcNow));
+        }
+
         return SynchronizeAsync([], completed, pullRemote: false);
     }
 
@@ -212,12 +221,21 @@ public sealed class ClipboardCloudSyncService : IDisposable
 
     private async Task PublishPendingAsync(IClient client, RemoteFolders folders, string syncPassphrase, CancellationToken cancellationToken)
     {
-        if (_state.Pending.Count == 0)
+        // Snapshot the pending batch up front. Events enqueued while this batch
+        // uploads stay in Pending with higher sequences and go out next round;
+        // the head therefore only ever advertises sequences that exist remotely.
+        List<ClipboardCloudEvent> batch;
+        lock (_stateLock)
         {
-            return;
+            if (_state.Pending.Count == 0)
+            {
+                return;
+            }
+
+            batch = _state.Pending.OrderBy(item => item.Sequence).ToList();
         }
 
-        foreach (var entry in _state.Pending.OrderBy(item => item.Sequence))
+        foreach (var entry in batch)
         {
             var clear = JsonSerializer.SerializeToUtf8Bytes(entry);
             if (clear.Length > MaximumEventBytes)
@@ -230,13 +248,19 @@ public sealed class ClipboardCloudSyncService : IDisposable
             await client.Upload(folders.DeviceEvents, stream, EventName(entry.Sequence), cancellationToken: cancellationToken);
         }
 
-        var latest = _state.Pending.Max(item => item.Sequence);
+        var latest = batch.Max(item => item.Sequence);
         var head = JsonSerializer.SerializeToUtf8Bytes(new ClipboardCloudHead(2, _state.DeviceId, latest, DateTimeOffset.UtcNow));
         using var streamHead = new MemoryStream(head, writable: false);
         await client.Upload(folders.Heads, streamHead, HeadName(_state.DeviceId), cancellationToken: cancellationToken);
-        _state.KnownSequences[_state.DeviceId] = latest;
-        _state.Pending.Clear();
-        SaveState();
+        lock (_stateLock)
+        {
+            var uploaded = batch.Select(item => item.Sequence).ToHashSet();
+            _state.Pending.RemoveAll(item => uploaded.Contains(item.Sequence));
+            _state.KnownSequences[_state.DeviceId] = Math.Max(
+                _state.KnownSequences.TryGetValue(_state.DeviceId, out var known) ? known : 0,
+                latest);
+            SaveState();
+        }
     }
 
     private async Task<IReadOnlyList<ClipboardCloudEvent>> PullChangedEventsAsync(
@@ -255,7 +279,12 @@ public sealed class ClipboardCloudSyncService : IDisposable
                 throw new InvalidDataException("坚果云同步标记格式不正确。");
             }
 
-            var known = _state.KnownSequences.TryGetValue(head.DeviceId, out var sequence) ? sequence : 0;
+            long known;
+            lock (_stateLock)
+            {
+                known = _state.KnownSequences.TryGetValue(head.DeviceId, out var sequence) ? sequence : 0;
+            }
+
             if (head.LastSequence <= known)
             {
                 continue;
@@ -283,12 +312,15 @@ public sealed class ClipboardCloudSyncService : IDisposable
                 events.Add(entry);
             }
 
-            _state.KnownSequences[head.DeviceId] = head.LastSequence;
-        }
-
-        if (events.Count > 0)
-        {
-            SaveState();
+            lock (_stateLock)
+            {
+                if (!_state.KnownSequences.TryGetValue(head.DeviceId, out var current)
+                    || current < head.LastSequence)
+                {
+                    _state.KnownSequences[head.DeviceId] = head.LastSequence;
+                    SaveState();
+                }
+            }
         }
 
         return events;
@@ -335,8 +367,18 @@ public sealed class ClipboardCloudSyncService : IDisposable
             var item = entry.Item.ToItem();
             if (!tombstones.TryGetValue(item.Id, out var deletedAt) || item.EffectiveUpdatedAt > deletedAt)
             {
-                if (!items.TryGetValue(item.Id, out var previous) || item.EffectiveUpdatedAt > previous.EffectiveUpdatedAt)
+                if (!items.TryGetValue(item.Id, out var previous)
+                    || item.EffectiveUpdatedAt > previous.EffectiveUpdatedAt)
                 {
+                    // An upsert published without image bytes must not erase the
+                    // receiver's stored copy of the same content.
+                    if (item.BinaryData is null
+                        && previous is { } kept
+                        && string.Equals(kept.ContentHash, item.ContentHash, StringComparison.Ordinal))
+                    {
+                        item = item with { BinaryData = kept.BinaryData };
+                    }
+
                     items[item.Id] = item;
                 }
             }
@@ -348,14 +390,14 @@ public sealed class ClipboardCloudSyncService : IDisposable
             .ToList();
     }
 
-    private long NextSequence()
+    private long NextSequenceLocked()
     {
         var result = _state.NextSequence;
         _state.NextSequence += 1;
         return result;
     }
 
-    private void Enqueue(ClipboardCloudEvent entry)
+    private void EnqueueLocked(ClipboardCloudEvent entry)
     {
         _state.Pending.Add(entry);
         SaveState();

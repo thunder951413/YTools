@@ -14,6 +14,7 @@ public sealed class TrayIconService : IDisposable
     private readonly System.Windows.Forms.NotifyIcon _notifyIcon = new();
     private readonly AppPreferences _preferences;
     private readonly System.Windows.Forms.ContextMenuStrip _menu;
+    private readonly System.ComponentModel.PropertyChangedEventHandler _preferenceChanged;
     private System.Windows.Forms.ToolStripMenuItem? _pauseItem;
     private System.Windows.Forms.ToolStripMenuItem? _launcherItem;
     private System.Windows.Forms.ToolStripMenuItem? _clipboardItem;
@@ -72,13 +73,14 @@ public sealed class TrayIconService : IDisposable
         ThemeService.ThemeApplied += ApplyTheme;
         ApplyTheme();
         UpdateVisibility();
-        _preferences.PropertyChanged += (_, args) =>
+        _preferenceChanged = (_, args) =>
         {
             if (args.PropertyName == nameof(AppPreferences.ShowTrayIcon))
             {
                 Application.Current.Dispatcher.Invoke(UpdateVisibility);
             }
         };
+        _preferences.PropertyChanged += _preferenceChanged;
     }
 
     public event Action? ShowLauncherRequested;
@@ -104,9 +106,11 @@ public sealed class TrayIconService : IDisposable
 
     public void Dispose()
     {
+        _preferences.PropertyChanged -= _preferenceChanged;
         ThemeService.ThemeApplied -= ApplyTheme;
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _menu.Dispose();
     }
 
     private void UpdateVisibility()

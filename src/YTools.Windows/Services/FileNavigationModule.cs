@@ -67,6 +67,9 @@ public sealed class FileNavigationModule
             return [];
         }
 
+        // Bound the candidate scan: huge roots (C:\, network shares) must not
+        // materialize hundreds of thousands of entries just to show forty.
+        const int maximumCandidates = 4_000;
         var matched = new List<(FileSystemInfo Info, bool IsDirectory, DateTime Created, DateTime Modified)>();
         foreach (var info in entries)
         {
@@ -81,6 +84,10 @@ public sealed class FileNavigationModule
                 isDir,
                 info.CreationTime,
                 info.LastWriteTime));
+            if (matched.Count >= maximumCandidates)
+            {
+                break;
+            }
         }
 
         matched.Sort((left, right) =>

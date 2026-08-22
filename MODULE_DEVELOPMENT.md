@@ -37,6 +37,7 @@ public SearchCoordinator(SpellingService spelling, IReadOnlyList<IYToolsModule>?
 ## 能力与动作
 
 - 默认无权限：只能返回 `.copy(text)`、`.none` 或 `.openSettings`。
+- `editQuery(text)`（Windows：`ResultAction.EditQuery`）同样无需权限：只把启动器查询框替换为给定文本（如计算器 `=` 续算回填），≤1000 字符，永远不会被当作路径或命令。
 - 需要读本地文件：描述符声明 `LocalFileRead`，并在注册时用 `ModuleResultPolicy(allowedCapabilities: ...)` 授予；动作只能是本机绝对路径的 `open`/`reveal`/`navigate`。
 - 特权系统动作（回收站、屏保、关显示器、系统设置）只有内置模块通过 `allowsPrivilegedActions: true` 获得。
 - 主程序不授予 `ClipboardRead`/`ContactsRead`/`CalendarRead`（Windows 版当前无对应系统服务）。

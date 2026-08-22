@@ -29,12 +29,20 @@ public partial class SettingsWindow : Window
     private readonly ObservableCollection<SnippetItem> _snippetItems = [];
     private HotKeyRecorder? _launcherRecorder;
     private HotKeyRecorder? _clipboardRecorder;
+    private System.ComponentModel.PropertyChangedEventHandler? _preferenceChanged;
 
     public SettingsWindow()
     {
         InitializeComponent();
         ThemeService.ThemeApplied += OnThemeApplied;
-        Closed += (_, _) => ThemeService.ThemeApplied -= OnThemeApplied;
+        Closed += (_, _) =>
+        {
+            ThemeService.ThemeApplied -= OnThemeApplied;
+            if (_preferences is { } preferences && _preferenceChanged is { } handler)
+            {
+                preferences.PropertyChanged -= handler;
+            }
+        };
         NavList.SelectionChanged += (_, _) =>
         {
             if (NavList.SelectedItem is NavItem item && _pages.TryGetValue(item, out var page))
@@ -79,13 +87,21 @@ public partial class SettingsWindow : Window
         RefreshSnippets();
         _launcherRecorder?.Bind(preferences.LauncherHotKey);
         _clipboardRecorder?.Bind(preferences.ClipboardHotKey);
-        preferences.PropertyChanged += (_, args) =>
+        if (_preferenceChanged is null)
         {
-            if (args.PropertyName is nameof(AppPreferences.Theme))
+            // The window is created fresh for every open, but AppPreferences
+            // outlives it; without this unsubscribe-on-close the closed window
+            // would leak through the event root.
+            _preferenceChanged = (_, args) =>
             {
-                ApplyDarkTitleBar();
-            }
-        };
+                if (args.PropertyName is nameof(AppPreferences.Theme))
+                {
+                    ApplyDarkTitleBar();
+                }
+            };
+            preferences.PropertyChanged += _preferenceChanged;
+        }
+
         BuildPages();
         SelectFirstTab();
     }
@@ -178,7 +194,19 @@ public partial class SettingsWindow : Window
         launchError.SetResourceReference(TextBlock.ForegroundProperty, "ErrorBrush");
         launchError.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(AppPreferences.LaunchAtLoginError)));
         stack.Children.Add(launchError);
-        var restore = Button("恢复默认设置", () => _preferences?.RestoreDefaults());
+        var restore = Button("恢复默认设置", () =>
+        {
+            var confirmation = MessageBox.Show(
+                this,
+                "将所有设置恢复为默认值？\n\n已保存的剪贴板、片段等数据不会删除；坚果云同步会被停用（凭据保留）。",
+                "恢复默认设置",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question);
+            if (confirmation == MessageBoxResult.OK)
+            {
+                _preferences?.RestoreDefaults();
+            }
+        });
         stack.Children.Add(restore);
         page.Content = Scroll(stack);
         return page;
@@ -205,6 +233,16 @@ public partial class SettingsWindow : Window
 
         stack.Children.Add(panel);
         stack.Children.Add(CheckBox("默认结果包含文件", "IncludeFilesInDefaultResults", "关闭后仅输入 open/打开 等前缀时返回文件"));
+        stack.Children.Add(SubHeader("文件导航"));
+        stack.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("HintText"),
+            Text = "以 /、~ 或盘符开头浏览目录时的显示与排序。"
+        });
+        stack.Children.Add(CheckBox("显示隐藏文件", "FileNavigationShowsHiddenFiles", "在文件导航结果中包含隐藏文件"));
+        stack.Children.Add(ComboRow("排序方式", "FileNavigationSort", EnumMetadata.FileNavigationSortOptions()));
+        stack.Children.Add(CheckBox("升序排列", "FileNavigationSortAscending", "按所选方式升序排列，关闭则降序"));
+        stack.Children.Add(CheckBox("文件夹优先", "FileNavigationFoldersFirst", "文件夹始终排在文件前面"));
         stack.Children.Add(SliderRow("最大结果数", "MaximumSearchResults", 3, 20, 1));
         stack.Children.Add(SliderRow(
             "输入停止后搜索",
@@ -1222,6 +1260,13 @@ internal static class EnumMetadata
     public static IReadOnlyList<SettingsWindow.EnumOption> ScreenOptions()
     {
         return Enum.GetValues<ScreenPreference>()
+            .Select(value => new SettingsWindow.EnumOption(value.Title(), value))
+            .ToList();
+    }
+
+    public static IReadOnlyList<SettingsWindow.EnumOption> FileNavigationSortOptions()
+    {
+        return Enum.GetValues<FileNavigationSort>()
             .Select(value => new SettingsWindow.EnumOption(value.Title(), value))
             .ToList();
     }

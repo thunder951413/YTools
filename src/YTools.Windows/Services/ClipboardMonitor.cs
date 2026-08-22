@@ -35,7 +35,15 @@ public sealed class ClipboardMonitor : IDisposable
 
     private void OnClipboardUpdated()
     {
-        _lastSequence = MessageWindowService.GetClipboardSequenceNumber();
+        var sequence = MessageWindowService.GetClipboardSequenceNumber();
+        if (sequence == _lastSequence)
+        {
+            // The polling fallback may already have observed this change; firing
+            // again would double-count the copy.
+            return;
+        }
+
+        _lastSequence = sequence;
         Changed?.Invoke();
     }
 

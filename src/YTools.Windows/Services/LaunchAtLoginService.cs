@@ -23,10 +23,18 @@ public static class LaunchAtLoginService
 
     public static void SetEnabled(bool enabled)
     {
+        var executablePath = Environment.ProcessPath;
+        if (enabled && string.IsNullOrEmpty(executablePath))
+        {
+            // A relative "YTools.exe" would resolve against the system working
+            // directory at logon and silently never start; surface it instead.
+            throw new InvalidOperationException("无法确定 YTools 可执行文件的完整路径。");
+        }
+
         using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath);
         if (enabled)
         {
-            key.SetValue(ValueName, ExecutablePath(), RegistryValueKind.String);
+            key.SetValue(ValueName, executablePath!, RegistryValueKind.String);
         }
         else
         {
@@ -36,7 +44,6 @@ public static class LaunchAtLoginService
 
     private static string ExecutablePath()
     {
-        var path = Environment.ProcessPath;
-        return string.IsNullOrEmpty(path) ? "YTools.exe" : path;
+        return Environment.ProcessPath ?? "YTools.exe";
     }
 }

@@ -607,9 +607,6 @@ public sealed class LauncherModel : ObservableObject
             _preferences.EnabledSearchContentTypes,
             _preferences.ApplicationAliases,
             _preferences.CustomApplicationPaths,
-            _preferences.SearchScopePaths,
-            _preferences.MaximumSearchResults,
-            _preferences.IncludeFilesInDefaultResults,
             MakeRequestModules(requestedQuery),
             cancellation.Token);
 
@@ -618,15 +615,36 @@ public sealed class LauncherModel : ObservableObject
                 cancellation.Token)
             .ContinueWith(task =>
             {
-                if (task.IsCompletedSuccessfully && Query == requestedQuery)
+                // A canceled generation is normally superseded by a newer one,
+                // which owns the pending flag; only reset when this is still
+                // the newest request.
+                var isNewestRequest = Query == requestedQuery && _searchCancellation == cancellation;
+                if (task.IsFaulted)
+                {
+                    if (isNewestRequest)
+                    {
+                        _backgroundResults = [];
+                        IsSearchPending = false;
+                        RebuildResults();
+                    }
+
+                    return;
+                }
+
+                if (task.IsCanceled)
+                {
+                    if (isNewestRequest)
+                    {
+                        IsSearchPending = false;
+                        RebuildResults();
+                    }
+
+                    return;
+                }
+
+                if (Query == requestedQuery)
                 {
                     _backgroundResults = task.Result.ToList();
-                    IsSearchPending = false;
-                    RebuildResults();
-                }
-                else if (task.IsFaulted && Query == requestedQuery)
-                {
-                    _backgroundResults = [];
                     IsSearchPending = false;
                     RebuildResults();
                 }
@@ -731,7 +749,7 @@ public sealed class LauncherModel : ObservableObject
     private IReadOnlyList<RegisteredSearchModule> MakeRequestModules(string query)
     {
         var clipboardText = SnippetSearchModule.Accepts(query)
-            ? (System.Windows.Clipboard.ContainsText() ? System.Windows.Clipboard.GetText() : "")
+            ? TryGetClipboardText()
             : "";
         return
         [
@@ -753,6 +771,20 @@ public sealed class LauncherModel : ObservableObject
                 SearchContentType.SystemTools,
                 new ModuleResultPolicy(allowsPrivilegedActions: true))
         ];
+    }
+
+    private static string TryGetClipboardText()
+    {
+        try
+        {
+            return System.Windows.Clipboard.ContainsText() ? System.Windows.Clipboard.GetText() : "";
+        }
+        catch
+        {
+            // Another process may hold the clipboard open; snippet expansion
+            // without {clipboard} is better than an unhandled exception.
+            return "";
+        }
     }
 
     private bool ActivateSelectedAction()

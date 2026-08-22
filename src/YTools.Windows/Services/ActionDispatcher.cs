@@ -79,6 +79,8 @@ public sealed class ActionDispatcher
                 break;
             case ResultAction.Navigate navigate:
                 return new ActionExecutionResult(ActionExecutionOutcome.Navigate, navigate.Path);
+            case ResultAction.EditQuery editQuery:
+                return new ActionExecutionResult(ActionExecutionOutcome.Navigate, editQuery.Text);
             case ResultAction.HideApplication hide:
                 HideApplication(hide.ProcessName);
                 break;

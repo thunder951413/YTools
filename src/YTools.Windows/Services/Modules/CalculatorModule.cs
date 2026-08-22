@@ -41,7 +41,7 @@ public sealed class CalculatorModule : IYToolsModule
                 shouldContinue ? $"{expression}  ·  回车回填并继续计算" : $"{expression}  ·  回车复制结果",
                 new ResultIcon.System("function"),
                 1_000,
-                shouldContinue ? new ResultAction.Navigate(result) : new ResultAction.Copy(result))
+                shouldContinue ? new ResultAction.EditQuery(result) : new ResultAction.Copy(result))
         ]);
     }
 }

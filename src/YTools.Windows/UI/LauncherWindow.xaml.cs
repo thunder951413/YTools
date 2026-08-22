@@ -26,6 +26,7 @@ public partial class LauncherWindow : Window
     private readonly PanelCommandRouter _router = new();
     private readonly DebouncedAction _positionSaveDebouncer = new();
     private DispatcherTimer? _shiftPreviewTimer;
+    private bool _iconRefreshPending;
     private LauncherModel? _model;
     private AppPreferences? _preferences;
     private bool _isApplyingPosition;
@@ -83,15 +84,24 @@ public partial class LauncherWindow : Window
 
     private void OnIconAvailable(object? sender, EventArgs e)
     {
-        if (!IsVisible)
+        if (!IsVisible || _iconRefreshPending)
         {
             return;
         }
 
         // Converters return a glyph immediately and request this refresh only after
-        // the shell icon has been decoded on a worker thread.
-        ResultsList.Items.Refresh();
-        ActionsList.Items.Refresh();
+        // the shell icon has been decoded on a worker thread. Coalesce bursts of
+        // icon completions into a single list refresh per dispatcher frame.
+        _iconRefreshPending = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            _iconRefreshPending = false;
+            if (IsVisible)
+            {
+                ResultsList.Items.Refresh();
+                ActionsList.Items.Refresh();
+            }
+        });
     }
 
     private void OnModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -164,6 +174,13 @@ public partial class LauncherWindow : Window
 
         if (e.Key is Key.LeftShift or Key.RightShift)
         {
+            // Auto-repeat while typing capitals must not restart the preview
+            // timer; only a fresh Shift press begins a long-press intent.
+            if (e.IsRepeat)
+            {
+                return;
+            }
+
             _shiftPreviewTimer?.Stop();
             _shiftPreviewTimer = new DispatcherTimer
             {
@@ -177,6 +194,9 @@ public partial class LauncherWindow : Window
             _shiftPreviewTimer.Start();
             return;
         }
+
+        // Typing anything cancels a pending long-press preview.
+        _shiftPreviewTimer?.Stop();
 
         if (ShouldIgnoreWhileComposing(e.Key))
         {

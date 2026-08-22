@@ -94,10 +94,12 @@ public sealed class FileSearchService : IDisposable
         var usedEverything = false;
         if (UsesEverything)
         {
+            // Embedded quotes would break the Everything query syntax.
+            var safeTerm = term.Replace("\"", "");
             var search = effectiveMode switch
             {
-                FileSearchMode.Content => $"content:\"{term}\"",
-                FileSearchMode.Tag => $"tag:{term}",
+                FileSearchMode.Content => $"content:\"{safeTerm}\"",
+                FileSearchMode.Tag => $"tag:{safeTerm}",
                 _ => term
             };
             if (_everything!.Query(search, Math.Max(30, maximumResults), out var everythingPaths, cancellationToken)
@@ -270,9 +272,11 @@ public sealed class FileSearchService : IDisposable
         {
             lock (_lock)
             {
-                if (_buildTask is null)
+                // A failed build must be retried on the next query, otherwise
+                // the fallback index stays empty for the rest of the session.
+                if (_buildTask is null || _buildTask.IsFaulted || _buildTask.IsCanceled)
                 {
-                    _buildTask = Task.Run(() => Build(cancellationToken), cancellationToken);
+                    _buildTask = Task.Run(() => Build(cancellationToken), CancellationToken.None);
                 }
             }
         }

@@ -75,12 +75,15 @@ public sealed class ApplicationIndexService
         lock (_lock)
         {
             StartWatchingIfNeeded();
-            UpdateCustomApplicationsLocked(customApplicationPaths);
             if (NeedsRefreshLocked())
             {
                 QueueRefreshLocked();
             }
         }
+
+        // .lnk resolution performs shell COM calls and disk probes; keep it out
+        // of every lock so watcher callbacks and searches never wait on it.
+        ApplyCustomApplications(customApplicationPaths);
 
         var term = query.Trim();
         if (string.IsNullOrEmpty(term))
@@ -139,7 +142,7 @@ public sealed class ApplicationIndexService
             .ToList();
     }
 
-    private void UpdateCustomApplicationsLocked(IReadOnlyList<string> customApplicationPaths)
+    private void ApplyCustomApplications(IReadOnlyList<string> customApplicationPaths)
     {
         var normalizedPaths = customApplicationPaths
             .Select(NormalizeCustomApplicationPath)
@@ -148,15 +151,27 @@ public sealed class ApplicationIndexService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        if (_customApplicationPaths.SequenceEqual(normalizedPaths, StringComparer.OrdinalIgnoreCase))
+        lock (_lock)
         {
-            return;
+            if (_customApplicationPaths.SequenceEqual(normalizedPaths, StringComparer.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _customApplicationPaths = normalizedPaths;
         }
 
-        _customApplicationPaths = normalizedPaths;
-        _customApplications = normalizedPaths
+        var entries = normalizedPaths
             .Select(CreateCustomApplicationEntry)
             .ToList();
+        lock (_lock)
+        {
+            // Publish only if the configured set did not change while resolving.
+            if (_customApplicationPaths.SequenceEqual(normalizedPaths, StringComparer.OrdinalIgnoreCase))
+            {
+                _customApplications = entries;
+            }
+        }
     }
 
     private static string? NormalizeCustomApplicationPath(string path)
@@ -252,28 +267,56 @@ public sealed class ApplicationIndexService
             return;
         }
 
-        try
+        foreach (var path in EnumerateFilesSafely(root))
         {
-            foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            var extension = Path.GetExtension(path);
+            if (!extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".appref-ms", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".exe", StringComparison.OrdinalIgnoreCase))
             {
-                var extension = Path.GetExtension(path);
-                if (!extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
-                    && !extension.Equals(".appref-ms", StringComparison.OrdinalIgnoreCase)
-                    && !extension.Equals(".exe", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var shortcut = extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
-                    ? LnkResolver.Resolve(path)
-                    : new ShortcutMetadata("", "");
-                var entry = CreateFileEntry(root, path, shortcut);
-                entriesById.TryAdd(entry.Id, entry);
+                continue;
             }
+
+            var shortcut = extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
+                ? LnkResolver.Resolve(path)
+                : new ShortcutMetadata("", "");
+            var entry = CreateFileEntry(root, path, shortcut);
+            entriesById.TryAdd(entry.Id, entry);
         }
-        catch
+    }
+
+    private static IEnumerable<string> EnumerateFilesSafely(string root)
+    {
+        // Manual stack walk: SearchOption.AllDirectories aborts the entire lazy
+        // enumeration on the first inaccessible directory, silently dropping
+        // every remaining shortcut. Here one bad directory only loses itself.
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
         {
-            // A locked Start Menu folder must never break the launcher.
+            var directory = pending.Pop();
+            string[] files;
+            string[] subDirectories;
+            try
+            {
+                files = Directory.GetFiles(directory);
+                subDirectories = Directory.GetDirectories(directory);
+            }
+            catch (Exception exception)
+                when (exception is UnauthorizedAccessException or IOException or DirectoryNotFoundException)
+            {
+                continue;
+            }
+
+            foreach (var file in files)
+            {
+                yield return file;
+            }
+
+            foreach (var subDirectory in subDirectories)
+            {
+                pending.Push(subDirectory);
+            }
         }
     }
 

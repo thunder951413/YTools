@@ -17,9 +17,10 @@ public class PanelCommandRouterTests
     }
 
     [Theory]
-    [InlineData(0x30, 0)]
-    [InlineData(0x35, 5)]
-    [InlineData(0x39, 9)]
+    [InlineData(0x31, 0)]
+    [InlineData(0x36, 5)]
+    [InlineData(0x39, 8)]
+    [InlineData(0x30, 9)]
     public void CtrlNumber_ActivatesResult(int keyCode, int expectedIndex)
     {
         var command = _router.Command(

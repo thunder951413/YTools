@@ -220,7 +220,12 @@ public sealed class MainController
 
     private void UpdateTrayHotKeyTitles(HotKeyDefinition launcher, HotKeyDefinition clipboard)
     {
-        _tray?.UpdateHotKeyTitles(launcher.DisplayString, clipboard.DisplayString);
+        _tray?.UpdateHotKeyTitles(launcher.DisplayString, TrayClipboardTitle(clipboard));
+    }
+
+    private string TrayClipboardTitle(HotKeyDefinition clipboard)
+    {
+        return _preferences.ClipboardEnabled ? clipboard.DisplayString : "已停用";
     }
 
     private void OnPreferencePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

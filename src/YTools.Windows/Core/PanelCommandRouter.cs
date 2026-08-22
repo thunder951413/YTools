@@ -59,11 +59,6 @@ public sealed class PanelCommandRouter
     private const int VkL = 0x4C;
     private const int VkOemComma = 0xBC;
 
-    private static readonly int[] NumberRow =
-    {
-        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39
-    };
-
     public PanelCommand? Command(PanelKeyEvent keyEvent, PanelInputMode mode)
     {
         if (keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command)
@@ -108,9 +103,15 @@ public sealed class PanelCommandRouter
         };
     }
 
+    // Ctrl+1 targets the first result … Ctrl+0 the tenth, matching the on-row
+    // badges produced by NumberBadgeConverter ((index + 1) % 10).
     private static int? ResultIndexForNumberKeyCode(int keyCode)
     {
-        var index = Array.IndexOf(NumberRow, keyCode);
-        return index >= 0 ? index : null;
+        return keyCode switch
+        {
+            >= 0x31 and <= 0x39 => keyCode - 0x31,
+            0x30 => 9,
+            _ => null
+        };
     }
 }

@@ -55,8 +55,10 @@ public static class SelfTest
                     == PanelCommandKind.ActivateSelected);
             Check(
                 "router.ctrlNumber",
-                router.Command(new PanelKeyEvent(0x35, PanelKeyModifiers.Command), PanelInputMode.Launcher)?.Payload
-                    == 5);
+                router.Command(new PanelKeyEvent(0x31, PanelKeyModifiers.Command), PanelInputMode.Launcher)?.Payload
+                    == 0
+                && router.Command(new PanelKeyEvent(0x30, PanelKeyModifiers.Command), PanelInputMode.Launcher)?.Payload
+                    == 9);
             Check(
                 "router.altUp",
                 router.Command(new PanelKeyEvent(0x26, PanelKeyModifiers.Option), PanelInputMode.Launcher)?.Kind
@@ -108,6 +110,15 @@ public static class SelfTest
             var calculatorModule = new CalculatorModule();
             var calculatorResults = calculatorModule.SearchAsync(new ModuleSearchRequest("1+2", 5)).GetAwaiter().GetResult();
             Check("module.calculator", calculatorResults.Count == 1 && calculatorResults[0].Title == "3");
+
+            // Regression: the "=" continuation result must survive the host-side
+            // result policy instead of being silently dropped.
+            var continuationResults = calculatorModule.SearchAsync(new ModuleSearchRequest("1+2=", 5)).GetAwaiter().GetResult();
+            Check(
+                "module.calculatorContinuation",
+                continuationResults.Count == 1
+                && continuationResults[0].Action is ResultAction.EditQuery
+                && new ModuleResultPolicy().Sanitize(continuationResults[0], calculatorModule.Descriptor) is not null);
 
             var unitModule = new UnitConversionModule();
             var unitResults = unitModule.SearchAsync(new ModuleSearchRequest("1 km to m", 5)).GetAwaiter().GetResult();

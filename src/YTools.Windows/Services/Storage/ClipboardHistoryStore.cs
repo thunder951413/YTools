@@ -324,8 +324,19 @@ public sealed class ClipboardHistoryStore
 
     private void WriteProtected(byte[] data, string path)
     {
-        File.WriteAllBytes(path, data);
-        AppPaths.RestrictFile(path);
+        // Write to a temp file and atomically replace the target so a crash
+        // mid-write can never truncate an existing manifest or record.
+        var tempPath = path + ".tmp";
+        File.WriteAllBytes(tempPath, data);
+        AppPaths.RestrictFile(tempPath);
+        if (File.Exists(path))
+        {
+            File.Replace(tempPath, path, null);
+        }
+        else
+        {
+            File.Move(tempPath, path);
+        }
     }
 
     private string RecordFile(Guid id) => Path.Combine(_recordsDirectory, $"{id:N}.enc");

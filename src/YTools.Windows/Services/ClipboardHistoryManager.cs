@@ -37,6 +37,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     private readonly ClipboardMonitor _monitor;
     private readonly DebouncedAction _filterDebouncer = new();
     private readonly Dictionary<Guid, Task<byte[]?>> _imageTasks = [];
+    private readonly Dispatcher _dispatcher;
     private List<ClipboardHistoryItem> _items = [];
     private List<ClipboardHistoryItem> _filteredItems = [];
     private string _query = "";
@@ -59,6 +60,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     {
         _preferences = preferences;
         _monitor = monitor;
+        _dispatcher = Dispatcher.CurrentDispatcher;
         _cloudSync = new ClipboardCloudSyncService(preferences);
         _monitor.Changed += OnClipboardChanged;
 
@@ -189,7 +191,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         }
 
         CloudSyncStatus = "正在加密同步剪贴板…";
-        return _cloudSync.SyncNowAsync(_items.ToList(), ApplyCloudSyncResult);
+        return _cloudSync.SyncNowAsync(SnapshotItemsForSync(), ApplyCloudSyncResult);
     }
 
     public void Dispose()
@@ -203,6 +205,11 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         Query = "";
         Filter = ClipboardFilter.All;
         SelectedIndex = 0;
+        // When Query/Filter were already at their defaults the setters above are
+        // no-ops, so force one synchronous rebuild to pick up items captured or
+        // loaded since the last presentation.
+        _filterDebouncer.Cancel();
+        RebuildFilteredItems();
         PollPasteboard();
     }
 
@@ -243,26 +250,93 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
 
     public async void Copy(ClipboardHistoryItem item)
     {
+        if (await WriteToSystemClipboard(item))
+        {
+            PromoteToTop(item);
+        }
+    }
+
+    private async Task<bool> WriteToSystemClipboard(ClipboardHistoryItem item)
+    {
         switch (item.Kind)
         {
             case ClipboardItemKind.Text:
-                TrySetClipboard(() => Clipboard.SetText(item.Payload.FirstOrDefault() ?? ""));
-                break;
+                return TrySetClipboard(() => Clipboard.SetText(item.Payload.FirstOrDefault() ?? ""));
             case ClipboardItemKind.Files:
                 var collection = new System.Collections.Specialized.StringCollection();
                 collection.AddRange(item.Payload.ToArray());
-                TrySetClipboard(() => Clipboard.SetFileDropList(collection));
-                break;
+                return TrySetClipboard(() => Clipboard.SetFileDropList(collection));
             case ClipboardItemKind.Image:
-                var data = item.BinaryData ?? await _imageTasks.GetOrAdd(
-                    item.Id,
-                    id => _persistence.ImageDataAsync(id));
-                if (data is not null)
-                {
-                    TrySetClipboard(() => Clipboard.SetImage(DecodeImage(data)));
-                }
+                var data = await ResolveOriginalImageData(item);
+                return data is not null && TrySetClipboard(() => Clipboard.SetImage(DecodeImage(data)));
+            default:
+                return false;
+        }
+    }
 
-                break;
+    /// <summary>
+    /// Re-copying a history entry makes it the newest entry: CreatedAt drives
+    /// both the visible ordering and retention, and UpdatedAt propagates the
+    /// recency to other devices through the cloud LWW merge.
+    /// </summary>
+    private void PromoteToTop(ClipboardHistoryItem item)
+    {
+        var index = _items.FindIndex(existing => existing.Id == item.Id);
+        if (index < 0)
+        {
+            return;
+        }
+
+        var timestamp = DateTimeOffset.UtcNow;
+        var promoted = item with { CreatedAt = timestamp, UpdatedAt = timestamp };
+        _items.RemoveAt(index);
+        _items.Insert(0, promoted);
+        SortItems();
+        RebuildFilteredItems();
+        PersistCurrent(changedItem: promoted);
+    }
+
+    /// <summary>Full-size image bytes: vault record first, in-memory copy as fallback.</summary>
+    private async Task<byte[]?> ResolveOriginalImageData(ClipboardHistoryItem item)
+    {
+        if (_imageTasks.TryGetValue(item.Id, out var cached))
+        {
+            var cachedData = await cached;
+            if (cachedData is { Length: > 0 })
+            {
+                return cachedData;
+            }
+        }
+
+        var load = _persistence.ImageDataAsync(item.Id);
+        _imageTasks[item.Id] = load;
+        TrimImageTasks();
+        var data = await load;
+        if (data is not { Length: > 0 })
+        {
+            // Never cache a failed load: after persistence completes the vault
+            // can serve the original even though it could not just now.
+            _imageTasks.Remove(item.Id);
+            return item.BinaryData;
+        }
+
+        return data;
+    }
+
+    private void TrimImageTasks()
+    {
+        if (_imageTasks.Count <= 64)
+        {
+            return;
+        }
+
+        foreach (var id in _imageTasks
+                     .Where(pair => pair.Value.IsCompleted)
+                     .Select(pair => pair.Key)
+                     .Take(_imageTasks.Count - 32)
+                     .ToList())
+        {
+            _imageTasks.Remove(id);
         }
     }
 
@@ -270,6 +344,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     {
         _items.RemoveAll(existing => existing.Id == item.Id);
         SelectedIndex = Math.Min(SelectedIndex, Math.Max(_filteredItems.Count - 1, 0));
+        RebuildFilteredItems();
         PersistCurrent(deletedIds: [item.Id]);
     }
 
@@ -294,6 +369,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
 
         _items[index] = item with { IsPinned = !item.IsPinned, UpdatedAt = DateTimeOffset.UtcNow };
         SortItems();
+        RebuildFilteredItems();
         PersistCurrent();
     }
 
@@ -321,6 +397,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         _persistenceRevision += 1;
         var revision = _persistenceRevision;
         _persistenceWritable = false;
+        RebuildFilteredItems();
         _ = ClearAsync(previous, previous.Select(item => item.Id).ToList(), revision);
     }
 
@@ -330,6 +407,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         var removed = _items.Where(item => item.CreatedAt >= cutoff).Select(item => item.Id).ToList();
         _items.RemoveAll(item => removed.Contains(item.Id));
         SelectedIndex = Math.Min(SelectedIndex, Math.Max(_filteredItems.Count - 1, 0));
+        RebuildFilteredItems();
         PersistCurrent(deletedIds: removed);
     }
 
@@ -382,6 +460,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         _storageReady = true;
         IsLoading = false;
         Prune();
+        RebuildFilteredItems();
         if (_persistenceWritable)
         {
             PersistCurrent();
@@ -456,11 +535,11 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
                 var image = Clipboard.GetImage();
                 if (image is not null)
                 {
-                    var png = EncodePng(image);
-                    if (png is not null)
-                    {
-                        return ClipboardCapture.Image(png, source, createdAt);
-                    }
+                    // Copy the pixels into a frozen bitmap now; PNG encoding is
+                    // too slow for the UI thread and runs in ProcessCapture.
+                    var standalone = new FormatConvertedBitmap(image, System.Windows.Media.PixelFormats.Pbgra32, null, 0);
+                    standalone.Freeze();
+                    return ClipboardCapture.Image(standalone, source, createdAt);
                 }
             }
             catch
@@ -537,13 +616,13 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
                         ContentHash: Hash([capture.Value])),
                     null);
             case ClipboardCaptureKind.Image:
-                if (capture.PngData is null || capture.PngData.Length > maximumImageBytes)
+                if (capture.ImageSource is null)
                 {
                     return null;
                 }
 
-                var dimensions = ImageDimensions(capture.PngData);
-                if (dimensions is null)
+                var png = EncodePng(capture.ImageSource);
+                if (png is null || png.Length > maximumImageBytes)
                 {
                     return null;
                 }
@@ -551,11 +630,11 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
                 var item = new ClipboardHistoryItem(
                     Guid.NewGuid(),
                     ClipboardItemKind.Image,
-                    [$"图片 · {dimensions.Value.Width} × {dimensions.Value.Height}"],
+                    [$"图片 · {capture.ImageSource.PixelWidth} × {capture.ImageSource.PixelHeight}"],
                     capture.CreatedAt,
                     capture.SourceApplication,
-                    ContentHash: Hash(capture.PngData));
-                return new ProcessedClipboardCapture(item, capture.PngData);
+                    ContentHash: Hash(png));
+                return new ProcessedClipboardCapture(item, png);
             default:
                 return null;
         }
@@ -569,6 +648,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
             var existing = _items[duplicate];
             _items[duplicate] = existing with { CopyCount = existing.CopyCount + 1 };
             SortItems();
+            RebuildFilteredItems();
             PersistCurrent();
             return;
         }
@@ -576,6 +656,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         _items.Insert(0, processed.Item);
         SortItems();
         Prune();
+        RebuildFilteredItems();
         var images = processed.OriginalImage is null
             ? new Dictionary<Guid, byte[]>()
             : new Dictionary<Guid, byte[]> { [processed.Item.Id] = processed.OriginalImage };
@@ -626,53 +707,101 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         var snapshot = _items.ToList();
         var images = originalImages ?? new Dictionary<Guid, byte[]>();
         _ = _persistence.PersistAsync(snapshot, images, revision)
-            .ContinueWith(async task =>
+            .ContinueWith(
+                task => _ = HandlePersistCompletion(task, changedItem, deletedIds),
+                TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    private async Task HandlePersistCompletion(
+        Task<(bool Success, List<ClipboardHistoryItem>? Normalized, string? Error)> task,
+        ClipboardHistoryItem? changedItem,
+        IReadOnlyList<Guid>? deletedIds)
+    {
+        try
+        {
+            if (!task.IsCompletedSuccessfully)
             {
-                if (!task.IsCompletedSuccessfully)
-                {
-                    return;
-                }
+                return;
+            }
 
-                var (success, normalized, error) = task.Result;
-                if (normalized is null && success)
-                {
-                    return;
-                }
+            var (success, normalized, error) = task.Result;
+            if (normalized is null && success)
+            {
+                return;
+            }
 
-                if (!success)
-                {
-                    _persistenceWritable = false;
-                    StorageError = $"剪贴板加密存储失败；后续修改仅保留在本次运行内存中：{error}";
-                    return;
-                }
+            if (!success)
+            {
+                _persistenceWritable = false;
+                StorageError = $"剪贴板加密存储失败；后续修改仅保留在本次运行内存中：{error}";
+                return;
+            }
 
-                var byteCount = await _persistence.DiskUsageAsync();
-                if (normalized is not null)
-                {
-                    _items = normalized;
-                }
-                StorageByteCount = byteCount;
-                StorageError = null;
-                if (changedItem is not null)
-                {
-                    var itemToPublish = normalized?.FirstOrDefault(item => item.Id == changedItem.Id) ?? changedItem;
-                    PublishChangedItem(itemToPublish);
-                }
-                else if (deletedIds is { Count: > 0 })
-                {
-                    PublishDeleted(deletedIds);
-                }
-            }, TaskScheduler.FromCurrentSynchronizationContext());
+            var byteCount = await _persistence.DiskUsageAsync();
+            if (normalized is not null)
+            {
+                _items = normalized;
+            }
+
+            StorageByteCount = byteCount;
+            StorageError = null;
+            if (changedItem is not null)
+            {
+                var itemToPublish = normalized?.FirstOrDefault(item => item.Id == changedItem.Id) ?? changedItem;
+                await PublishChangedItemAsync(itemToPublish);
+            }
+            else if (deletedIds is { Count: > 0 })
+            {
+                PublishDeleted(deletedIds);
+            }
+        }
+        catch
+        {
+            // Post-persistence bookkeeping must never take the app down.
+        }
     }
 
     private void StartCloudSync()
     {
-        _cloudSync.StartPeriodicPull(() => _items.ToList(), ApplyCloudSyncResult);
+        _cloudSync.StartPeriodicPull(SnapshotItemsForSync, ApplyCloudSyncResult);
     }
 
-    private void PublishChangedItem(ClipboardHistoryItem item)
+    /// <summary>
+    /// The pull timer fires on a thread-pool thread; enumerate _items on the
+    /// UI thread it belongs to instead.
+    /// </summary>
+    private IReadOnlyList<ClipboardHistoryItem> SnapshotItemsForSync()
     {
-        _ = _cloudSync.PublishChangedItemAsync(item, ApplyCloudSyncResult);
+        return _dispatcher.CheckAccess()
+            ? _items.ToList()
+            : _dispatcher.Invoke(() => _items.ToList());
+    }
+
+    private async Task PublishChangedItemAsync(ClipboardHistoryItem item)
+    {
+        if (item.Kind != ClipboardItemKind.Image || item.BinaryData is null)
+        {
+            _ = _cloudSync.PublishChangedItemAsync(item, ApplyCloudSyncResult);
+            return;
+        }
+
+        // item.BinaryData is normally the 192px thumbnail. Upload the original
+        // when the vault can serve it; otherwise publish without image bytes so
+        // receivers keep the copy they already hold for this ContentHash.
+        byte[]? fullImage = null;
+        try
+        {
+            fullImage = await _persistence.ImageDataAsync(item.Id);
+        }
+        catch
+        {
+            // Fall through and publish without image bytes.
+        }
+
+        var publishable = fullImage is { Length: > 0 }
+            ? item with { BinaryData = fullImage }
+            : item with { BinaryData = null };
+        _ = _cloudSync.PublishChangedItemAsync(publishable, ApplyCloudSyncResult);
     }
 
     private void PublishDeleted(IReadOnlyList<Guid> ids)
@@ -840,20 +969,6 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         return decoder.Frames[0];
     }
 
-    private static (int Width, int Height)? ImageDimensions(byte[] png)
-    {
-        try
-        {
-            using var stream = new MemoryStream(png);
-            using var image = System.Drawing.Image.FromStream(stream);
-            return (image.Width, image.Height);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     private static string Hash(IReadOnlyList<string> parts)
     {
         return Hash(string.Join("\0", parts));
@@ -869,15 +984,17 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 
-    private static void TrySetClipboard(Action write)
+    private static bool TrySetClipboard(Action write)
     {
         try
         {
             write();
+            return true;
         }
         catch
         {
             // Transient clipboard lock contention must never crash the panel.
+            return false;
         }
     }
 }
@@ -909,7 +1026,7 @@ internal sealed record ClipboardCapture(
     ClipboardCaptureKind Kind,
     IReadOnlyList<string>? Paths,
     string? Value,
-    byte[]? PngData,
+    System.Windows.Media.Imaging.BitmapSource? ImageSource,
     string? SourceApplication,
     DateTimeOffset CreatedAt)
 {
@@ -919,8 +1036,8 @@ internal sealed record ClipboardCapture(
     public static ClipboardCapture Text(string value, string? source, DateTimeOffset createdAt)
         => new(ClipboardCaptureKind.Text, null, value, null, source, createdAt);
 
-    public static ClipboardCapture Image(byte[] png, string? source, DateTimeOffset createdAt)
-        => new(ClipboardCaptureKind.Image, null, null, png, source, createdAt);
+    public static ClipboardCapture Image(System.Windows.Media.Imaging.BitmapSource image, string? source, DateTimeOffset createdAt)
+        => new(ClipboardCaptureKind.Image, null, null, image, source, createdAt);
 }
 
 internal enum ClipboardCaptureKind

@@ -402,15 +402,39 @@ public class SearchCoordinatorTests
             new Dictionary<string, string>(),
             [],
             [],
-            40,
-            false,
-            [],
             CancellationToken.None);
 
         var results = await coordinator.SearchAsync(request);
 
         Assert.Contains(results, result =>
             result.ModuleId == "text-statistics" && result.Title.StartsWith("5 字符", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SearchAsync_CalculatorContinuation_SurvivesResultPolicy()
+    {
+        // Regression: the "=" continuation used ResultAction.Navigate with a
+        // bare number, which the result policy rejected as a non-rooted path
+        // and silently dropped the whole result.
+        var coordinator = new YTools.Services.SearchCoordinator(new YTools.Services.SpellingService());
+        var request = new YTools.Services.BackgroundSearchRequest(
+            "1+2=",
+            false,
+            false,
+            FileNavigationSort.Name,
+            true,
+            true,
+            new HashSet<SearchContentType> { SearchContentType.Calculations },
+            new Dictionary<string, string>(),
+            [],
+            [],
+            CancellationToken.None);
+
+        var results = await coordinator.SearchAsync(request);
+
+        var continuation = Assert.Single(results);
+        Assert.Equal("3", continuation.Title);
+        Assert.IsType<YTools.ModuleKit.ResultAction.EditQuery>(continuation.Action);
     }
 }
 
