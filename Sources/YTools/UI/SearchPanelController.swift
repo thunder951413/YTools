@@ -108,10 +108,16 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
-    isolated deinit {
+    func shutdown() {
         shiftPreviewTimer?.invalidate()
+        shiftPreviewTimer = nil
         positionSaveDebouncer.cancel()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        cancellables.removeAll()
+        launcher.persistLastQuery()
+        launcher.shutdown()
+        clipboard.shutdown()
     }
 
     func toggleLauncher() {
@@ -154,11 +160,13 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             preferences.keyboardInputSourceError = "所选输入源当前不可用，已保留系统当前输入源。"
         }
         window.makeKeyAndOrderFront(nil)
+        selectAllInSearchField()
     }
 
     func hide() {
         shiftPreviewTimer?.invalidate()
         launcher.endPreviewSession()
+        launcher.persistLastQuery()
         window?.orderOut(nil)
     }
 
@@ -337,6 +345,33 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         return true
     }
 
+    /// Selects the launcher search field's text on show so a fresh keystroke
+    /// replaces the previous query while leaving it visible otherwise.
+    /// `NSTextField.selectText` makes the field first responder and selects
+    /// its content in one call, independent of SwiftUI's focus timing. If the
+    /// hosted field has not been laid out yet, retry on the next runloop turn.
+    private func selectAllInSearchField() {
+        guard state.mode == .launcher, let window else { return }
+        if let field = searchTextField(in: window) {
+            field.selectText(nil)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.selectAllInSearchField()
+            }
+        }
+    }
+
+    private func searchTextField(in window: NSWindow) -> NSTextField? {
+        var queue: [NSView] = window.contentView.map { [$0] } ?? []
+        while let view = queue.popLast() {
+            if let field = view as? NSTextField, field.isEditable {
+                return field
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
+    }
+
     private func execute(_ command: PanelCommand) -> Bool {
         switch command {
         case .activateSelected:
@@ -372,8 +407,18 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         case .deleteClipboardItem:
             clipboard.deleteSelected()
         case .saveClipboardAsSnippet:
-            guard let text = clipboard.selectedText, snippets.save(text: text) else { return false }
-            NSSound(named: "Glass")?.play()
+            guard let text = clipboard.selectedText else { return false }
+            Task { [snippets] in
+                guard await snippets.savePersisted(text: text) else {
+                    let alert = NSAlert()
+                    alert.messageText = "无法保存文本片段"
+                    alert.informativeText = snippets.saveError ?? "加密存储当前不可用。"
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                    return
+                }
+                NSSound(named: "Glass")?.play()
+            }
         case .togglePreview:
             launcher.togglePreview()
         case .showLargeType:

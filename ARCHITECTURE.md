@@ -1,105 +1,108 @@
-# 原生版架构与安全边界
+# Windows + macOS 架构与安全边界
 
 ## 定位
 
-YTools 是个人使用的 macOS 工具，不再是通用插件平台。功能以源码级“工具模块”编译进应用，由宿主统一负责窗口、列表、键盘导航和动作执行。
+YTools 是个人使用的双端原生工具，不再是通用插件平台。Windows 与 macOS 实现都在本仓库主动维护并独立验证。功能以源码级“工具模块”编译进应用，由宿主统一负责窗口、列表、键盘导航和动作执行。
 
-应用入口直接创建 `NSApplication` 并交给 `AppDelegate` 管理；不声明隐式 SwiftUI Window/Settings Scene。SwiftUI 只通过 `NSHostingController` 嵌入明确创建的 AppKit 面板和设置窗口，避免系统生成空白或重复窗口。
+应用入口直接创建 WPF `Application` 并交给 `MainController` 管理。启动器与剪贴板面板是无边框、透明背景、置顶的自绘窗口；设置是标准窗口；托盘图标提供与 macOS 菜单栏等价的操作入口。
 
 ```text
-AppKit 搜索面板
+LauncherWindow / ClipboardWindow（WPF）
       │
-SwiftUI 统一界面
-      │
-LauncherModel（查询状态、排序、选择）
- ├─ SearchCoordinator actor（统一异步模块、应用扫描、文件导航、取消过期查询）
- ├─ SpotlightSearchService（独立请求代次）
+LauncherModel（查询状态、排序、选择、缓冲、预览）
+ ├─ SearchCoordinator（应用索引、文件导航、内置与个人模块并发调度）
+ ├─ FileSearchService（Everything 引擎 → 内置文件名扫描回退）
  ├─ ResultAggregator（合并、排序与隐私化使用学习）
- ├─ ActionMenuController（类型化动作菜单状态）
- ├─ FileBufferStore（文件缓冲状态）
- ├─ YToolsModuleKit（内置与个人源码模块的统一异步契约）
+ ├─ ActionMenuController / ActionRegistry（类型化动作菜单）
+ ├─ FileBufferStore（文件缓冲）
+ ├─ IYToolsModule（内置与个人源码模块统一异步契约）
  └─ ActionDispatcher（有限动作词汇）
-       └─ FileOperationService actor（复制、移动）
+       └─ 文件复制/移动、回收站、资源管理器、系统设置 URI
 
-YToolsCore（纯 Swift、可测试）
+Core（纯逻辑、可测试）
  ├─ ExpressionCalculator
  ├─ PanelCommandRouter
- └─ SearchTextNormalizer（拼音、首字母和缩写）
+ └─ SearchTextNormalizer（TinyPinyin 拼音、首字母、缩写、模糊分）
 
-YToolsModuleKit（无 AppKit 的公共边界）
- ├─ YToolsModule / ModuleDescriptor
+ModuleKit（无 UI 的公共边界）
+ ├─ IYToolsModule / ModuleDescriptor
  ├─ LauncherResult / 有限 ResultAction
- └─ ModuleResultPolicy（能力、file URL、数量与分数校验）
+ └─ ModuleResultPolicy（能力、路径、数量与分数校验）
 
 加密数据层
- ├─ ClipboardCaptureProcessor actor（哈希、图片转换、缩略图）
- ├─ ClipboardPersistenceService actor（密文串行读写）
- ├─ ClipboardHistoryStore（增量加密清单、记录、缩略图）
- ├─ SecureCodableStore（结构化加载状态）
- ├─ SnippetManager
- └─ RecentDocumentsManager
+ ├─ DpapiKeyAccessor（DPAPI 当前用户保护 32 字节随机密钥）
+ ├─ AesGcmBox（AES-256-GCM：nonce + 密文 + tag）
+ ├─ SecureCodableStore（Snippets / 最近文档）
+ ├─ ClipboardHistoryStore（增量清单 + 独立记录与缩略图密文）
+ ├─ ClipboardPersistenceService（串行化 + 修订号防旧快照覆盖）
+ ├─ ClipboardCloudSyncService（可选坚果云 WebDAV，每条变更加密、每设备轻量标记）
+ └─ UsageRankingStore（仅存 SHA-256 哈希）
 ```
 
-模块只返回 `LauncherResult` 数据。内置模块与个人模块都由 `SearchCoordinator` 并发执行，并统一经过 `ModuleResultPolicy` 的描述符、字段长度、分数、能力与动作校验。复制、打开应用等副作用由宿主根据有限的 `ResultAction` 执行，避免向模块暴露一个包罗万象的全局 API。
+模块只返回 `LauncherResult` 数据。内置模块与个人模块都由 `SearchCoordinator` 并发执行，并统一经过 `ModuleResultPolicy` 的描述符、字段长度、分数、能力与动作校验。复制、打开应用等副作用由宿主根据有限的 `ResultAction` 执行，避免向模块暴露一个包罗万象的全局 API。该策略不是进程、文件系统或网络沙箱：源码模块与宿主同进程、同用户权限运行，只有审查并重新编译后才可加入。
 
-`LauncherModel` 是供 SwiftUI 使用的窄 facade，不再直接实现排序学习、动作菜单或文件缓冲；它只协调查询并把用户选择交给 `ActionDispatcher`。应用目录扫描、文件导航及复制/移动都不占用主 Actor。每次查询都有取消边界，旧查询不能覆盖新结果。预览使用独立 URL 状态，不伪造模块结果。
+## 平台映射（macOS → Windows）
+
+| macOS 原实现 | Windows 实现 |
+|---|---|
+| Carbon `RegisterEventHotKey` | Win32 `RegisterHotKey` + 隐藏消息窗口 |
+| `NSPasteboard` 轮询 | `AddClipboardFormatListener` + 序列号轮询回退 |
+| Keychain（Security） | DPAPI `ProtectedData`（CurrentUser） |
+| ServiceManagement 登录启动 | HKCU `...\CurrentVersion\Run` 固定值 |
+| Spotlight `NSMetadataQuery` | Everything `WM_COPYDATA` 本机 IPC（可选）+ 后台文件名扫描 |
+| `/Applications` 应用扫描 | 开始菜单可启动入口（IShellLink）+ WindowsApps 别名 + AppsFolder（IApplicationActivationManager）+ 用户选择的本机自定义应用 |
+| `NSWorkspace` 打开/显示 | `Process.Start`（ShellExecute）与 `explorer.exe /select` |
+| Quick Look | 内置预览面板（图片/文本/元信息） |
+| 系统词典 `DCSCopyTextDefinition` | 离线 CC-CEDICT 索引 |
+| `NSSpellChecker` | WeCantSpell.Hunspell + en_US 词库 |
+| Finder 清空废纸篓 Apple Event | `SHEmptyRecycleBin`（二次确认） |
+| `/usr/bin/pmset displaysleepnow` | `SendMessage` `SC_MONITORPOWER` |
+| 系统设置面板 URI | `ms-settings:` URI |
 
 ## 性能与响应性契约
 
-- 文本输入热路径只能更新轻量状态、取消任务和推进请求代次；不得同步停止 Spotlight、访问磁盘、扫描目录、加密或全量过滤。
-- 普通本地模块使用用户配置的输入防抖；`NSMetadataQuery` 至少等待输入稳定 300 毫秒，避免在正常打字间隔内反复启动和停止。
-- 空查询直接重置内存状态，不执行一次“空搜索”；Spotlight 清理延后到按键完成渲染以后。
-- 后台请求同时使用任务取消和 query/generation 校验。取消后不再创建新的任务组子任务，迟到结果不能覆盖新查询。
-- 面板窗口只观察会改变几何尺寸的语义信号：结果数量、pending、模式、宽度和紧凑度。查询字符、选中项和无关偏好变化不进入窗口布局链路。
-- 预览、输入、片段编辑分别使用独立防抖器，不能互相阻塞。文件图标使用有上限且可受内存压力驱逐的 `NSCache`。
-- 剪贴板搜索在后台执行、支持取消并限制 UI 同时呈现最近 100 条；持久化仍保留完整的加密历史。用户执行复制或删除前会同步确认最终过滤状态。
-- 边界必须明确：模块最多返回 40 条、Spotlight 最多读取 100 个元数据项、应用结果最多 12 条。小型设置搜索只有 7 个固定项，直接计算比创建异步任务更便宜，因此不做无意义防抖。
+- 文本输入热路径只能更新轻量状态、取消任务和推进请求代次；不得同步扫描磁盘、加密或全量过滤。
+- 普通本地模块使用用户配置的 50–400ms 输入停止窗口；每次输入都会取消旧代次，回调即使已经投递到 UI 队列也会在执行前复查取消状态。文件搜索额外等待至少 300ms 的稳定窗口。
+- 空查询直接重置内存状态；后台请求同时使用请求代次、`CancellationToken` 与查询文本校验，迟到结果不能覆盖新查询。
+- 面板高度只随结果数量、pending、动作菜单和样式变化；连续输入时保持输入行高度，最终查询完成后一次性展开。
+- 剪贴板过滤在后台执行、支持取消并限制 UI 同时呈现最近 100 条；持久化仍保留完整加密历史。
+- 边界必须明确：模块最多返回 40 条、文件搜索最多 100 条、应用结果最多 12 条。
+- 自定义应用只在路径集合变化时规范化并构建内存条目；普通按键搜索直接复用快照，不扫描自定义目录，也不新增文件监视器。Windows 限定本机 `.exe`/`.lnk`/`.appref-ms`，macOS 限定解析符号链接后仍为有效 bundle 的绝对 `.app`。
+- 两端的使用学习只持久化结果 ID/查询的 SHA-256 哈希、计数和时间；排序依次考虑基础匹配、频率/新近度/查询记忆、应用启动次数同分项和本地化标题。macOS 的排名写盘通过串行后台队列完成，不占用 MainActor 输入/激活路径。
+- 应用目录发生变化时，macOS 首次准备会建立完整快照；后续失效或 5 分钟刷新只排队后台扫描，当前搜索继续使用旧快照，并用 generation 防止扫描期间的新变化被误清除。
 
-新增高频功能时应先将工作分为“每次事件必须做”“输入稳定后做”“后台做”三类，再决定使用去重、防抖、取消、缓存或 actor；不能把统一延迟当作性能修复。
-
-设置 UI 按通用、搜索、外观、快捷键、剪贴板、片段和隐私拆分；根视图只负责导航和组合。目录和应用选择使用非阻塞 `fileImporter`。快捷键先映射为 `PanelCommand`，再由窗口控制器执行，按键表可在不启动 AppKit 窗口的情况下测试。登录启动的 ServiceManagement 调用隔离在可替换的 `LaunchAtLoginService`。
+- Snippets 与最近文档通过有序后台写入器加载/保存；加载期间的修改先合并再提交，旧完成回调不得回滚当前状态，退出时等待这两个存储的已排队写入。Swift 保存任务显式等待前序任务，不依赖 actor 的消息调度顺序。
+- Windows 内置文件索引保留旧可用快照；首次构建完成通知当前查询，成功快照超过 2 分钟后在下一次搜索触发后台刷新。单目录枚举失败不终止整个扫描。
+- Windows 文件复制/移动在后台完成，以忙碌状态阻止重复操作；回收站 COM 调用使用专用 STA 线程。预览和搜索均在所有结果分支校验取消与代次。
 
 ## 明确不包含
 
 - 插件市场、在线安装和远程插件
-- `WKWebView`/JavaScript 插件运行时
-- 动态加载未签名的 bundle、dylib 或脚本
+- WebView/JavaScript 插件运行时
+- 动态加载未签名的程序集、库或脚本
 - 心跳、遥测、广告、自动更新和启动联网
 - 通用 HTTP Server、MCP Server 或任意 Shell API
 
 ## 自用工具的扩展方式
 
-所有工具实现 `YToolsModuleKit.YToolsModule` 并注册到 `SearchCoordinator`。内置系统模块由宿主显式授予所需能力；个人模块默认无权限。所有模块都需要重新编译，不存在运行时安装。完整示例见 `MODULE_DEVELOPMENT.md`。
+所有工具实现 `IYToolsModule` 并注册到 `SearchCoordinator`。内置系统模块由宿主显式授予所需能力；个人模块默认无权限。所有模块都需要重新编译，不存在运行时安装。完整示例见 `MODULE_DEVELOPMENT.md`。
 
-无权限个人模块只能返回复制文本、空动作或打开 YTools 设置。文件动作必须声明并获得 `localFileRead`，且 URL 必须是本地文件；网页 URL、系统控制和应用退出动作会被拒绝。主程序当前不授予 `network`。
-
-能力声明约束模块可以交给宿主执行的结果动作，不是进程内代码沙箱。当前构建检查会拒绝主程序中的网络、网页、动态代码和 Shell API。后续若确实需要网络或可独立更新的复杂工具，应使用签名校验过的 XPC Service，并为文件、剪贴板、网络等能力分别定义窄接口。不要恢复网页插件或任意 IPC 分发器。
+无权限个人模块只能返回复制文本、空动作或打开 YTools 设置。文件动作必须声明并获得 `LocalFileRead`，且路径必须是本机绝对路径。个人模块不授予网络能力；构建检查会拒绝直接网络、动态代码和 Shell API。
 
 ## 权限策略
 
-- 计算器：无权限。
-- 系统词典：只调用本机 Dictionary Services。
-- 应用启动：只索引固定的 Applications 目录，由宿主调用 `NSWorkspace`。
-- Spotlight：使用 `NSMetadataQuery`，只返回本地元数据；结果打开仍由宿主执行。
-- 剪贴板：单一管理器读取 `NSPasteboard`；默认排除密码管理器和敏感类型，支持自定义忽略应用、暂停、固定和分段清理。文本/文件默认记录，图片默认关闭且单项限制 5 MB。持久化文件使用 AES-GCM 加密，随机密钥保存在登录钥匙串。
-- 剪贴板文本在进入处理与持久化前先经过字符数策略，默认超过 1000 个 Unicode 字符不记录；该策略不修改系统剪贴板，不影响用户正常粘贴。
-- 输入源：可跟随系统当前输入源，或在显示启动器/剪贴板面板时通过 macOS Text Input Source Services 选择指定的本机输入源；不监听用户在其他应用中的键盘内容。
-- 窗口位置：启动器拖动后的左上角会换算为当前显示器可用区域中的横向/纵向比例，经防抖连同可用分辨率和显示器 UUID 写入本机偏好。再次唤出时优先恢复到原显示器；显示器缺失、分辨率、缩放或排列变化时，将比例映射到目标屏并自动钳制在可见区域。旧版绝对坐标会在首次恢复时迁移；设置中的位置/显示器选择可重置为预设位置。
-- 菜单栏：状态项可按本机偏好隐藏，但应用仍保持 accessory 后台进程、全局快捷键和剪贴板服务；隐藏不改变运行状态。
-- 启动器外观：极简为默认风格，空查询只保留 40pt 高的输入框；经典、现代、玻璃为内置原生预设，通过布局令牌和系统 Material 组合实现，不加载或导入外部主题资源。
-- 启动器默认宽度为 720pt，可在 640–960pt 间调整；偏好迁移只收窄仍使用旧 860pt 默认值的安装，不覆盖用户手动选择的其他宽度。
-- 启动器使用可接收键盘焦点的无边框 `NSPanel` 子类，外框和 SwiftUI 内容尺寸完全一致，不受标准标题栏最小高度约束。展开高度按输入区、真实结果行高和列表上下留白计算；展开/收起动画时长可在 0–400ms 间本机调整，系统启用“减少动态效果”时强制停用尺寸动画。
-- 搜索防抖等待阶段只呈现输入栏，不显示进度、等待文案或空结果区；最终查询完成后才一次性展开结果，减少连续输入时的窗体跳动。
-- 极简、经典和玻璃风格使用紧凑的自定义无结果视图，避免系统 `ContentUnavailableView` 的固有最小高度裁切提示；现代风格保留系统大空状态。
-- Snippets/最近文档：使用独立 AES-GCM 存储与独立钥匙串密钥，不与剪贴板密钥复用。
-- 钥匙串：三类数据共享经过审计的访问原语，但 service/account 与随机密钥仍完全隔离。
-- 系统命令：只允许编译期固定的动作和参数；关键词可在设置中修改或关闭，但永远不会成为 Shell、URL 或可执行参数。当前唯一 `Process` 调用是 `/usr/bin/pmset displaysleepnow`。清空废纸篓在执行时始终确认，随后向固定目标 Finder 发送无参数 `fndr/empt` Apple Event；不直接读取受 TCC 保护的废纸篓目录、不申请完全磁盘访问，也不使用 AppleScript。勿扰与系统主题只打开 macOS 对应设置页，不使用私有 API 或辅助功能模拟点击。
-- 网络：主程序默认没有网络模块。以后确需 API 时，采用显式域名白名单、超时、响应大小限制，并放入单独服务。
-
-拼音索引使用稳定的 `en_US_POSIX` 折叠规则，避免随系统区域变化；基于系统转写，因此不承诺覆盖多音字的所有备选读音。
-
-文件检索除名称和正文外支持 `tag/标签` 前缀，只查询 Spotlight 的 Finder 标签元数据。文件导航排序支持名称、创建时间、修改时间、升降序和可选文件夹优先。
+- 计算器/单位换算/文本统计：无权限。
+- 词典：只读内嵌 CC-CEDICT，索引在启动阶段后台预热；自动词典查询不会阻塞首字符结果，显式 `dict/词典` 查询仍保证完整结果。
+- 应用启动：Windows 自动索引开始菜单、WindowsApps 与 AppsFolder，并允许用户显式加入本机 `.exe`、`.lnk`、`.appref-ms`；macOS 自动索引 `/Applications`、`/System/Applications`、`~/Applications`，并允许显式加入其他位置的有效 `.app` bundle。自定义项拒绝相对路径、URL、其他扩展名和启动参数；macOS 还会解析符号链接并验证 bundle identifier。Windows AppsFolder 使用受类型约束的 `ActivateApplication(AppUserModelId)`，macOS 使用类型化 `.open(URL)`，不机械共享平台激活动作。
+- 文件搜索：Everything 使用官方 QUERY2 `WM_COPYDATA` 只读本机 IPC，无需 SDK DLL；它不联网、不读取 Everything 数据库。请求发送与回复等待均有 800ms 上限，支持取消，返回数量、偏移、长度和绝对路径均经校验。若两端完整性级别不同则显示诊断并使用回退扫描器。回退扫描器在后台运行，跳过 AppData、node_modules、系统目录并限制访问条目数。
+- 剪贴板：单一管理器读取系统剪贴板；默认排除密码管理器进程与敏感格式（含 Windows 的 `ExcludeClipboardContentFromMonitorProcessing`），支持自定义忽略进程、暂停、固定和分段清理。在历史面板中再次复制某条内容会把该条更新为最新（排序与保留期随之刷新，并作为加密 Upsert 同步到其他设备）。持久化使用 AES-GCM，本机密钥由 Windows DPAPI 或 macOS 登录钥匙串保护；文本/文件默认记录，图片默认关闭且单项限制 5 MB。两端使用相同的可选坚果云同步协议：固定 HTTPS WebDAV 端点和应用密码；同步口令经 PBKDF2 派生 AES-GCM 密钥。每条新增内容是独立密文文件，重复复制仅增加本机计数。客户端每 15 分钟只读取每设备的 4 KiB 变更标记，标记序号未前进时不下载加密记录；历史面板可手动强制同步。收到的远端事件先写入加密的 durable inbox，只有历史记录成功落盘后才确认消费；删除以 tombstone 合并，密钥缺失或保险库损坏时保持只读而不确认事件。加密保险库操作在专用工作线程上按派发顺序串行执行，清单写入采用临时文件原子替换。
+- 窗口位置：拖动后的左上角换算为显示器工作区中的比例并保存；显示器变化时自动钳制在可见区域。
+- 托盘：可按偏好隐藏，隐藏后全局快捷键、剪贴板监听与后台运行不受影响。
+- 启动器样式：极简（默认）、经典、现代、玻璃四种原生预设，通过布局令牌与半透明画刷实现，不加载外部主题资源。面板坐标统一换算为 WPF DIP，在高 DPI 和多显示器工作区内钳制；文件预览展开时保留主结果区宽度。
+- 应用图标：结果首帧使用通用字形，Shell/AppsFolder 图标在后台提取并冻结后写入进程缓存；缓存完成只刷新结果图标，不阻塞输入和排序。
+- 系统命令：只允许编译期固定的动作；关键词可在设置中修改或关闭，但永远不会成为 Shell、URL 或可执行参数。清空回收站始终二次确认；不读取受保护目录内容。
+- 网络：主程序默认没有任何网络模块。用户明确开启坚果云剪贴板同步后，唯一允许的外联是固定 `https://dav.jianguoyun.com/dav/` HTTPS WebDAV 端点；同步内容在离开设备前端到端加密。统一安全扫描只对 macOS `ClipboardCloudSyncService` 的受限 `URLSession` 调用和 Windows 同名服务的 `WebDAVClient` 放行，并验证固定端点。
 
 ## 沙箱取舍
 
-完整磁盘 Spotlight 搜索与严格 App Sandbox 存在天然冲突。首选做法是启用沙箱并让用户明确授权需要搜索的目录；如果坚持搜索整个本机，则使用 Developer ID + Hardened Runtime，保持无网络代码、无动态代码加载，并把未来的网络能力隔离到单独的 XPC Service。
+Windows 桌面应用以普通用户权限运行，数据目录位于 `%APPDATA%\YTools` 并做 ACL 收紧；未使用代码签名或 MSIX 沙箱。Windows 的剪贴板、Snippets、最近文档和同步保险库共用一个由 DPAPI CurrentUser 保护的随机主密钥，并以用途不同的加密文件分隔数据。若未来需要对外分发，建议补充代码签名并评估 MSIX 打包。

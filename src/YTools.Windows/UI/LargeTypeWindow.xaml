@@ -1,0 +1,34 @@
+<Window x:Class="YTools.UI.LargeTypeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="YTools 大字显示"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        WindowStartupLocation="CenterScreen"
+        Width="900"
+        Height="480"
+        PreviewKeyDown="OnPreviewKeyDown"
+        MouseLeftButtonDown="OnMouseLeftButtonDown">
+    <Border CornerRadius="18"
+            Background="{DynamicResource PanelBackgroundBrush}"
+            BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="1"
+            Margin="40">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="32" ShadowDepth="6" Opacity="0.45" Color="Black" />
+        </Border.Effect>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <TextBlock x:Name="DisplayText"
+                       FontSize="64"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextPrimaryBrush}"
+                       TextAlignment="Center"
+                       TextWrapping="Wrap"
+                       Padding="56"
+                       MinHeight="380" />
+        </ScrollViewer>
+    </Border>
+</Window>

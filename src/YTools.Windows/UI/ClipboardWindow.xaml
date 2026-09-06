@@ -1,0 +1,182 @@
+<Window x:Class="YTools.UI.ClipboardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:YTools.UI"
+        Title="YTools 剪贴板历史"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        Width="720"
+        Height="460"
+        PreviewKeyDown="OnPreviewKeyDown"
+        Deactivated="OnDeactivated">
+    <Window.Resources>
+        <ui:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <ui:ClipboardKindToGlyphConverter x:Key="KindGlyph" />
+        <ui:ClipboardThumbnailConverter x:Key="Thumbnail" />
+        <ui:ClipboardKindVisibilityConverter x:Key="KindVisibility" />
+        <ui:CountToVisibilityConverter x:Key="CountToVisibility" />
+        <ui:ClipboardCopyCountConverter x:Key="CopyCount" />
+        <Style x:Key="ClipboardItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Row"
+                                CornerRadius="9"
+                                Background="Transparent"
+                                Padding="10,4">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource SelectionBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource HoverBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+        <DataTemplate x:Key="ClipboardItemTemplate">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="44" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid Grid.Column="0" Width="34" Height="34" VerticalAlignment="Center">
+                    <Image Source="{Binding BinaryData, Converter={StaticResource Thumbnail}}"
+                           Width="30" Height="30"
+                           Visibility="{Binding Kind, Converter={StaticResource KindVisibility}, ConverterParameter=image}" />
+                    <TextBlock Text="{Binding Kind, Converter={StaticResource KindGlyph}}"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="20"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center"
+                               Visibility="{Binding Kind, Converter={StaticResource KindVisibility}, ConverterParameter=notimage}" />
+                </Grid>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding DisplayText}"
+                                   FontSize="14"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="480" />
+                        <TextBlock Text=" 📌"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource AccentBrush}"
+                                   Visibility="{Binding IsPinned, Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock Text="{Binding CopyCount, Converter={StaticResource CopyCount}}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+                    <TextBlock FontSize="11"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextTrimming="CharacterEllipsis">
+                        <Run Text="{Binding SourceApplication, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding CreatedAt, Mode=OneWay, StringFormat={}{0:MM-dd HH:mm}}" />
+                    </TextBlock>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+    <Grid>
+        <Border x:Name="PanelBorder"
+                CornerRadius="14"
+                Background="{DynamicResource PanelBackgroundBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="1">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="28" ShadowDepth="4" Opacity="0.35" Color="Black" />
+            </Border.Effect>
+        </Border>
+        <Grid Margin="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Margin="18,14,18,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                        <TextBox x:Name="SearchBox"
+                             Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
+                             FontSize="16"
+                             Foreground="{DynamicResource TextPrimaryBrush}"
+                             CaretBrush="{DynamicResource TextPrimaryBrush}"
+                             Background="{DynamicResource InputBackgroundBrush}"
+                             BorderThickness="0"
+                             Padding="10,7"
+                             VerticalContentAlignment="Center"
+                             AutomationProperties.Name="筛选剪贴板历史"
+                             ToolTip="输入文字筛选剪贴板历史" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0">
+                        <Button x:Name="SyncButton" Content="立即同步" Click="SyncNow_Click" Margin="0,0,6,0" Padding="10,6"
+                                AutomationProperties.Name="立即同步剪贴板" ToolTip="加密同步已保存的剪贴板记录" />
+                        <Button Content="清空 30 分钟" Click="ClearRecent_Click" Margin="0,0,6,0" Padding="10,6"
+                                AutomationProperties.Name="清空最近三十分钟剪贴板历史" />
+                        <Button Content="清空全部" Click="ClearAll_Click" Margin="0" Padding="10,6"
+                                AutomationProperties.Name="清空全部剪贴板历史" />
+                    </StackPanel>
+                </Grid>
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <RadioButton x:Name="FilterAll" Content="全部" IsChecked="True" Checked="Filter_Checked" GroupName="Filter" Tag="All" Margin="0,0,14,0" ToolTip="显示所有类型" />
+                    <RadioButton x:Name="FilterText" Content="文本" Checked="Filter_Checked" GroupName="Filter" Tag="Text" Margin="0,0,14,0" ToolTip="只显示文本" />
+                    <RadioButton x:Name="FilterFiles" Content="文件" Checked="Filter_Checked" GroupName="Filter" Tag="Files" Margin="0,0,14,0" ToolTip="只显示文件" />
+                    <RadioButton x:Name="FilterImage" Content="图片" Checked="Filter_Checked" GroupName="Filter" Tag="Image" ToolTip="只显示图片" />
+                </StackPanel>
+            </StackPanel>
+            <Grid Grid.Row="1">
+                <ListBox x:Name="ClipboardList"
+                         ItemsSource="{Binding FilteredItems}"
+                         SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}"
+                         ItemContainerStyle="{StaticResource ClipboardItemStyle}"
+                         ItemTemplate="{StaticResource ClipboardItemTemplate}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         ContextMenuOpening="OnContextMenuOpening"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         KeyboardNavigation.TabNavigation="None"
+                         AutomationProperties.Name="剪贴板历史结果"
+                         Margin="10,0" />
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding FilteredItems.Count, Converter={StaticResource CountToVisibility}, ConverterParameter=invert}">
+                    <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="28"
+                               Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Center" Opacity="0.7" />
+                    <TextBlock Text="剪贴板历史为空" FontSize="14" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Center" Margin="0,8,0,0" />
+                    <TextBlock Text="复制文本、文件或图片后会在这里出现；可使用上方筛选缩小范围"
+                               FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center" Margin="0,4,0,0" />
+                </StackPanel>
+            </Grid>
+            <Grid Grid.Row="2" Margin="18,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Enter 复制 · Ctrl+D 删除 · Ctrl+S 保存为片段 · Esc 关闭"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                <TextBlock Grid.Column="1"
+                           x:Name="SyncStatusText"
+                           Text="{Binding CloudSyncStatus}"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="240" />
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

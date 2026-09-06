@@ -89,6 +89,56 @@ struct ClipboardSettingsView: View {
                 }
             }
 
+            SettingsCard(title: "坚果云加密同步", icon: "arrow.triangle.2.circlepath") {
+                Toggle("启用坚果云同步", isOn: $preferences.clipboardCloudSyncEnabled)
+                Text("仅在你启用后联网。每条新增或删除记录独立 AES-GCM 加密；相同内容只累计复制次数，不上传。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Divider()
+                SettingsRow(title: "远端目录", detail: "仅允许英文字母、数字、点、下划线与连字符") {
+                    TextField("YTools/clipboard-sync", text: $preferences.clipboardCloudSyncFolder)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                Divider()
+                SettingsRow(title: "拉取间隔", detail: "无变化时只读取每台设备的小型标记文件") {
+                    Stepper(
+                        "每 \(preferences.clipboardCloudSyncIntervalMinutes) 分钟",
+                        value: $preferences.clipboardCloudSyncIntervalMinutes,
+                        in: 15...240,
+                        step: 5
+                    )
+                    .frame(width: 170)
+                }
+                Divider()
+                TextField("坚果云用户名", text: $clipboardManager.cloudUsernameInput)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("坚果云应用密码", text: $clipboardManager.cloudAppPasswordInput)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("同步口令（至少 12 个字符；所有设备必须一致）", text: $clipboardManager.cloudSyncPassphraseInput)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("加密保存凭据") {
+                        Task { _ = await clipboardManager.saveCloudSyncCredentials(
+                            username: clipboardManager.cloudUsernameInput,
+                            appPassword: clipboardManager.cloudAppPasswordInput,
+                            syncPassphrase: clipboardManager.cloudSyncPassphraseInput
+                        ) }
+                    }
+                    Button("立即同步") {
+                        Task { await clipboardManager.syncCloudNow() }
+                    }
+                    .disabled(!preferences.clipboardCloudSyncEnabled)
+                    Spacer()
+                    if !clipboardManager.cloudSyncStatus.isEmpty {
+                        Text(clipboardManager.cloudSyncStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+            }
+
             SettingsCard(title: "忽略的应用", icon: "eye.slash") {
                 Text("从这些应用复制的内容不会进入历史。密码管理器和 Concealed 类型始终忽略。")
                     .font(.caption)

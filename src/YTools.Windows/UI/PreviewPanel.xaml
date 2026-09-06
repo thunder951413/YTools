@@ -1,0 +1,70 @@
+<UserControl x:Class="YTools.UI.PreviewPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Border CornerRadius="10"
+            Background="{DynamicResource InputBackgroundBrush}"
+            BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="1"
+            Margin="8,10,10,10">
+        <Border.ToolTip>文件预览</Border.ToolTip>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <TextBlock x:Name="TitleText"
+                       Grid.Row="0"
+                       Margin="12,10"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextPrimaryBrush}"
+                       TextTrimming="CharacterEllipsis" />
+            <Grid Grid.Row="1" Margin="10">
+                <Image x:Name="ImagePreview"
+                       Stretch="Uniform"
+                       MaxWidth="260"
+                       MaxHeight="260"
+                       Visibility="Collapsed"
+                       AutomationProperties.Name="图片预览" />
+                <TextBox x:Name="TextPreview"
+                         IsReadOnly="True"
+                         FontFamily="Cascadia Mono,Consolas"
+                         FontSize="12"
+                         Foreground="{DynamicResource TextPrimaryBrush}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         Visibility="Collapsed"
+                         AutomationProperties.Name="文本文件预览" />
+                <StackPanel x:Name="InfoPreview"
+                            VerticalAlignment="Top"
+                            Visibility="Collapsed">
+                    <TextBlock x:Name="InfoIconText"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="42"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,16,0,12" />
+                    <TextBlock x:Name="InfoNameText"
+                               FontSize="13"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center" />
+                    <TextBlock x:Name="InfoDetailText"
+                               Margin="0,6,0,0"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center" />
+                </StackPanel>
+                <TextBlock x:Name="LoadingText"
+                           Text="加载预览…"
+                           FontSize="12"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>

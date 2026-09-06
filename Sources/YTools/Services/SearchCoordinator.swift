@@ -30,6 +30,8 @@ struct BackgroundSearchRequest: Sendable {
     let fileNavigationFoldersFirst: Bool
     let enabledContentTypes: Set<SearchContentType>
     let applicationAliases: [String: String]
+    let customApplicationPaths: [String]
+    let maximumResults: Int
     let requestModules: [RegisteredSearchModule]
 }
 
@@ -77,24 +79,37 @@ actor SearchCoordinator {
         }
 
         async let applicationResults = request.enabledContentTypes.contains(.applications)
-            ? searchApplications(query: request.query, aliases: request.applicationAliases)
+            ? searchApplications(
+                query: request.query,
+                aliases: request.applicationAliases,
+                customApplicationPaths: request.customApplicationPaths
+            )
             : []
         async let moduleResults = searchModules(
             query: request.query,
             registrations: standardModules + request.requestModules,
-            enabledContentTypes: request.enabledContentTypes
+            enabledContentTypes: request.enabledContentTypes,
+            maximumResults: request.maximumResults
         )
         let combined = await applicationResults + moduleResults
         return Task.isCancelled ? [] : combined
     }
 
-    private func searchApplications(query: String, aliases: [String: String]) async -> [LauncherResult] {
+    private func searchApplications(
+        query: String,
+        aliases: [String: String],
+        customApplicationPaths: [String]
+    ) async -> [LauncherResult] {
         let descriptor = ModuleDescriptor(
             id: "applications",
             name: "应用程序",
             capabilities: [.localFileRead]
         )
-        let results = await applications.results(for: query, aliases: aliases)
+        let results = await applications.results(
+            for: query,
+            aliases: aliases,
+            customApplicationPaths: customApplicationPaths
+        )
         return sanitize(
             results,
             descriptor: descriptor,
@@ -105,7 +120,8 @@ actor SearchCoordinator {
     private func searchModules(
         query: String,
         registrations: [RegisteredSearchModule],
-        enabledContentTypes: Set<SearchContentType>
+        enabledContentTypes: Set<SearchContentType>,
+        maximumResults: Int
     ) async -> [LauncherResult] {
         await withTaskGroup(of: [LauncherResult].self, returning: [LauncherResult].self) { group in
             for registration in registrations {
@@ -117,7 +133,12 @@ actor SearchCoordinator {
                 let descriptor = registration.module.descriptor
                 guard registration.policy.permits(descriptor) else { continue }
                 let wasAdded = group.addTaskUnlessCancelled {
-                    await Self.search(registration.module, query: query, policy: registration.policy)
+                    await Self.search(
+                        registration.module,
+                        query: query,
+                        maximumResults: maximumResults,
+                        policy: registration.policy
+                    )
                 }
                 if !wasAdded { break }
             }
@@ -136,10 +157,14 @@ actor SearchCoordinator {
     private static func search(
         _ module: any YToolsModule,
         query: String,
+        maximumResults: Int,
         policy: ModuleResultPolicy
     ) async -> [LauncherResult] {
         do {
-            let request = ModuleSearchRequest(query: query, maximumResults: 40)
+            let request = ModuleSearchRequest(
+                query: query,
+                maximumResults: min(max(maximumResults, 3), 40)
+            )
             let results = try await module.search(request)
             guard !Task.isCancelled else { return [] }
             return results.prefix(request.maximumResults).compactMap {

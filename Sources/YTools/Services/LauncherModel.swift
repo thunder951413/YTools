@@ -99,6 +99,18 @@ final class LauncherModel: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in self?.refreshImmediately() }
             .store(in: &cancellables)
+        preferences.$customApplicationPaths
+            .dropFirst()
+            .sink { [weak self] _ in self?.refreshImmediately() }
+            .store(in: &cancellables)
+        Publishers.CombineLatest3(
+            preferences.$includeFilesInDefaultResults,
+            preferences.$maximumSearchResults,
+            preferences.$searchScopePaths
+        )
+        .dropFirst()
+        .sink { [weak self] _ in self?.refreshImmediately() }
+        .store(in: &cancellables)
         preferences.$searchInputDelay
             .dropFirst()
             .sink { [weak self] _ in self?.scheduleSearch() }
@@ -108,6 +120,14 @@ final class LauncherModel: ObservableObject {
             .sink { [weak self] _ in self?.schedulePreviewUpdate() }
             .store(in: &cancellables)
         Task { [searchCoordinator] in await searchCoordinator.prepare() }
+
+        // Restore the previous session's query so the panel opens with it
+        // pre-selected (the controller selects the field text on show):
+        // typing replaces it and doing nothing re-runs the search.
+        let lastQuery = preferences.lastLauncherQuery
+        if !lastQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            query = lastQuery
+        }
     }
 
     private func queryDidChange() {
@@ -168,6 +188,8 @@ final class LauncherModel: ObservableObject {
             fileNavigationFoldersFirst: preferences.fileNavigationFoldersFirst,
             enabledContentTypes: preferences.enabledSearchContentTypes,
             applicationAliases: preferences.applicationAliases,
+            customApplicationPaths: preferences.customApplicationPaths,
+            maximumResults: preferences.maximumSearchResults,
             requestModules: makeRequestModules(for: requestedQuery)
         )
         searchTask = Task { [weak self, searchCoordinator] in
@@ -486,6 +508,11 @@ final class LauncherModel: ObservableObject {
         return true
     }
 
+    /// Persists the current query so the next launch restores it.
+    func persistLastQuery() {
+        preferences.lastLauncherQuery = String(query.prefix(512))
+    }
+
     var selectedLargeTypeText: String? {
         guard !isShowingActions, results.indices.contains(selectedIndex) else { return nil }
         let result = results[selectedIndex]
@@ -513,5 +540,16 @@ final class LauncherModel: ObservableObject {
             fileBufferStore.clear()
             return true
         }
+    }
+
+    func shutdown() {
+        searchDebouncer.cancel()
+        spotlightDebouncer.cancel()
+        searchTask?.cancel()
+        searchTask = nil
+        previewTask?.cancel()
+        previewTask = nil
+        spotlight.shutdown()
+        cancellables.removeAll()
     }
 }

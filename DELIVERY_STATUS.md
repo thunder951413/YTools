@@ -1,36 +1,25 @@
-# 原生版交付状态
+# Windows / macOS 交付状态
 
-更新日期：2026-07-19
+更新日期：2026-09-06。基于 `windows` 分支当前修复工作树，尚未提交或发布。
 
-## 已通过
+## 本轮已验证
 
-- Swift 6 Debug 严格编译，`-warnings-as-errors`。
-- 无 XCTest Core 检查：计算器、快捷键路由、拼音/首字母转换、模块能力与外链拒绝策略。
-- arm64 Release `.app` 构建及 ad-hoc `codesign --deep --strict` 验证。
-- Release 二进制依赖检查：仅系统 AppKit、SwiftUI、Foundation、CryptoKit、ImageIO、Quick Look、Security、ServiceManagement 等框架。
-- Release 二进制字符串检查：无 HTTP(S) URL、`URLSession`、`WKWebView`、动态加载或 Shell 路径。
-- 进程启动冒烟：持续运行、空闲 CPU 接近 0%，实测 physical footprint 约 55 MB。
-- 剪贴板密文实机权限：目录 `0700`、文件 `0600`。
-- 剪贴板加载、图片处理和密文读写已移出 MainActor。
-- 内置与个人源码模块统一异步调度且不动态加载；结果经过宿主能力、file URL、字段长度、动作、数量和分数校验。
-- 启动器协调层已拆出结果聚合、动作菜单和文件缓冲；文件导航为显式 `Sendable` 值类型。
-- 设置文件选择器不再阻塞主线程；快捷键主注册与回退共用同一路径。
-- `AppPreferences` 已带 schema 版本迁移入口，ServiceManagement 副作用隔离在可替换服务中。
-- 启动器输入采用轻量模块与 Spotlight 分级防抖；空查询不会启动搜索，输入/删除热路径无同步 MetadataQuery 停止。
-- 面板布局使用窄语义发布器，不再订阅模型和偏好对象的全部变化；剪贴板过滤已后台化并限制 UI 结果规模。
-- 剪贴板新增 100–10000 字符可配置的单条文本上限；默认输入源、Finder 标签搜索及完整文件导航排序已加入。
-- 启动器支持拖动后记住位置；连续移动合并写入，多屏布局变化时保证窗口仍在可见区域。
-- 菜单栏图标可隐藏，隐藏后全局快捷键、剪贴板监听和后台运行不受影响。
-- 默认启动器空闲态已收敛为单行输入框，并提供极简、经典、现代、玻璃四种本机原生外观预设。
-- 新增独立“系统命令”设置页：可启停和自定义 `empty`、`trash`、`screensaver`、`sleepdisplays`、`dnd`、`theme`；永久清空废纸篓始终二次确认并使用固定 Finder Apple Event，不申请完全磁盘访问；勿扰和主题只导航到系统设置。设置窗口支持 `Command + W` 关闭。
-- 系统词典结果在列表中只显示单行精炼摘要，完整释义仍用于复制、大字显示和文本片段动作；普通结果副标题统一限制为单行，避免固定行高下发生换行裁切。
-- 完整 Xcode 环境下 `swift test` 已通过 24 项测试；连续输入与逐字符删除已通过本机可访问性回归。
+- macOS `scripts/check.sh` 完整通过：严格编译、62 项 XCTest（0 失败）、核心自检、统一安全扫描及其 fixture 测试。
+- Windows 使用 .NET SDK 8.0.424 交叉编译 Release：应用与测试程序集均生成，0 警告、0 错误。
+- 两端 Release 打包通过：macOS 应用包经过 ad-hoc 签名和校验，Windows 生成 win-x64 自包含单文件。产物位于 `/tmp/ytools-repair-release/`，没有替换已安装应用或原有 `dist/`。
+- 真实 SwiftUI 组件的亮暗主题快照已生成并目视检查，覆盖长文本截断、选中态、固定按钮与设置控件对齐。见 [组件预览](docs/ui-review/README.md)。
+- 修复原评估列出的 13 项问题，补充同步重试/重启恢复、删除冲突、不可读密文保护、后台存储顺序、文件索引和搜索取消测试。逐项证据见 [修复验收记录](docs/REPAIR_VALIDATION.md)。
+- macOS 与 Windows CI 均覆盖 `main`、`windows` 分支，使用相同安全扫描规则。此处记录的是本机结果，未提交触发远程 CI。
 
-## 当前环境无法完成
+## 尚需 Windows 和实际使用环境验证
 
-- VoiceOver 完整流程、中文输入法候选、多屏拖动和 Quick Look 动画仍需人工感知验收；自动化已覆盖普通英文连续输入、删除和焦点保持。
-- Developer ID、公证和 Gatekeeper 分发验证：需要用户的 Apple Developer 证书、完整 Xcode 和公证凭据。
+- 当前主机是 macOS，不能运行 WindowsDesktop/WPF：本轮 Windows xUnit、`--selftest`、回收站 COM、跨卷移动与完整窗口交互尚未执行。测试程序集编译通过不能替代这些检查。
+- Windows 执行 `./scripts/check.ps1` 后，再验证普通退出的保存提示、文件夹动作、Everything 回退刷新、大文件后台操作及批量选择。
+- 双端中文输入法、全局热键、多屏/DPI、辅助功能、真实应用图标与完整窗口布局仍需实机冒烟。
+- 同步状态机测试使用注入的假传输、临时密文和测试密钥；未访问真实剪贴板、钥匙串、坚果云凭据或远端数据。
+- 新版可接受更大的图片事件，旧版 6 MiB 接收上限可能拒绝它们；跨设备使用时应同步升级客户端。实际端到端同步尚待验证。
+- Windows Authenticode 与 macOS Developer ID/公证均未完成；本轮不作对外分发已验收的结论。
 
-## 交付结论
+## 交付判断
 
-当前 `.app` 适合在本机个人使用和继续功能开发。若要发给其他用户，必须先完成完整 Xcode App target、Hardened Runtime、Developer ID 签名、公证和上述 UI/无障碍实机验收。
+代码修复、可在本机执行的检查及组件视觉检查已完成。Windows 实机、真实同步与签名分发仍是发布前验收项，不沿用历史版本的测试或冒烟结果作为本次证明。
