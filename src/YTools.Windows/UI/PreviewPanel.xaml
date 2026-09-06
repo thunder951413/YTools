@@ -6,6 +6,7 @@
             BorderBrush="{DynamicResource BorderBrush}"
             BorderThickness="1"
             Margin="8,10,10,10">
+        <Border.ToolTip>文件预览</Border.ToolTip>
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -23,7 +24,8 @@
                        Stretch="Uniform"
                        MaxWidth="260"
                        MaxHeight="260"
-                       Visibility="Collapsed" />
+                       Visibility="Collapsed"
+                       AutomationProperties.Name="图片预览" />
                 <TextBox x:Name="TextPreview"
                          IsReadOnly="True"
                          FontFamily="Cascadia Mono,Consolas"
@@ -33,7 +35,8 @@
                          BorderThickness="0"
                          TextWrapping="Wrap"
                          VerticalScrollBarVisibility="Auto"
-                         Visibility="Collapsed" />
+                         Visibility="Collapsed"
+                         AutomationProperties.Name="文本文件预览" />
                 <StackPanel x:Name="InfoPreview"
                             VerticalAlignment="Top"
                             Visibility="Collapsed">

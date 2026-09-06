@@ -119,11 +119,11 @@ struct ClipboardSettingsView: View {
                     .textFieldStyle(.roundedBorder)
                 HStack {
                     Button("加密保存凭据") {
-                        _ = clipboardManager.saveCloudSyncCredentials(
+                        Task { _ = await clipboardManager.saveCloudSyncCredentials(
                             username: clipboardManager.cloudUsernameInput,
                             appPassword: clipboardManager.cloudAppPasswordInput,
                             syncPassphrase: clipboardManager.cloudSyncPassphraseInput
-                        )
+                        ) }
                     }
                     Button("立即同步") {
                         Task { await clipboardManager.syncCloudNow() }

@@ -11,7 +11,14 @@ namespace YTools.Services.Storage;
 /// </summary>
 public static class DpapiKeyAccessor
 {
+    private static readonly object KeyGate = new();
+
     public static byte[] Key(bool createIfMissing)
+    {
+        lock (KeyGate) { return ReadOrCreate(createIfMissing); }
+    }
+
+    private static byte[] ReadOrCreate(bool createIfMissing)
     {
         if (File.Exists(AppPaths.KeyFile))
         {
@@ -26,7 +33,8 @@ public static class DpapiKeyAccessor
             }
         }
 
-        if (!createIfMissing)
+        if (!createIfMissing || (Directory.Exists(AppPaths.VaultDirectory)
+            && Directory.EnumerateFiles(AppPaths.VaultDirectory, "*.enc", SearchOption.AllDirectories).Any()))
         {
             throw new SecureStorageException("加密文件存在，但密钥缺失；为防止覆盖，存储已锁定。");
         }
@@ -36,7 +44,7 @@ public static class DpapiKeyAccessor
         try
         {
             AppPaths.EnsureDirectories();
-            File.WriteAllBytes(AppPaths.KeyFile, encrypted);
+            AtomicWrite(AppPaths.KeyFile, encrypted);
             AppPaths.RestrictFile(AppPaths.KeyFile);
         }
         catch (Exception exception)
@@ -46,6 +54,25 @@ public static class DpapiKeyAccessor
 
         return key;
     }
+    internal static void AtomicWrite(string path, byte[] bytes)
+    {
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+            AppPaths.RestrictFile(temporary);
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) { File.Delete(temporary); }
+        }
+    }
+
 }
 
 public static class AesGcmBox
@@ -123,14 +150,33 @@ public sealed record SecureStoreLoadResult<T>(SecureStoreLoadResultKind Kind, T?
 public sealed class SecureCodableStore
 {
     private readonly string _filePath;
+    private readonly Func<bool, byte[]> _key;
+    private readonly object _gate = new();
+    private bool _locked;
 
     public SecureCodableStore(string name)
     {
-        AppPaths.EnsureDirectories();
         _filePath = Path.Combine(AppPaths.VaultDirectory, $"{name}.v1.enc");
+        _key = DpapiKeyAccessor.Key;
+    }
+
+    internal SecureCodableStore(string filePath, Func<bool, byte[]> key)
+    {
+        _filePath = filePath;
+        _key = key;
     }
 
     public SecureStoreLoadResult<T> Load<T>()
+    {
+        lock (_gate)
+        {
+            var result = LoadCore<T>();
+            if (result.Kind is SecureStoreLoadResultKind.Unavailable or SecureStoreLoadResultKind.Corrupted) { _locked = true; }
+            return result;
+        }
+    }
+
+    private SecureStoreLoadResult<T> LoadCore<T>()
     {
         if (!File.Exists(_filePath))
         {
@@ -140,7 +186,7 @@ public sealed class SecureCodableStore
         byte[] key;
         try
         {
-            key = DpapiKeyAccessor.Key(createIfMissing: false);
+            key = _key(false);
         }
         catch (Exception exception)
         {
@@ -173,19 +219,26 @@ public sealed class SecureCodableStore
 
     public bool Save<T>(T value)
     {
-        try
+        lock (_gate)
         {
-            AppPaths.EnsureDirectories();
-            var key = DpapiKeyAccessor.Key(createIfMissing: true);
-            var clear = JsonSerializer.SerializeToUtf8Bytes(value);
-            var combined = AesGcmBox.Seal(clear, key);
-            File.WriteAllBytes(_filePath, combined);
-            AppPaths.RestrictFile(_filePath);
-            return true;
-        }
-        catch
-        {
-            return false;
+            if (_locked) { return false; }
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+                var exists = File.Exists(_filePath);
+                var key = _key(!exists);
+                // An existing archive must authenticate before any replacement,
+                // even when the caller did not load it first.
+                if (exists) { _ = AesGcmBox.Open(File.ReadAllBytes(_filePath), key); }
+                var clear = JsonSerializer.SerializeToUtf8Bytes(value);
+                DpapiKeyAccessor.AtomicWrite(_filePath, AesGcmBox.Seal(clear, key));
+                return true;
+            }
+            catch
+            {
+                _locked = true;
+                return false;
+            }
         }
     }
 }

@@ -30,6 +30,7 @@ public partial class SettingsWindow : Window
     private HotKeyRecorder? _launcherRecorder;
     private HotKeyRecorder? _clipboardRecorder;
     private System.ComponentModel.PropertyChangedEventHandler? _preferenceChanged;
+    private System.ComponentModel.PropertyChangedEventHandler? _snippetChanged;
 
     public SettingsWindow()
     {
@@ -41,6 +42,10 @@ public partial class SettingsWindow : Window
             if (_preferences is { } preferences && _preferenceChanged is { } handler)
             {
                 preferences.PropertyChanged -= handler;
+            }
+            if (_snippets is { } snippets && _snippetChanged is { } snippetHandler)
+            {
+                snippets.PropertyChanged -= snippetHandler;
             }
         };
         NavList.SelectionChanged += (_, _) =>
@@ -63,6 +68,11 @@ public partial class SettingsWindow : Window
         _clipboard = clipboard;
         _snippets = snippets;
         _recentDocuments = recentDocuments;
+        _snippetChanged = (_, args) =>
+        {
+            if (args.PropertyName == nameof(SnippetManager.Items)) { RefreshSnippets(); }
+        };
+        snippets.PropertyChanged += _snippetChanged;
         DataContext = preferences;
         _scopePaths.Clear();
         foreach (var path in preferences.SearchScopePaths)
@@ -607,14 +617,15 @@ public partial class SettingsWindow : Window
         syncStatus.SetBinding(
             TextBlock.TextProperty,
             new System.Windows.Data.Binding(nameof(ClipboardHistoryManager.CloudSyncStatus)) { Source = _clipboard });
-        stack.Children.Add(Button("加密保存凭据并启用同步", () =>
+        stack.Children.Add(Button("加密保存凭据并启用同步", async () =>
         {
             if (_clipboard is null || _preferences is null)
             {
                 return;
             }
 
-            if (_clipboard.SaveCloudSyncCredentials(username.Box.Text, appPassword.Password, syncPassword.Password, out var error))
+            var error = await _clipboard.SaveCloudSyncCredentialsAsync(username.Box.Text, appPassword.Password, syncPassword.Password);
+            if (error is null)
             {
                 _preferences.ClipboardCloudSyncEnabled = true;
                 appPassword.Clear();
@@ -637,6 +648,11 @@ public partial class SettingsWindow : Window
         var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("文本片段"));
+        var storageStatus = new TextBlock { Style = (Style)FindResource("HintText") };
+        storageStatus.SetBinding(
+            TextBlock.TextProperty,
+            new System.Windows.Data.Binding(nameof(SnippetManager.StorageStatus)) { Source = _snippets });
+        stack.Children.Add(storageStatus);
         var snippetList = new ListBox
         {
             ItemsSource = _snippetItems,
@@ -645,9 +661,13 @@ public partial class SettingsWindow : Window
         };
         stack.Children.Add(snippetList);
         var leftButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-        leftButtons.Children.Add(Button("新建", () =>
+        leftButtons.Children.Add(Button("新建", async () =>
         {
-            _snippets?.Save("新片段内容", title: "新片段");
+            if (_snippets is not null
+                && !await _snippets.SaveAsync("新片段内容", title: "新片段"))
+            {
+                MessageBox.Show(this, _snippets.SaveError ?? "加密存储当前不可用。", "无法保存文本片段", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
             RefreshSnippets();
         }));
         leftButtons.Children.Add(Button("删除", () =>

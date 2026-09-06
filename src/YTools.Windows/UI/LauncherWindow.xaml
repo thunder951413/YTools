@@ -196,6 +196,7 @@
                                     FontSize="13"
                                     Content="&#xE711;"
                                     ToolTip="清除搜索 (Esc)"
+                                    AutomationProperties.Name="清除搜索"
                                     Cursor="Hand"
                                     Click="OnClearSearchClick"
                                     Visibility="{Binding Query, Converter={StaticResource StringEmptyToVisibility}, ConverterParameter=invert}" />
@@ -255,7 +256,10 @@
                              Background="Transparent"
                              BorderThickness="0"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
                              KeyboardNavigation.TabNavigation="None"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
                              MouseDoubleClick="OnActionsDoubleClick"
                              AutomationProperties.Name="可用操作"
                              Visibility="{Binding IsShowingActions, Converter={StaticResource BoolToVisibility}}" />
@@ -298,11 +302,17 @@
                                    FontSize="11"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    HorizontalAlignment="Left" />
-                        <TextBlock x:Name="BackendStatusText"
-                                   FontSize="11"
-                                   Foreground="{DynamicResource TextSecondaryBrush}"
-                                   HorizontalAlignment="Right"
-                                   TextTrimming="CharacterEllipsis" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <TextBlock Text="文件操作进行中…"
+                                       Margin="0,0,12,0"
+                                       FontSize="11"
+                                       Foreground="{DynamicResource AccentBrush}"
+                                       Visibility="{Binding IsActionBusy, Converter={StaticResource BoolToVisibility}}" />
+                            <TextBlock x:Name="BackendStatusText"
+                                       FontSize="11"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
                     </Grid>
                 </Border>
             </Grid>

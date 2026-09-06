@@ -1,13 +1,13 @@
-# Alfred 功能对标（Windows 版）
+# Alfred 功能对标（Windows + macOS）
 
-以下为 Windows 版 YTools 与 Alfred 常用高频能力的一一对应与实现状态。
+以下为主动维护的 Windows 与 macOS YTools 实现和 Alfred 常用高频能力的一一对应与实现状态。
 
 | Alfred 能力 | YTools Windows 对应 | 状态 |
 |---|---|---|
 | 应用启动与模糊搜索 | Windows 开始菜单/WindowsApps/AppsFolder 与 macOS Applications 目录索引 + 两端自定义本机应用 + 拼音/缩写/别名/模糊分 + 频率/新近度/查询记忆/启动次数动态排名 | 已实现 |
 | 连续输入与结果发布 | 50–400ms 可配置“输入停止后搜索”；新输入取消旧代次，最终查询完成后一次性展开结果 | 已实现 |
 | 关键词（Keyword）工作流 | 源码模块 `IYToolsModule`（需编译，不做运行时安装） | 已实现 |
-| 文件搜索 | Everything（可选）或内置文件名扫描 | 已实现（内容/标签搜索依赖 Everything） |
+| 文件搜索 | Everything（可选的纯本机 `WM_COPYDATA` IPC）或内置文件名扫描 | 已实现（内容/标签搜索依赖 Everything） |
 | 目录导航 | `/`、`~`、盘符路径 + 排序/文件夹优先 | 已实现 |
 | 文件动作（打开/显示/复制路径） | 资源管理器、复制/移动、回收站 | 已实现 |
 | 快速预览（Quick Look） | 内置图片/文本/元信息预览面板 | 已实现（PDF 预览未内置） |

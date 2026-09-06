@@ -1,16 +1,16 @@
 # 安全与外联审计（Windows + macOS）
 
-审计日期：2026-07-31（`windows` 分支）
+审计日期：2026-09-06（Windows + macOS 主动维护）
 
 ## 结论
 
-YTools 两端默认都是离线原生应用：不包含 Shell 执行、动态模块加载或遥测。用户没有明确配置并启用坚果云同步时不会联网。数据在磁盘上加密，Windows 密钥由 DPAPI 按当前用户保护，macOS 密钥由登录钥匙串保护。Windows 构建流水线强制 `warnings-as-errors` 并扫描禁止 API。
+YTools 两端默认都是离线原生应用：不包含任意 Shell 执行、动态模块加载或遥测。用户没有明确配置并启用坚果云同步时不会联网。数据在磁盘上加密，Windows 使用一个由 DPAPI CurrentUser 保护的主密钥，macOS 密钥由登录钥匙串保护。两端构建流水线都执行 `warnings-as-errors` 和统一的禁止 API 扫描。
 
 可配置的输入停止延迟只取消和调度本机搜索任务；连续输入期间不会新增文件、网络或进程访问，查询文本也不会离开本机。
 
 ## 外联面
 
-- Windows 应用源码没有 `HttpClient`、`WebClient`、`TcpClient`、`UdpClient`、`NetworkStream`、`Socket` 或 `AppDomain` 动态加载调用（`scripts/check.ps1` 与 CI 强制扫描）。可选同步在 Windows 使用审计过的 `WebDAVClient`，在 macOS 仅由 `ClipboardCloudSyncService` 使用系统 `URLSession`；两端都固定连接 `https://dav.jianguoyun.com/dav/`，不提供任意地址、代理或自定义请求头配置。
+- 统一的 `scripts/security_scan.py` 只使用 Python 标准库，扫描 macOS Swift 与 Windows C# 产品源码，不依赖 `rg`。它拒绝网络、动态代码和 Shell API；唯一精确例外是两个 `ClipboardCloudSyncService` 文件，并同时验证 Windows 唯一的 `WebDAVClient`/`Client` 构造、macOS 唯一的无重定向 `URLSession` 构造及其委托类型注解，以及固定 `https://dav.jianguoyun.com/dav/` 端点。配套 fixture 自测证明同样的 API 出现在其他路径、错误端点或重复构造时会失败。
 - 唯一的本地进程外交互：
   - `explorer.exe`：打开文件/目录或 `/select` 定位（固定参数模板）。
   - `rundll32.exe shell32.dll,OpenAs_RunDLL "<路径>"`：系统“打开方式”对话框（路径仅作为对话框参数，不执行）。
@@ -27,7 +27,7 @@ YTools 两端默认都是离线原生应用：不包含 Shell 执行、动态模
 | 数据 | 位置 | 保护 |
 |---|---|---|
 | 偏好 | Windows：`%APPDATA%\YTools\settings.json`；macOS：`~/Library/Preferences/com.ztools.native.plist` | 明文（含最近一次启动器查询文本，仅存于本机、无网络/Shell 使用），ACL 收紧 |
-| 密钥 | `%APPDATA%\YTools\secure-key.bin` | DPAPI CurrentUser 加密的 32 字节随机密钥 |
+| 密钥 | `%APPDATA%\YTools\secure-key.bin` | 一个 DPAPI CurrentUser 加密的 32 字节随机主密钥，供 Windows 本机加密存储共用 |
 | 剪贴板历史 | `%APPDATA%\YTools\vault\clipboard-vault-v2\` | AES-256-GCM，清单/记录/缩略图分别加密；所有保险库操作在专用线程按派发顺序串行执行，清单与记录写入使用临时文件 + 原子替换，写中途崩溃不会截断既有密文 |
 | 坚果云凭据与同步状态 | `%APPDATA%\YTools\vault\clipboard-cloud-*.v1.enc` | AES-256-GCM，随机本机密钥由 DPAPI CurrentUser 保护 |
 | Snippets | `%APPDATA%\YTools\vault\snippets.v1.enc` | AES-256-GCM |
@@ -42,11 +42,12 @@ YTools 两端默认都是离线原生应用：不包含 Shell 执行、动态模
 - 单条文本默认上限 1000 字符（100–10000 可配置）；图片默认关闭，单项上限 5 MB。
 - 支持暂停、固定、分段清理与忽略进程配置。
 - 可选同步在上传前以用户同步口令通过 PBKDF2-SHA256（600,000 次）派生密钥，再使用 AES-256-GCM 加密单条剪贴板变更；坚果云不会看到剪贴板内容。Windows 与 macOS 使用相同的 `YTCE2` 密文封装和每设备无连字符 UUID 路径。每台设备另有一个最大 4 KiB 的未加密标记，仅含协议版本、设备 ID、变更序号和时间，用于让客户端每 15 分钟先判断是否需要下载新密文。重复复制仅更新本机计数，不会产生上传。
+- 下载事件先持久化在加密 durable inbox；只有本地历史成功保存才确认移除。删除通过 tombstone 合并；密钥丢失或密文损坏使对应保险库只读，不会以空数据覆盖或错误确认远端事件。
 
 ## 系统命令审计
 
 - `清空回收站`：确认对话框 → `SHEmptyRecycleBin`（无进度 UI、无提示音），不读取回收站内容。
-- `移入回收站`：确认对话框 → `FileSystem.DeleteFile(RecycleOption.SendToRecycleBin)`。
+- `移入回收站`：确认对话框 → 后台 STA 线程中的 `IFileOperation`，使用 `FOFX_RECYCLEONDELETE` 与 `FOFX_EARLYFAILURE`；错误/取消保留面板和文件缓冲。
 - `关闭显示器`：`SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2)`。
 - `启动屏幕保护`：`SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_SCREENSAVE, 0)`。
 - 专注模式/外观：`ms-settings:focus` / `ms-settings:colors`，无模拟点击。
@@ -56,4 +57,13 @@ YTools 两端默认都是离线原生应用：不包含 Shell 执行、动态模
 
 - 发布版未做 Authenticode 代码签名；分发前应由用户自行签名或接受 SmartScreen 提示。
 - `rundll32 OpenAs_RunDLL` 在较新 Windows 上仍可用，但属于系统兼容 API，若未来失效需替换为 `IFileDialog` 的 Open With 实现。
-- 内置文件搜索回退扫描器为性能跳过部分目录（AppData 等）；安装 Everything 后获得完整内容/标签搜索。
+- 内置文件搜索回退扫描器为性能跳过部分目录（AppData 等）；安装 Everything 后交由其支持的索引与查询能力处理，覆盖范围仍由 Everything 配置决定。
+
+## 本轮可靠性与审计范围
+
+- 已有密文时不创建替代密钥。通用保险库通过认证/解码失败后锁定写入；剪贴板部分记录损坏时保留原清单与记录，显式清除历史才解除保护。Windows 小型保险库先写临时文件并刷新磁盘，再原子替换。
+- 同步合并使用回调时的当前历史；收件事件与游标一起保存，历史落盘成功后再确认。删除标记跨轮询保留，旧删除不能抹去较新条目；同时间冲突采用确定性排序。
+- 网络事务串行；单事件接收上限为 8 MiB（包含 49 字节封装开销），每轮最多 200 条，累计密文达到 16 MiB 后停止当前批次（允许最后一条带来最多 8 MiB 的额外数据）。这不是整个进程的内存上限。
+- macOS 同步传输禁止 HTTP 重定向并按字节限制响应。Windows 保留既有 WebDAVClient；源码扫描不等于对其传递依赖或运行时网络行为的完整审计。尚未连接真实坚果云验证跨设备往返。
+- 正常退出其他 Windows 应用只发送关闭请求，按完整可执行路径匹配，不自动强杀。回收站 STA 要求依据 [Microsoft IFileOperation 文档](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ifileoperation)核对。
+- 本轮验证结果与未覆盖范围见 [修复验收记录](docs/REPAIR_VALIDATION.md)。

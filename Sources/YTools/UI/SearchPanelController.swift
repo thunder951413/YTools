@@ -407,8 +407,18 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         case .deleteClipboardItem:
             clipboard.deleteSelected()
         case .saveClipboardAsSnippet:
-            guard let text = clipboard.selectedText, snippets.save(text: text) else { return false }
-            NSSound(named: "Glass")?.play()
+            guard let text = clipboard.selectedText else { return false }
+            Task { [snippets] in
+                guard await snippets.savePersisted(text: text) else {
+                    let alert = NSAlert()
+                    alert.messageText = "无法保存文本片段"
+                    alert.informativeText = snippets.saveError ?? "加密存储当前不可用。"
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                    return
+                }
+                NSSound(named: "Glass")?.play()
+            }
         case .togglePreview:
             launcher.togglePreview()
         case .showLargeType:

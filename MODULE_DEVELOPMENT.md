@@ -1,6 +1,6 @@
 # 个人源码模块开发（Windows 版）
 
-个人工具以源码形式编译进 YTools，宿主负责权限、UI 与副作用。模块只需要实现 `IYToolsModule`。
+个人工具以源码形式编译进 YTools，宿主负责权限、UI 与副作用。模块只需要实现 `IYToolsModule`。模块不是沙箱：它与宿主同进程、同用户权限运行；`ModuleResultPolicy` 约束返回结果和宿主动作，不隔离模块自行写出的代码。因此只接受经过代码审查并重新编译的模块。
 
 ```csharp
 using YTools.ModuleKit;

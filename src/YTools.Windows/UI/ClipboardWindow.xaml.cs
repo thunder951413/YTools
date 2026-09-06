@@ -58,6 +58,11 @@ public partial class ClipboardWindow : Window
         {
             ClipboardList.ScrollIntoView(_manager?.FilteredItems.FirstOrDefault());
         }
+
+        if (e.PropertyName == nameof(ClipboardHistoryManager.CloudSyncStatus))
+        {
+            SyncStatusText.ToolTip = _manager?.CloudSyncStatus;
+        }
     }
 
     private void OnDeactivated(object sender, EventArgs e)
@@ -115,9 +120,9 @@ public partial class ClipboardWindow : Window
                 _manager.DeleteSelected();
                 break;
             case PanelCommandKind.SaveClipboardAsSnippet:
-                if (_manager.SelectedText is { } text && _snippets?.Save(text) == true)
+                if (_manager.SelectedText is { } text && _snippets is { } snippets)
                 {
-                    System.Media.SystemSounds.Asterisk.Play();
+                    _ = SaveSnippetAsync(snippets, text);
                 }
 
                 break;
@@ -126,6 +131,22 @@ public partial class ClipboardWindow : Window
                 OnOpenSettings?.Invoke();
                 break;
         }
+    }
+
+    private async Task SaveSnippetAsync(SnippetManager snippets, string text)
+    {
+        if (await snippets.SaveAsync(text))
+        {
+            System.Media.SystemSounds.Asterisk.Play();
+            return;
+        }
+
+        MessageBox.Show(
+            this,
+            snippets.SaveError ?? "加密存储当前不可用。",
+            "无法保存文本片段",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
     }
 
     public Action? OnOpenSettings { get; set; }
@@ -151,7 +172,15 @@ public partial class ClipboardWindow : Window
     {
         if (_manager is not null)
         {
-            await _manager.SyncCloudNowAsync();
+            SyncButton.IsEnabled = false;
+            try
+            {
+                await _manager.SyncCloudNowAsync();
+            }
+            finally
+            {
+                SyncButton.IsEnabled = true;
+            }
         }
     }
 
@@ -267,11 +296,18 @@ public sealed class ClipboardThumbnailConverter : IValueConverter
         try
         {
             using var stream = new MemoryStream(png);
-            var decoder = new PngBitmapDecoder(
-                stream,
-                BitmapCreateOptions.PreservePixelFormat,
-                BitmapCacheOption.OnLoad);
-            return decoder.Frames[0];
+            // History rows only show a 30px thumbnail. Scaling before the image is
+            // handed to WPF keeps a pasted high-resolution screenshot from holding
+            // an unnecessary full-size decoded buffer in the virtualized list.
+            var thumbnail = new BitmapImage();
+            thumbnail.BeginInit();
+            thumbnail.CacheOption = BitmapCacheOption.OnLoad;
+            thumbnail.DecodePixelWidth = 72;
+            thumbnail.DecodePixelHeight = 72;
+            thumbnail.StreamSource = stream;
+            thumbnail.EndInit();
+            thumbnail.Freeze();
+            return thumbnail;
         }
         catch
         {

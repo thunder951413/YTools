@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelController: SearchPanelController?
     private var settingsController: SettingsWindowController?
     private var snippets: SnippetManager?
+    private var recentDocuments: RecentDocumentsManager?
     private var hotKeyManager: HotKeyManager?
     private var statusItem: NSStatusItem?
     private var pauseClipboardMenuItem: NSMenuItem?
@@ -44,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panelController = panelController
         self.settingsController = settingsController
         self.snippets = snippets
+        self.recentDocuments = recentDocuments
         self.hotKeyManager = hotKeyManager
         preferences.hotKeysDidChange = { [weak self] in self?.configureHotKeys() }
         preferences.menuBarVisibilityDidChange = { [weak self] in self?.updateStatusItemVisibility() }
@@ -168,12 +170,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func quit() { NSApp.terminate(nil) }
 
+    private var terminationFlushStarted = false
+    private var terminationFlushFinished = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationFlushFinished { return .terminateNow }
+        guard !terminationFlushStarted else { return .terminateLater }
+        terminationFlushStarted = true
+        Task { [weak self] in
+            await self?.snippets?.flushPendingChanges()
+            await self?.recentDocuments?.flushPendingChanges()
+            self?.terminationFlushFinished = true
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         panelController?.shutdown()
         settingsController?.shutdown()
         hotKeyManager?.shutdown()
         themeCancellable?.cancel()
-        snippets?.flushPendingChanges()
     }
 
     private func applyAppearance(_ theme: AppTheme) {

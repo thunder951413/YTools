@@ -1,4 +1,5 @@
 using System.IO;
+using YTools.Core;
 
 namespace YTools.ModuleKit;
 
@@ -24,15 +25,21 @@ public sealed record ModuleDescriptor(
 
 public readonly struct ModuleSearchRequest
 {
-    public ModuleSearchRequest(string query, int maximumResults = 20)
+    public ModuleSearchRequest(
+        string query,
+        int maximumResults = 20,
+        CancellationToken cancellationToken = default)
     {
         Query = query;
         MaximumResults = Math.Clamp(maximumResults, 1, 100);
+        CancellationToken = cancellationToken;
     }
 
     public string Query { get; }
 
     public int MaximumResults { get; }
+
+    public CancellationToken CancellationToken { get; }
 }
 
 /// <summary>Source-compiled personal modules implement this contract.</summary>
@@ -74,9 +81,9 @@ public abstract record ResultAction
     /// continuation). Purely a UI edit; never interpreted as a path or command.</summary>
     public sealed record EditQuery(string Text) : ResultAction;
 
-    public sealed record HideApplication(string ProcessName) : ResultAction;
+    public sealed record HideApplication(string ExecutablePath) : ResultAction;
 
-    public sealed record QuitApplication(string ProcessName) : ResultAction;
+    public sealed record QuitApplication(string ExecutablePath) : ResultAction;
 
     public sealed record ShowTrash : ResultAction;
 
@@ -196,13 +203,13 @@ public sealed class ModuleResultPolicy
                 return !string.IsNullOrEmpty(system.Name) && system.Name.Length <= 200;
             case ResultIcon.Application application:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
-                    && Path.IsPathRooted(application.Path);
+                    && LocalPathPolicy.IsValid(application.Path);
             case ResultIcon.RegisteredApplication application:
                 return descriptor.Capabilities.Contains(ModuleCapability.ApplicationLaunch)
                     && IsValidAppUserModelId(application.AppUserModelId);
             case ResultIcon.File file:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
-                    && Path.IsPathRooted(file.Path);
+                    && LocalPathPolicy.IsValid(file.Path);
             default:
                 return false;
         }
@@ -219,23 +226,23 @@ public sealed class ModuleResultPolicy
                 return true;
             case ResultAction.Open open:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
-                    && Path.IsPathRooted(open.Path);
+                    && LocalPathPolicy.IsValid(open.Path);
             case ResultAction.ActivateApplication application:
                 return descriptor.Capabilities.Contains(ModuleCapability.ApplicationLaunch)
                     && IsValidAppUserModelId(application.AppUserModelId);
             case ResultAction.Reveal reveal:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
-                    && Path.IsPathRooted(reveal.Path);
+                    && LocalPathPolicy.IsValid(reveal.Path);
             case ResultAction.Navigate navigate:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
                     && navigate.Path.Length <= 4_096
-                    && (Path.IsPathRooted(navigate.Path) || navigate.Path.StartsWith("~", StringComparison.Ordinal));
+                    && (LocalPathPolicy.IsValid(navigate.Path) || IsTildePath(navigate.Path));
             case ResultAction.EditQuery editQuery:
                 return editQuery.Text.Length <= 1_000;
             case ResultAction.HideApplication hide:
-                return AllowsPrivilegedActions && !string.IsNullOrEmpty(hide.ProcessName) && hide.ProcessName.Length <= 255;
+                return AllowsPrivilegedActions && IsExecutablePath(hide.ExecutablePath);
             case ResultAction.QuitApplication quit:
-                return AllowsPrivilegedActions && !string.IsNullOrEmpty(quit.ProcessName) && quit.ProcessName.Length <= 255;
+                return AllowsPrivilegedActions && IsExecutablePath(quit.ExecutablePath);
             case ResultAction.ShowTrash:
             case ResultAction.EmptyTrash:
             case ResultAction.StartScreenSaver:
@@ -253,5 +260,18 @@ public sealed class ModuleResultPolicy
         return !string.IsNullOrWhiteSpace(value)
             && value.Length <= 512
             && value.All(character => !char.IsControl(character));
+    }
+
+    private static bool IsExecutablePath(string path)
+    {
+        return LocalPathPolicy.IsValid(path)
+            && Path.GetExtension(path).Equals(".exe", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTildePath(string path)
+    {
+        return path == "~"
+            || path.StartsWith("~/", StringComparison.Ordinal)
+            || path.StartsWith("~\\", StringComparison.Ordinal);
     }
 }

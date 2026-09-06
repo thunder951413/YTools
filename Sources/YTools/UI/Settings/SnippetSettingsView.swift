@@ -12,6 +12,10 @@ struct SnippetSettingsView: View {
                         .foregroundStyle(.orange)
                     Divider()
                 }
+                Label(snippets.storageStatus, systemImage: snippets.isSaving ? "arrow.triangle.2.circlepath" : "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Divider()
                 Text("在启动器中输入 snip 或“片段”搜索。剪贴板历史中按 Command + S 可快速保存。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -47,7 +51,7 @@ struct SnippetSettingsView: View {
                 }
             }
         }
-        .onDisappear { snippets.flushPendingChanges() }
+        .onDisappear { Task { await snippets.flushPendingChanges() } }
     }
 
     private func titleBinding(_ item: SnippetItem) -> Binding<String> {

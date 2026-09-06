@@ -109,7 +109,7 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <TextBox x:Name="SearchBox"
+                        <TextBox x:Name="SearchBox"
                              Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
                              FontSize="16"
                              Foreground="{DynamicResource TextPrimaryBrush}"
@@ -117,18 +117,23 @@
                              Background="{DynamicResource InputBackgroundBrush}"
                              BorderThickness="0"
                              Padding="10,7"
-                             VerticalContentAlignment="Center" />
+                             VerticalContentAlignment="Center"
+                             AutomationProperties.Name="筛选剪贴板历史"
+                             ToolTip="输入文字筛选剪贴板历史" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0">
-                        <Button Content="立即同步" Click="SyncNow_Click" Margin="0,0,6,0" Padding="10,6" />
-                        <Button Content="清空 30 分钟" Click="ClearRecent_Click" Margin="0,0,6,0" Padding="10,6" />
-                        <Button Content="清空全部" Click="ClearAll_Click" Margin="0" Padding="10,6" />
+                        <Button x:Name="SyncButton" Content="立即同步" Click="SyncNow_Click" Margin="0,0,6,0" Padding="10,6"
+                                AutomationProperties.Name="立即同步剪贴板" ToolTip="加密同步已保存的剪贴板记录" />
+                        <Button Content="清空 30 分钟" Click="ClearRecent_Click" Margin="0,0,6,0" Padding="10,6"
+                                AutomationProperties.Name="清空最近三十分钟剪贴板历史" />
+                        <Button Content="清空全部" Click="ClearAll_Click" Margin="0" Padding="10,6"
+                                AutomationProperties.Name="清空全部剪贴板历史" />
                     </StackPanel>
                 </Grid>
                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                    <RadioButton x:Name="FilterAll" Content="全部" IsChecked="True" Checked="Filter_Checked" GroupName="Filter" Tag="All" Margin="0,0,14,0" />
-                    <RadioButton x:Name="FilterText" Content="文本" Checked="Filter_Checked" GroupName="Filter" Tag="Text" Margin="0,0,14,0" />
-                    <RadioButton x:Name="FilterFiles" Content="文件" Checked="Filter_Checked" GroupName="Filter" Tag="Files" Margin="0,0,14,0" />
-                    <RadioButton x:Name="FilterImage" Content="图片" Checked="Filter_Checked" GroupName="Filter" Tag="Image" />
+                    <RadioButton x:Name="FilterAll" Content="全部" IsChecked="True" Checked="Filter_Checked" GroupName="Filter" Tag="All" Margin="0,0,14,0" ToolTip="显示所有类型" />
+                    <RadioButton x:Name="FilterText" Content="文本" Checked="Filter_Checked" GroupName="Filter" Tag="Text" Margin="0,0,14,0" ToolTip="只显示文本" />
+                    <RadioButton x:Name="FilterFiles" Content="文件" Checked="Filter_Checked" GroupName="Filter" Tag="Files" Margin="0,0,14,0" ToolTip="只显示文件" />
+                    <RadioButton x:Name="FilterImage" Content="图片" Checked="Filter_Checked" GroupName="Filter" Tag="Image" ToolTip="只显示图片" />
                 </StackPanel>
             </StackPanel>
             <Grid Grid.Row="1">
@@ -141,13 +146,20 @@
                          BorderThickness="0"
                          ContextMenuOpening="OnContextMenuOpening"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         KeyboardNavigation.TabNavigation="None"
+                         AutomationProperties.Name="剪贴板历史结果"
                          Margin="10,0" />
-                <TextBlock Text="剪贴板历史为空"
-                           FontSize="13"
-                           Foreground="{DynamicResource TextSecondaryBrush}"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           Visibility="{Binding FilteredItems.Count, Converter={StaticResource CountToVisibility}, ConverterParameter=invert}" />
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding FilteredItems.Count, Converter={StaticResource CountToVisibility}, ConverterParameter=invert}">
+                    <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="28"
+                               Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Center" Opacity="0.7" />
+                    <TextBlock Text="剪贴板历史为空" FontSize="14" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Center" Margin="0,8,0,0" />
+                    <TextBlock Text="复制文本、文件或图片后会在这里出现；可使用上方筛选缩小范围"
+                               FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center" Margin="0,4,0,0" />
+                </StackPanel>
             </Grid>
             <Grid Grid.Row="2" Margin="18,8">
                 <Grid.ColumnDefinitions>
@@ -158,6 +170,7 @@
                            FontSize="11"
                            Foreground="{DynamicResource TextSecondaryBrush}" />
                 <TextBlock Grid.Column="1"
+                           x:Name="SyncStatusText"
                            Text="{Binding CloudSyncStatus}"
                            FontSize="11"
                            Foreground="{DynamicResource TextSecondaryBrush}"

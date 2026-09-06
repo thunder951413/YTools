@@ -37,6 +37,7 @@ struct ClipboardHistoryView: View {
                 .foregroundStyle(.secondary)
                 .help("立即同步坚果云剪贴板")
                 .disabled(!preferences.clipboardCloudSyncEnabled || manager.isLoading)
+                .accessibilityLabel("立即加密同步剪贴板历史")
                 Button {
                     manager.showsClearConfirmation = true
                 } label: {
@@ -52,11 +53,29 @@ struct ClipboardHistoryView: View {
 
             Divider()
 
+            if let error = manager.storageError {
+                statusMessage(error, symbol: "exclamationmark.triangle.fill", tint: .orange)
+            } else if manager.isLoading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在读取本机加密历史…")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: 32)
+            } else if !manager.cloudSyncStatus.isEmpty {
+                statusMessage(manager.cloudSyncStatus, symbol: "arrow.triangle.2.circlepath", tint: .secondary)
+            }
+
             if manager.filteredItems.isEmpty {
                 ContentUnavailableView(
                     manager.query.isEmpty ? "暂无剪贴板历史" : "没有匹配内容",
-                    systemImage: "clipboard",
-                    description: Text("历史仅在本机加密保存；图片记录默认关闭")
+                    systemImage: manager.query.isEmpty ? "clipboard" : "line.3.horizontal.decrease.circle",
+                    description: Text(manager.query.isEmpty
+                        ? "复制文本、文件或图片后会在这里出现；历史仅在本机加密保存"
+                        : "可清除关键词或切换“全部”查看其他记录")
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -65,7 +84,8 @@ struct ClipboardHistoryView: View {
                         ClipboardHistoryRow(
                             item: item,
                             selected: index == manager.selectedIndex,
-                            compact: preferences.compactResults
+                            compact: preferences.compactResults,
+                            onTogglePin: { manager.togglePinned(item) }
                         )
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -111,10 +131,6 @@ struct ClipboardHistoryView: View {
                 } else {
                     Text("\(manager.items.count) 条")
                 }
-                if !manager.cloudSyncStatus.isEmpty {
-                    Text(manager.cloudSyncStatus)
-                        .lineLimit(1)
-                }
                 Text(preferences.clipboardHotKey.displayString)
             }
             .font(.caption)
@@ -139,12 +155,25 @@ struct ClipboardHistoryView: View {
             Text("所选范围内的本机加密记录将被永久删除。")
         }
     }
+
+    private func statusMessage(_ text: String, symbol: String, tint: Color) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.caption)
+            .foregroundStyle(tint)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .padding(.horizontal, 18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 32)
+            .accessibilityLabel("剪贴板状态：\(text)")
+    }
 }
 
-private struct ClipboardHistoryRow: View {
+struct ClipboardHistoryRow: View {
     let item: ClipboardHistoryItem
     let selected: Bool
     let compact: Bool
+    let onTogglePin: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -167,17 +196,23 @@ private struct ClipboardHistoryRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            if item.pinned {
-                Image(systemName: "pin.fill")
-                    .foregroundStyle(Color.accentColor)
-                    .help("固定项目不会因保留期限过期")
+            Button {
+                onTogglePin()
+            } label: {
+                Image(systemName: item.pinned ? "pin.fill" : "pin")
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(item.pinned ? Color.accentColor : .secondary)
+            .help(item.pinned ? "取消固定" : "固定项目")
+            .accessibilityLabel(item.pinned ? "取消固定此剪贴板项目" : "固定此剪贴板项目")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, compact ? 5 : 9)
         .background(selected ? Color.accentColor.opacity(0.16) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("\(item.kind == .image ? "图片" : item.kind == .files ? "文件" : "文本")，\(item.displayText)，\(item.sourceApplication ?? "未知来源")")
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }

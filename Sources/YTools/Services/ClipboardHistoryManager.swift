@@ -64,6 +64,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private var lastChangeCount: Int
     private var persistenceRevision = 0
+    private var localDeletedForSync: [UUID: Date] = [:]
     private var storageReady = false
     private var persistenceWritable = false
     private let filterDebouncer = DebouncedAction()
@@ -83,7 +84,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
 
     init(preferences: AppPreferences) {
         self.preferences = preferences
-        self.cloudSync = ClipboardCloudSyncService(preferences: preferences)
+        self.cloudSync = ClipboardCloudSyncService()
         self.lastChangeCount = NSPasteboard.general.changeCount
         super.init()
 
@@ -193,8 +194,9 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     func togglePinned(_ item: ClipboardHistoryItem) {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[index].isPinned = !items[index].pinned
+        items[index].updatedAt = Date()
         sortItems()
-        persistCurrent()
+        persistCurrent(changedItemID: item.id)
     }
 
     var selectedText: String? {
@@ -207,6 +209,8 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     func clear() {
         let previous = items
         let deletedIDs = previous.map(\.id)
+        let deletedAt = Date()
+        deletedIDs.forEach { localDeletedForSync[$0] = deletedAt }
         items.removeAll()
         selectedIndex = 0
         persistenceRevision += 1
@@ -219,7 +223,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
                 self.persistenceWritable = true
                 self.storageError = nil
                 self.storageByteCount = 0
-                await self.publishCloudDeletion(deletedIDs)
+                await self.publishCloudDeletion(deletedIDs, timestamp: deletedAt)
                 if !self.items.isEmpty { self.persistCurrent() }
             } catch {
                 guard let self, self.persistenceRevision == revision else { return }
@@ -457,28 +461,39 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     private func persistCurrent(
         originalImages: [UUID: Data] = [:],
         changedItemID: UUID? = nil,
-        deletedIDs: [UUID] = []
+        deletedIDs: [UUID] = [],
+        acknowledge: [ClipboardCloudSyncService.Event] = []
     ) {
         guard storageReady, persistenceWritable else { return }
+        let deletedAt = Date()
+        deletedIDs.forEach { localDeletedForSync[$0] = deletedAt }
         persistenceRevision += 1
         let revision = persistenceRevision
         let snapshot = items
         Task { [weak self, persistence] in
             do {
-                guard let normalized = try await persistence.persist(
+                let normalized = try await persistence.persist(
                     snapshot,
                     originalImages: originalImages,
                     revision: revision
-                ) else { return }
+                )
                 let byteCount = await persistence.diskUsage()
-                guard let self, self.persistenceRevision == revision else { return }
-                self.items = normalized
-                self.storageByteCount = byteCount
-                self.storageError = nil
-                if let changedItemID, let changedItem = normalized.first(where: { $0.id == changedItemID }) {
+                guard let self else { return }
+                if self.persistenceRevision == revision, let normalized {
+                    self.items = normalized
+                    self.storageByteCount = byteCount
+                    self.storageError = nil
+                }
+                if !acknowledge.isEmpty {
+                    do { try await self.cloudSync.acknowledge(acknowledge) }
+                    catch { self.cloudSyncStatus = "同步确认待重试：\(error.localizedDescription)" }
+                }
+                // Publishing an event is independent of whether its old UI
+                // snapshot can still be displayed.
+                if let changedItemID, let changedItem = snapshot.first(where: { $0.id == changedItemID }) {
                     await self.publishCloudChange(changedItem)
                 } else if !deletedIDs.isEmpty {
-                    await self.publishCloudDeletion(deletedIDs)
+                    await self.publishCloudDeletion(deletedIDs, timestamp: deletedAt)
                 }
             } catch {
                 guard let self, self.persistenceRevision == revision else { return }
@@ -495,8 +510,8 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         lastChangeCount = pasteboard.changeCount
     }
 
-    func saveCloudSyncCredentials(username: String, appPassword: String, syncPassphrase: String) -> String? {
-        let error = cloudSync.saveCredentials(username: username, appPassword: appPassword, syncPassphrase: syncPassphrase)
+    func saveCloudSyncCredentials(username: String, appPassword: String, syncPassphrase: String) async -> String? {
+        let error = await cloudSync.saveCredentials(username: username, appPassword: appPassword, syncPassphrase: syncPassphrase)
         cloudSyncStatus = error ?? "坚果云同步凭据已加密保存。"
         if error == nil {
             cloudAppPasswordInput = ""
@@ -505,33 +520,55 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         return error
     }
 
+    private var cloudConfiguration: ClipboardCloudSyncService.Configuration {
+        .init(enabled: preferences.clipboardCloudSyncEnabled, folder: preferences.clipboardCloudSyncFolder)
+    }
+
     func syncCloudNow() async {
-        guard storageReady else { return }
+        guard storageReady, persistenceWritable else { return }
         cloudSyncStatus = "正在同步坚果云剪贴板…"
-        applyCloudResult(await cloudSync.synchronize(localItems: items))
+        await applyCloudResult(await cloudSync.synchronize(configuration: cloudConfiguration))
     }
 
     private func publishCloudChange(_ item: ClipboardHistoryItem) async {
-        applyCloudResult(await cloudSync.publishChangedItem(item))
+        var publishable = item
+        if item.kind == .image {
+            let original = await persistence.imageData(for: item.id)
+            publishable = ClipboardHistoryItem(id: item.id, kind: item.kind, payload: item.payload,
+                createdAt: item.createdAt, sourceApplication: item.sourceApplication,
+                binaryData: original, contentHash: item.contentHash, isPinned: item.pinned,
+                updatedAt: item.updatedAt, copyCount: item.copyCount)
+        }
+        await applyCloudResult(await cloudSync.publishChangedItem(publishable, configuration: cloudConfiguration))
     }
 
-    private func publishCloudDeletion(_ ids: [UUID]) async {
-        applyCloudResult(await cloudSync.publishDeleted(ids))
+    private func publishCloudDeletion(_ ids: [UUID], timestamp: Date) async {
+        await applyCloudResult(await cloudSync.publishDeleted(ids, timestamp: timestamp, configuration: cloudConfiguration))
     }
 
-    private func applyCloudResult(_ result: ClipboardCloudSyncService.Result) {
+    private func applyCloudResult(_ result: ClipboardCloudSyncService.Result) async {
         guard !result.message.isEmpty else { return }
         cloudSyncStatus = result.message
-        guard result.success, let merged = result.items else { return }
-        items = merged
+        guard result.success, let events = result.events, persistenceWritable else { return }
+        var deleted = await cloudSync.deletionSnapshot()
+        for (id, date) in localDeletedForSync { deleted[id] = max(deleted[id] ?? .distantPast, date) }
+        // Read items after the await: local edits may have occurred meanwhile.
+        items = ClipboardCloudSyncService.apply(events: events, to: items, deleted: deleted)
         prune()
-        persistCurrent()
+        persistCurrent(acknowledge: events)
     }
 
     private func startCloudPullTimer() {
         cloudPullTimer?.invalidate()
         cloudPullTimer = nil
         guard storageReady, preferences.clipboardCloudSyncEnabled else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let events = await self.cloudSync.pendingEvents()
+            if !events.isEmpty {
+                await self.applyCloudResult(.init(success: true, items: nil, message: "正在恢复已接收的剪贴板变更…", events: events))
+            }
+        }
         cloudPullTimer = Timer.scheduledTimer(
             withTimeInterval: TimeInterval(preferences.clipboardCloudSyncIntervalMinutes * 60),
             repeats: true

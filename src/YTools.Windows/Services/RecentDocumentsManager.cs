@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows;
 using YTools.Infrastructure;
 using YTools.Models;
 using YTools.ModuleKit;
@@ -12,33 +13,87 @@ namespace YTools.Services;
 /// </summary>
 public sealed class RecentDocumentsManager : ObservableObject
 {
-    private readonly SecureCodableStore _store = new("recent-documents");
-    private List<RecentDocumentItem> _items;
+    private readonly Func<SecureCodableStore> _storeFactory;
+    private readonly OrderedBackgroundWriter _writer = new();
+    private readonly List<Action<List<RecentDocumentItem>>> _pendingLoadMutations = [];
+    private readonly Task _initialization;
+    private SecureCodableStore? _store;
+    private SecureStoreLoadResult<List<RecentDocumentItem>>? _loadedResult;
+    private List<RecentDocumentItem> _items = [];
     private string? _storageError;
+    private bool _isLoaded;
+    private bool _isSaving;
+    private long _revision;
+    private long _queuedRevision;
+    private Task<bool>? _latestSaveTask;
+    private bool _loadedItemsRemoved;
     private const int MaximumItems = 200;
 
     public RecentDocumentsManager()
+        : this(() => new SecureCodableStore("recent-documents"))
     {
-        var result = _store.Load<List<RecentDocumentItem>>();
+    }
+
+    internal RecentDocumentsManager(Func<SecureCodableStore> storeFactory)
+    {
+        _storeFactory = storeFactory;
+        _initialization = _writer.Enqueue(LoadOnWorker);
+    }
+
+    private bool LoadOnWorker()
+    {
+        SecureStoreLoadResult<List<RecentDocumentItem>> result;
+        try
+        {
+            _store = _storeFactory();
+            result = _store.Load<List<RecentDocumentItem>>();
+            if (result.Kind == SecureStoreLoadResultKind.Loaded)
+            {
+                var source = result.Value ?? [];
+                var filtered = source.Where(item => File.Exists(item.Path)).ToList();
+                _loadedItemsRemoved = filtered.Count != source.Count;
+                result = SecureStoreLoadResult<List<RecentDocumentItem>>.Loaded(filtered);
+            }
+        }
+        catch (Exception exception)
+        {
+            result = SecureStoreLoadResult<List<RecentDocumentItem>>.Unavailable(exception.Message);
+        }
+        _loadedResult = result;
+        PostToOwner(() => ApplyLoad(result));
+        return true;
+    }
+
+    private void ApplyLoad(SecureStoreLoadResult<List<RecentDocumentItem>> result)
+    {
+        if (_isLoaded) { return; }
+        var loaded = result.Kind == SecureStoreLoadResultKind.Loaded
+            ? result.Value ?? []
+            : [];
         switch (result.Kind)
         {
             case SecureStoreLoadResultKind.Missing:
-                _items = [];
-                _storageError = null;
+                StorageError = null;
                 break;
             case SecureStoreLoadResultKind.Loaded:
-                _items = (result.Value ?? []).Where(item => File.Exists(item.Path)).ToList();
-                _storageError = null;
-                if (_items.Count != (result.Value ?? []).Count)
-                {
-                    Persist();
-                }
-
+                StorageError = null;
                 break;
             default:
-                _items = [];
-                _storageError = result.Message;
+                StorageError = result.Message;
                 break;
+        }
+
+        foreach (var mutation in _pendingLoadMutations) { mutation(loaded); }
+        _pendingLoadMutations.Clear();
+        _items = loaded;
+        _isLoaded = true;
+        RaisePropertyChanged(nameof(Items));
+        RaisePropertyChanged(nameof(IsLoaded));
+        RaisePropertyChanged(nameof(StorageStatus));
+        if (_revision > 0 || _loadedItemsRemoved)
+        {
+            _revision = Math.Max(1, _revision);
+            _ = QueueCurrentSnapshot();
         }
     }
 
@@ -47,8 +102,24 @@ public sealed class RecentDocumentsManager : ObservableObject
     public string? StorageError
     {
         get => _storageError;
-        private set => SetField(ref _storageError, value);
+        private set
+        {
+            if (SetField(ref _storageError, value)) { RaisePropertyChanged(nameof(StorageStatus)); }
+        }
     }
+
+    public bool IsLoaded => _isLoaded;
+
+    public bool IsSaving
+    {
+        get => _isSaving;
+        private set
+        {
+            if (SetField(ref _isSaving, value)) { RaisePropertyChanged(nameof(StorageStatus)); }
+        }
+    }
+
+    public string StorageStatus => !_isLoaded ? "正在读取加密最近文档…" : IsSaving ? "正在加密保存…" : StorageError ?? "已安全保存";
 
     public void Record(string path)
     {
@@ -59,33 +130,86 @@ public sealed class RecentDocumentsManager : ObservableObject
             return;
         }
 
-        _items.RemoveAll(item => item.Path == path);
-        _items.Insert(0, new RecentDocumentItem(Guid.NewGuid(), path, DateTimeOffset.UtcNow));
-        _items = _items.Take(MaximumItems).ToList();
-        Persist();
+        ApplyMutation(items =>
+        {
+            items.RemoveAll(item => item.Path == path);
+            items.Insert(0, new RecentDocumentItem(Guid.NewGuid(), path, DateTimeOffset.UtcNow));
+            if (items.Count > MaximumItems) { items.RemoveRange(MaximumItems, items.Count - MaximumItems); }
+        });
+        if (_isLoaded) { _ = QueueCurrentSnapshot(); }
     }
 
     public void Clear()
     {
-        _items = [];
-        Persist();
+        ApplyMutation(items => items.Clear());
+        if (_isLoaded) { _ = QueueCurrentSnapshot(); }
     }
 
     public RecentDocumentsSearchModule SearchModule()
     {
-        return new RecentDocumentsSearchModule(_items);
+        return new RecentDocumentsSearchModule(_items.ToList());
     }
 
-    private void Persist()
+    public void FlushPendingChanges()
     {
-        if (_store.Save(_items))
+        _initialization.GetAwaiter().GetResult();
+        if (!_isLoaded && _loadedResult is { } loaded) { ApplyLoad(loaded); }
+        if (_queuedRevision < _revision) { _ = QueueCurrentSnapshot(); }
+        _writer.DrainAsync().GetAwaiter().GetResult();
+    }
+
+    public async Task FlushPendingChangesAsync()
+    {
+        await _initialization.ConfigureAwait(false);
+        Task<bool>? save = null;
+        PostToOwner(() =>
         {
-            StorageError = null;
-        }
-        else
+            if (!_isLoaded && _loadedResult is { } loaded) { ApplyLoad(loaded); }
+            save = _queuedRevision < _revision ? QueueCurrentSnapshot() : _latestSaveTask;
+        }, synchronous: true);
+        if (save is not null) { _ = await save.ConfigureAwait(false); }
+        await _writer.DrainAsync().ConfigureAwait(false);
+    }
+
+    internal Task WaitUntilLoadedAsync() => _initialization;
+
+    private void ApplyMutation(Action<List<RecentDocumentItem>> mutation)
+    {
+        mutation(_items);
+        if (!_isLoaded) { _pendingLoadMutations.Add(mutation); }
+        _revision += 1;
+        RaisePropertyChanged(nameof(Items));
+    }
+
+    private Task<bool> QueueCurrentSnapshot()
+    {
+        var snapshot = _items.ToList();
+        var revision = _revision;
+        _queuedRevision = Math.Max(_queuedRevision, revision);
+        IsSaving = true;
+        var task = _writer.Enqueue(() => _store?.Save(snapshot) == true);
+        _latestSaveTask = task;
+        _ = task.ContinueWith(completed => PostToOwner(() =>
         {
-            StorageError = "无法写入加密最近文档；现有文件未被明文替代。";
+            if (revision != _revision) { return; }
+            IsSaving = false;
+            StorageError = completed.IsCompletedSuccessfully && completed.Result
+                ? null
+                : "无法写入加密最近文档；现有文件未被明文替代。";
+            RaisePropertyChanged(nameof(StorageStatus));
+        }), TaskScheduler.Default);
+        return task;
+    }
+
+    private static void PostToOwner(Action action, bool synchronous = false)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            if (synchronous) { dispatcher.Invoke(action); }
+            else { _ = dispatcher.BeginInvoke(action); }
         }
+        else { action(); }
     }
 }
 

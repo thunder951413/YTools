@@ -1,4 +1,5 @@
 using System.IO;
+using YTools.Core;
 using YTools.ModuleKit;
 
 namespace YTools.Services;
@@ -23,15 +24,21 @@ public sealed class FileSearchService : IDisposable
     private readonly object _indexLock = new();
     private readonly Dictionary<string, FileNameIndex> _indexes = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _disposeCancellation = new();
+    private readonly Func<IReadOnlyList<string>, CancellationToken, IReadOnlyList<string>>? _fallbackIndexBuilder;
+
+    public event EventHandler? FallbackIndexRefreshed;
 
     public FileSearchService()
         : this(enableEverything: true)
     {
     }
 
-    internal FileSearchService(bool enableEverything)
+    internal FileSearchService(
+        bool enableEverything,
+        Func<IReadOnlyList<string>, CancellationToken, IReadOnlyList<string>>? fallbackIndexBuilder = null)
     {
         _everything = enableEverything ? EverythingClient.TryCreate() : null;
+        _fallbackIndexBuilder = fallbackIndexBuilder;
     }
 
     public bool UsesEverything => _everything?.IsAvailable == true;
@@ -178,12 +185,28 @@ public sealed class FileSearchService : IDisposable
         {
             if (!_indexes.TryGetValue(key, out var index))
             {
-                index = new FileNameIndex(roots);
+                index = new FileNameIndex(
+                    roots,
+                    () => FallbackIndexRefreshed?.Invoke(this, EventArgs.Empty),
+                    _fallbackIndexBuilder is null
+                        ? null
+                        : token => _fallbackIndexBuilder(roots, token));
                 _indexes.Add(key, index);
             }
 
             index.EnsureBuilding(_disposeCancellation.Token);
             return index;
+        }
+    }
+
+    internal void RefreshFallbackIndexes()
+    {
+        lock (_indexLock)
+        {
+            foreach (var index in _indexes.Values)
+            {
+                index.EnsureBuilding(_disposeCancellation.Token, force: true);
+            }
         }
     }
 
@@ -203,17 +226,14 @@ public sealed class FileSearchService : IDisposable
 
     private static string? NormalizeLocalDirectory(string path)
     {
-        if (string.IsNullOrWhiteSpace(path)
-            || !Path.IsPathRooted(path)
-            || path.StartsWith("\\\\", StringComparison.Ordinal))
+        if (!LocalPathPolicy.TryNormalize(path, out var fullPath))
         {
             return null;
         }
 
         try
         {
-            var fullPath = Path.GetFullPath(path);
-            return Path.IsPathRooted(fullPath) && Directory.Exists(fullPath) ? fullPath : null;
+            return Directory.Exists(fullPath) ? fullPath : null;
         }
         catch
         {
@@ -262,19 +282,32 @@ public sealed class FileSearchService : IDisposable
         private readonly IReadOnlyList<string> _roots;
         private IReadOnlyList<string> _paths = [];
         private Task? _buildTask;
+        private DateTimeOffset _lastSuccessfulBuild = DateTimeOffset.MinValue;
+        private readonly Action _onRefreshed;
+        private readonly Func<CancellationToken, IReadOnlyList<string>>? _builder;
 
-        public FileNameIndex(IReadOnlyList<string> roots)
+        public FileNameIndex(
+            IReadOnlyList<string> roots,
+            Action onRefreshed,
+            Func<CancellationToken, IReadOnlyList<string>>? builder)
         {
             _roots = roots;
+            _onRefreshed = onRefreshed;
+            _builder = builder;
         }
 
-        public void EnsureBuilding(CancellationToken cancellationToken)
+        public void EnsureBuilding(CancellationToken cancellationToken, bool force = false)
         {
             lock (_lock)
             {
                 // A failed build must be retried on the next query, otherwise
                 // the fallback index stays empty for the rest of the session.
-                if (_buildTask is null || _buildTask.IsFaulted || _buildTask.IsCanceled)
+                var stale = DateTimeOffset.UtcNow - _lastSuccessfulBuild > TimeSpan.FromMinutes(2);
+                if (_buildTask is null
+                    || _buildTask.IsFaulted
+                    || _buildTask.IsCanceled
+                    || (force && _buildTask.IsCompleted)
+                    || (stale && _buildTask.IsCompleted))
                 {
                     _buildTask = Task.Run(() => Build(cancellationToken), CancellationToken.None);
                 }
@@ -313,15 +346,25 @@ public sealed class FileSearchService : IDisposable
 
         private void Build(CancellationToken cancellationToken)
         {
-            var paths = new List<string>();
-            var scanned = 0;
-            foreach (var root in _roots)
+            IReadOnlyList<string> paths;
+            if (_builder is not null)
             {
-                Walk(root, cancellationToken, ref scanned, paths);
-                if (cancellationToken.IsCancellationRequested || scanned > 200_000)
+                paths = _builder(cancellationToken);
+            }
+            else
+            {
+                var builtPaths = new List<string>();
+                var scanned = 0;
+                foreach (var root in _roots)
                 {
-                    break;
+                    Walk(root, cancellationToken, ref scanned, builtPaths);
+                    if (cancellationToken.IsCancellationRequested || scanned > 200_000)
+                    {
+                        break;
+                    }
                 }
+
+                paths = builtPaths;
             }
 
             if (!cancellationToken.IsCancellationRequested)
@@ -329,6 +372,16 @@ public sealed class FileSearchService : IDisposable
                 lock (_lock)
                 {
                     _paths = paths;
+                    _lastSuccessfulBuild = DateTimeOffset.UtcNow;
+                }
+
+                try
+                {
+                    _onRefreshed();
+                }
+                catch
+                {
+                    // A UI refresh subscriber must not invalidate a completed snapshot.
                 }
             }
         }
@@ -340,10 +393,12 @@ public sealed class FileSearchService : IDisposable
                 return;
             }
 
-            IEnumerable<FileSystemInfo> entries;
+            FileSystemInfo[] entries;
             try
             {
-                entries = new DirectoryInfo(directory).EnumerateFileSystemInfos();
+                // Materialize inside the try: lazy enumeration can throw from
+                // MoveNext after EnumerateFileSystemInfos itself succeeds.
+                entries = new DirectoryInfo(directory).GetFileSystemInfos();
             }
             catch
             {

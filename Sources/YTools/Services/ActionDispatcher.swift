@@ -13,11 +13,16 @@ enum ActionExecutionOutcome {
 protocol SnippetSaving: AnyObject {
     var saveError: String? { get }
     func save(text: String, title: String?, keyword: String, collection: String) -> Bool
+    func savePersisted(text: String, title: String?, keyword: String, collection: String) async -> Bool
 }
 
 extension SnippetSaving {
     func save(text: String) -> Bool {
         save(text: text, title: nil, keyword: "", collection: "默认")
+    }
+
+    func savePersisted(text: String) async -> Bool {
+        await savePersisted(text: text, title: nil, keyword: "", collection: "默认")
     }
 }
 
@@ -110,11 +115,14 @@ final class ActionDispatcher {
         case let .largeType(text):
             onShowLargeType(text)
         case let .saveSnippet(text):
-            guard snippets.save(text: text) else {
-                showAlert(title: "无法保存文本片段", message: snippets.saveError ?? "加密存储当前不可用。")
-                return .keepPanel
+            Task { [weak self, snippets] in
+                guard await snippets.savePersisted(text: text) else {
+                    self?.showAlert(title: "无法保存文本片段", message: snippets.saveError ?? "加密存储当前不可用。")
+                    return
+                }
+                NSSound(named: "Glass")?.play()
             }
-            NSSound(named: "Glass")?.play()
+            return .hidePanel
         case let .preview(url):
             return .preview(url)
         case let .openWith(url):

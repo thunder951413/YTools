@@ -42,6 +42,18 @@ public static class SelfTest
             Check("calculator.divisionByZero", Throws<CalculatorException>(() => ExpressionCalculator.Evaluate("1/0")));
             Check("calculator.format", ExpressionCalculator.Format(3.14159265358979) == "3.14159265359");
 
+            Check("paths.rejectDriveRelative", !LocalPathPolicy.IsValid(@"C:notes.txt"));
+            Check("paths.rejectUnc", !LocalPathPolicy.IsValid(@"\\server\share\notes.txt"));
+            Check("paths.acceptLocalAbsolute", LocalPathPolicy.IsValid(@"C:\Users\Example\notes.txt"));
+            var historyId = Guid.NewGuid();
+            var currentHistory = new YTools.Models.ClipboardHistoryItem(historyId, YTools.Models.ClipboardItemKind.Text,
+                ["self-test"], DateTimeOffset.FromUnixTimeSeconds(100), null, UpdatedAt: DateTimeOffset.FromUnixTimeSeconds(300));
+            var staleDelete = ClipboardCloudSyncService.ClipboardCloudEvent.Delete(1, Guid.NewGuid(), [historyId], DateTimeOffset.FromUnixTimeSeconds(200));
+            Check("clipboard.rejectStaleDelete", ClipboardCloudSyncService.ApplyEvents([currentHistory], [staleDelete]).Count == 1);
+            var oldUpsert = ClipboardCloudSyncService.ClipboardCloudEvent.Upsert(2, Guid.NewGuid(), currentHistory);
+            Check("clipboard.persistedTombstone", ClipboardCloudSyncService.ApplyEvents([], [oldUpsert],
+                new Dictionary<Guid, DateTimeOffset> { [historyId] = DateTimeOffset.FromUnixTimeSeconds(400) }).Count == 0);
+
             var normalizer = new SearchTextNormalizer();
             var forms = normalizer.Forms("微信");
             Check("normalizer.pinyin", forms.Transliteration == "weixin" && forms.TransliterationInitials == "wx");

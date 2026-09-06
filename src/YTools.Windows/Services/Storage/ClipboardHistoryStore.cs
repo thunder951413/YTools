@@ -43,6 +43,7 @@ public sealed class ClipboardHistoryStore
 {
     private const int MaximumEncryptedBytes = 200 * 1024 * 1024;
 
+    private bool _writeLocked;
     private readonly string _vaultDirectory;
     private readonly string _manifestFile;
     private readonly string _recordsDirectory;
@@ -107,6 +108,8 @@ public sealed class ClipboardHistoryStore
                 switch (entry.Kind)
                 {
                     case ClipboardItemKind.Image:
+                        _ = JsonSerializer.Deserialize<Record>(AesGcmBox.Open(File.ReadAllBytes(RecordFile(entry.Id)), key))
+                            ?? throw new InvalidDataException("图片原记录为空");
                         payload = [entry.DisplayText];
                         thumbnail = LoadThumbnail(entry.Id, key);
                         break;
@@ -140,7 +143,8 @@ public sealed class ClipboardHistoryStore
             }
         }
 
-        var warning = skipped == 0 ? null : $"有 {skipped} 条剪贴板记录损坏，已跳过但未覆盖原密文。";
+        _writeLocked = skipped > 0;
+        var warning = skipped == 0 ? null : $"有 {skipped} 条剪贴板记录损坏，原密文已保留；存储只读，新增内容仅保留在本次运行中。";
         return ClipboardStoreLoadResult.Loaded(items, warning);
     }
 
@@ -148,7 +152,8 @@ public sealed class ClipboardHistoryStore
         IReadOnlyList<ClipboardHistoryItem> requestedItems,
         IReadOnlyDictionary<Guid, byte[]> originalImages)
     {
-        var key = DpapiKeyAccessor.Key(createIfMissing: true);
+        if (_writeLocked) { throw new SecureStorageException("存在不可读记录，原保险库保持只读。"); }
+        var key = DpapiKeyAccessor.Key(createIfMissing: !File.Exists(_manifestFile));
         var existing = CurrentManifest(key);
         var existingById = existing.Entries.ToDictionary(entry => entry.Id);
         var candidateEntries = new List<Entry>();
@@ -165,7 +170,7 @@ public sealed class ClipboardHistoryStore
                         old.Id,
                         old.Kind,
                         item.DisplayText,
-                        old.CreatedAt,
+                        item.CreatedAt,
                         item.SourceApplication,
                         item.ContentHash ?? old.ContentHash,
                         old.EncryptedByteCount,
@@ -272,6 +277,7 @@ public sealed class ClipboardHistoryStore
 
     public void RemovePersistedHistory()
     {
+        _writeLocked = false;
         if (Directory.Exists(_vaultDirectory))
         {
             Directory.Delete(_vaultDirectory, recursive: true);

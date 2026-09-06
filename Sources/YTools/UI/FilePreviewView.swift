@@ -16,6 +16,7 @@ struct FilePreviewView: NSViewRepresentable {
         let view = QLPreviewView(frame: .zero, style: .normal)!
         view.autostarts = true
         view.previewItem = url as NSURL
+        view.setAccessibilityLabel("文件预览：\(url.lastPathComponent)")
         context.coordinator.displayedURL = url
         return view
     }
@@ -24,6 +25,7 @@ struct FilePreviewView: NSViewRepresentable {
         guard context.coordinator.displayedURL != url else { return }
         context.coordinator.displayedURL = url
         view.previewItem = url as NSURL
+        view.setAccessibilityLabel("文件预览：\(url.lastPathComponent)")
         view.refreshPreviewItem()
     }
 

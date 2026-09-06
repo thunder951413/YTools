@@ -18,7 +18,9 @@ namespace YTools.Services;
 public sealed class ClipboardCloudSyncService : IDisposable
 {
     private const string Server = "https://dav.jianguoyun.com";
-    private const int MaximumEventBytes = 6 * 1024 * 1024;
+    internal const int MaximumEventBytes = 8 * 1024 * 1024;
+    private const int EnvelopeBytes = 49;
+    private const int MaximumPullEvents = 200;
     private const int MaximumHeadBytes = 4 * 1024;
     private readonly AppPreferences _preferences;
     private readonly SecureCodableStore _credentialStore = new("clipboard-cloud-credentials");
@@ -28,94 +30,133 @@ public sealed class ClipboardCloudSyncService : IDisposable
     private ClipboardCloudState _state;
     private System.Threading.Timer? _pullTimer;
     private string? _createdRemoteRoot;
+    private volatile string? _stateError;
+    private volatile bool _disposed;
+    private volatile bool _hasCredentials;
+    private readonly Task _initialize;
+    private ClipboardCloudBatch? _publishedInbox;
+    private IReadOnlyDictionary<Guid, DateTimeOffset> _publishedTombstones = new Dictionary<Guid, DateTimeOffset>();
 
     public ClipboardCloudSyncService(AppPreferences preferences)
     {
         _preferences = preferences;
-        _state = LoadState();
+        _state = new ClipboardCloudState { DeviceId = Guid.NewGuid() };
+        _initialize = Task.Run(() =>
+        {
+            lock (_stateLock)
+            {
+                _state = LoadState();
+                PublishSnapshots();
+                _hasCredentials = _credentialStore.Load<ClipboardCloudCredentials>().Kind == SecureStoreLoadResultKind.Loaded;
+            }
+        });
     }
 
-    public bool HasCredentials => _credentialStore.Load<ClipboardCloudCredentials>().Kind == SecureStoreLoadResultKind.Loaded;
+    public bool HasCredentials => _hasCredentials;
+    public Task InitializeAsync() => _initialize;
 
-    public bool SaveCredentials(string username, string appPassword, string syncPassphrase, out string? error)
+    public Task<string?> SaveCredentialsAsync(string username, string appPassword, string syncPassphrase) => Task.Run(async () =>
+    {
+        await _initialize;
+        return SaveCredentials(username, appPassword, syncPassphrase);
+    });
+
+    private string? SaveCredentials(string username, string appPassword, string syncPassphrase)
     {
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(appPassword) || syncPassphrase.Length < 12)
         {
-            error = "请填写坚果云用户名、应用密码和至少 12 个字符的同步口令。";
-            return false;
+            return "请填写坚果云用户名、应用密码和至少 12 个字符的同步口令。";
         }
 
         if (!_credentialStore.Save(new ClipboardCloudCredentials(username.Trim(), appPassword, syncPassphrase)))
         {
-            error = "无法加密保存坚果云凭据。";
-            return false;
+            return "无法加密保存坚果云凭据。";
         }
 
-        error = null;
-        return true;
+        _hasCredentials = true;
+        return null;
     }
 
     public void StartPeriodicPull(Func<IReadOnlyList<ClipboardHistoryItem>> items, Action<ClipboardCloudSyncResult> completed)
     {
         _pullTimer?.Dispose();
-        if (!_preferences.ClipboardCloudSyncEnabled)
+        if (_disposed || !_preferences.ClipboardCloudSyncEnabled)
         {
             return;
         }
 
         var period = TimeSpan.FromMinutes(_preferences.ClipboardCloudSyncIntervalMinutes);
         _pullTimer = new System.Threading.Timer(
-            _ => _ = SynchronizeAsync(items(), completed),
+            _ => _ = Task.Run(() => SynchronizeAsync([], completed)),
             null,
             period,
             period);
     }
 
     public Task SyncNowAsync(IReadOnlyList<ClipboardHistoryItem> items, Action<ClipboardCloudSyncResult> completed) =>
-        SynchronizeAsync(items, completed);
+        Task.Run(() => SynchronizeAsync(items, completed));
 
-    public Task PublishChangedItemAsync(ClipboardHistoryItem item, Action<ClipboardCloudSyncResult> completed)
+    public Task PublishChangedItemAsync(ClipboardHistoryItem item, Action<ClipboardCloudSyncResult> completed) =>
+        PublishAsync((sequence, device) => ClipboardCloudEvent.Upsert(sequence, device, item), completed);
+
+    public Task PublishDeletedAsync(IEnumerable<Guid> ids, Action<ClipboardCloudSyncResult> completed, DateTimeOffset? timestamp = null)
     {
-        if (!_preferences.ClipboardCloudSyncEnabled)
-        {
-            Complete(completed, ClipboardCloudSyncResult.Skipped());
-            return Task.CompletedTask;
-        }
-
-        lock (_stateLock)
-        {
-            EnqueueLocked(ClipboardCloudEvent.Upsert(NextSequenceLocked(), _state.DeviceId, item));
-        }
-
-        return SynchronizeAsync([], completed, pullRemote: false);
-    }
-
-    public Task PublishDeletedAsync(IEnumerable<Guid> ids, Action<ClipboardCloudSyncResult> completed)
-    {
-        if (!_preferences.ClipboardCloudSyncEnabled)
-        {
-            Complete(completed, ClipboardCloudSyncResult.Skipped());
-            return Task.CompletedTask;
-        }
-
         var list = ids.Distinct().ToList();
-        if (list.Count == 0)
-        {
-            return Task.CompletedTask;
-        }
+        var deletedAt = timestamp ?? DateTimeOffset.UtcNow;
+        return list.Count == 0 ? Task.CompletedTask : PublishAsync(
+            (sequence, device) => ClipboardCloudEvent.Delete(sequence, device, list, deletedAt), completed);
+    }
 
+    private Task PublishAsync(Func<long, Guid, ClipboardCloudEvent> create, Action<ClipboardCloudSyncResult> completed) => Task.Run(async () =>
+    {
+        await _initialize;
+        if (_disposed || !_preferences.ClipboardCloudSyncEnabled) { return; }
+        try
+        {
+            lock (_stateLock)
+            {
+                if (_stateError is not null) { throw new SecureStorageException(_stateError); }
+                BindScope(CredentialsOrThrow());
+                var entry = create(_state.NextSequence, _state.DeviceId);
+                if (JsonSerializer.SerializeToUtf8Bytes(entry).Length > MaximumEventBytes - EnvelopeBytes)
+                { throw new InvalidDataException("剪贴板同步记录过大，未加入上传队列。"); }
+                _state.NextSequence += 1;
+                EnqueueLocked(entry);
+            }
+            await SynchronizeAsync([], completed, pullRemote: false);
+        }
+        catch (Exception exception) { Complete(completed, ClipboardCloudSyncResult.Failed(exception.Message)); }
+    });
+
+    internal IReadOnlyList<ClipboardHistoryItem> MergeRemote(IReadOnlyList<ClipboardHistoryItem> current,
+        ClipboardCloudBatch batch, IReadOnlyDictionary<Guid, DateTimeOffset> localDeletions)
+    {
+        Dictionary<Guid, DateTimeOffset> deleted;
+        deleted = new(Volatile.Read(ref _publishedTombstones));
+        foreach (var pair in localDeletions)
+        { if (!deleted.TryGetValue(pair.Key, out var date) || pair.Value > date) { deleted[pair.Key] = pair.Value; } }
+        return ApplyEvents(current, batch.Events, deleted);
+    }
+
+    internal ClipboardCloudBatch? PendingBatch
+    {
+        get => Volatile.Read(ref _publishedInbox);
+    }
+
+    internal Task AcknowledgeAsync(ClipboardCloudBatch batch) => Task.Run(() =>
+    {
         lock (_stateLock)
         {
-            EnqueueLocked(ClipboardCloudEvent.Delete(NextSequenceLocked(), _state.DeviceId, list, DateTimeOffset.UtcNow));
+            var received = batch.Events.Select(entry => (entry.DeviceId, entry.Sequence)).ToHashSet();
+            _state.Inbox.RemoveAll(entry => received.Contains((entry.DeviceId, entry.Sequence)));
+            SaveState();
         }
-
-        return SynchronizeAsync([], completed, pullRemote: false);
-    }
+    });
 
     public void Dispose()
     {
         _pullTimer?.Dispose();
-        _syncGate.Dispose();
+        _disposed = true; // In-flight work owns the gate until completion.
     }
 
     private async Task SynchronizeAsync(
@@ -123,16 +164,19 @@ public sealed class ClipboardCloudSyncService : IDisposable
         Action<ClipboardCloudSyncResult> completed,
         bool pullRemote = true)
     {
+        await _initialize;
         await _syncGate.WaitAsync();
         try
         {
-            if (!_preferences.ClipboardCloudSyncEnabled)
+            if (_disposed || !_preferences.ClipboardCloudSyncEnabled)
             {
                 Complete(completed, ClipboardCloudSyncResult.Skipped());
                 return;
             }
 
+            if (_stateError is not null) { throw new SecureStorageException(_stateError); }
             var credentials = CredentialsOrThrow();
+            lock (_stateLock) { BindScope(credentials); }
             using IClient client = CreateClient(credentials);
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             var folders = await EnsureFoldersAsync(client, cancellation.Token);
@@ -143,9 +187,11 @@ public sealed class ClipboardCloudSyncService : IDisposable
                 return;
             }
 
-            var events = await PullChangedEventsAsync(client, folders, credentials.SyncPassphrase, cancellation.Token);
-            var items = ApplyEvents(local, events);
-            Complete(completed, ClipboardCloudSyncResult.Succeeded(items, events.Count == 0 ? "坚果云无新的剪贴板变更。" : "坚果云剪贴板已合并。"));
+            if (PendingBatch is null) { _ = await PullChangedEventsAsync(client, folders, credentials.SyncPassphrase, cancellation.Token); }
+            List<ClipboardCloudEvent> inbox;
+            lock (_stateLock) { inbox = _state.Inbox.ToList(); }
+            Complete(completed, ClipboardCloudSyncResult.Succeeded(null, inbox.Count == 0 ? "坚果云无新的剪贴板变更。" : "正在保存收到的剪贴板变更…")
+                with { Batch = inbox.Count == 0 ? null : new ClipboardCloudBatch(inbox) });
         }
         catch (Exception exception)
         {
@@ -166,6 +212,23 @@ public sealed class ClipboardCloudSyncService : IDisposable
         }
 
         return result.Value;
+    }
+
+    private void BindScope(ClipboardCloudCredentials credentials)
+    {
+        var scope = credentials.Username.Trim().ToLowerInvariant() + "/" + string.Join('/', ValidateRemoteFolder(_preferences.ClipboardCloudSyncFolder));
+        if (_state.Scope == scope) { return; }
+        if (_state.Scope is not null)
+        {
+            if (_state.Pending.Count > 0 || _state.Inbox.Count > 0)
+            { throw new InvalidOperationException("旧同步目录仍有待处理变更，请先恢复原账号和目录完成同步。"); }
+            _state.DeviceId = Guid.NewGuid();
+            _state.NextSequence = 1;
+            _state.KnownSequences.Clear();
+        }
+        _state.Scope = scope;
+        _createdRemoteRoot = null;
+        SaveState();
     }
 
     private static IClient CreateClient(ClipboardCloudCredentials credentials)
@@ -212,10 +275,11 @@ public sealed class ClipboardCloudSyncService : IDisposable
         {
             await client.CreateDir(parent, name, cancellationToken: cancellationToken);
         }
-        catch (Exception)
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
-            // MKCOL is intentionally attempted only during setup. Existing
-            // folders are the normal result on every subsequent app launch.
+            // Verify the collection exists before treating failed MKCOL as
+            // harmless; authorization/network failures must remain retryable.
+            _ = await client.List(parent.TrimEnd('/') + "/" + name, depth: 0, cancellationToken: cancellationToken);
         }
     }
 
@@ -238,9 +302,9 @@ public sealed class ClipboardCloudSyncService : IDisposable
         foreach (var entry in batch)
         {
             var clear = JsonSerializer.SerializeToUtf8Bytes(entry);
-            if (clear.Length > MaximumEventBytes)
+            if (clear.Length > MaximumEventBytes - EnvelopeBytes)
             {
-                throw new InvalidDataException("单条剪贴板同步记录超过 6 MB 上限。");
+                throw new InvalidDataException("单条剪贴板同步记录超过 8 MB 上限。");
             }
 
             var encrypted = ClipboardCloudCryptography.Seal(clear, syncPassphrase);
@@ -270,11 +334,15 @@ public sealed class ClipboardCloudSyncService : IDisposable
         CancellationToken cancellationToken)
     {
         var events = new List<ClipboardCloudEvent>();
+        var advances = new Dictionary<Guid, long>();
+        var receivedBytes = 0;
         var heads = await client.List(folders.Heads, depth: 1, cancellationToken: cancellationToken);
         foreach (var file in heads.Where(item => !item.IsCollection && item.Href.EndsWith(".head", StringComparison.OrdinalIgnoreCase)))
         {
-            var head = await DownloadJsonAsync<ClipboardCloudHead>(client, file.Href, MaximumHeadBytes, cancellationToken);
-            if (head.Version != 2 || head.DeviceId == Guid.Empty || head.LastSequence < 0)
+            var name = Path.GetFileName(file.Href.TrimEnd('/'));
+            if (!Guid.TryParseExact(Path.GetFileNameWithoutExtension(name), "N", out var fileDevice)) { continue; }
+            var head = await DownloadJsonAsync<ClipboardCloudHead>(client, folders.Heads + "/" + name, MaximumHeadBytes, cancellationToken);
+            if (head.Version != 2 || head.DeviceId != fileDevice || head.DeviceId == Guid.Empty || head.LastSequence < 0)
             {
                 throw new InvalidDataException("坚果云同步标记格式不正确。");
             }
@@ -285,23 +353,18 @@ public sealed class ClipboardCloudSyncService : IDisposable
                 known = _state.KnownSequences.TryGetValue(head.DeviceId, out var sequence) ? sequence : 0;
             }
 
-            if (head.LastSequence <= known)
+            if (head.DeviceId == _state.DeviceId || head.LastSequence <= known)
             {
                 continue;
             }
 
             var eventFolder = folders.Events + "/" + head.DeviceId.ToString("N");
-            for (var next = known + 1; next <= head.LastSequence; next += 1)
+            for (var next = known + 1; next <= head.LastSequence && events.Count < MaximumPullEvents; next += 1)
             {
                 using var stream = await client.Download(eventFolder + "/" + EventName(next), cancellationToken);
-                using var memory = new MemoryStream();
-                await stream.CopyToAsync(memory, cancellationToken);
-                if (memory.Length > MaximumEventBytes)
-                {
-                    throw new InvalidDataException("远端剪贴板同步记录超过 6 MB 上限。");
-                }
-
-                var clear = ClipboardCloudCryptography.Open(memory.ToArray(), syncPassphrase);
+                var encrypted = await ReadBoundedAsync(stream, MaximumEventBytes, cancellationToken);
+                receivedBytes += encrypted.Length;
+                var clear = ClipboardCloudCryptography.Open(encrypted, syncPassphrase);
                 var entry = JsonSerializer.Deserialize<ClipboardCloudEvent>(clear)
                     ?? throw new InvalidDataException("远端剪贴板同步记录为空。");
                 if (entry.Sequence != next || entry.DeviceId != head.DeviceId)
@@ -309,17 +372,25 @@ public sealed class ClipboardCloudSyncService : IDisposable
                     throw new InvalidDataException("远端剪贴板同步记录与标记不一致。");
                 }
 
+                ValidateEvent(entry);
                 events.Add(entry);
+                advances[head.DeviceId] = next;
+                if (receivedBytes >= 16 * 1024 * 1024 || next == head.LastSequence) { break; }
             }
 
+            if (events.Count >= MaximumPullEvents || receivedBytes >= 16 * 1024 * 1024) { break; }
+        }
+
+        if (events.Count > 0)
+        {
             lock (_stateLock)
             {
-                if (!_state.KnownSequences.TryGetValue(head.DeviceId, out var current)
-                    || current < head.LastSequence)
-                {
-                    _state.KnownSequences[head.DeviceId] = head.LastSequence;
-                    SaveState();
-                }
+                _state.Inbox.AddRange(events);
+                foreach (var entry in events) { RememberDeletion(entry); }
+                foreach (var pair in advances) { _state.KnownSequences[pair.Key] = pair.Value; }
+                // The durable inbox makes cursor advancement replayable until
+                // the history store acknowledges its own successful commit.
+                SaveState();
             }
         }
 
@@ -329,31 +400,48 @@ public sealed class ClipboardCloudSyncService : IDisposable
     private static async Task<T> DownloadJsonAsync<T>(IClient client, string path, int maximumBytes, CancellationToken cancellationToken)
     {
         using var stream = await client.Download(path, cancellationToken);
-        using var memory = new MemoryStream();
-        await stream.CopyToAsync(memory, cancellationToken);
-        if (memory.Length > maximumBytes)
-        {
-            throw new InvalidDataException("坚果云同步标记超过允许大小。");
-        }
-
-        return JsonSerializer.Deserialize<T>(memory.ToArray())
+        var bytes = await ReadBoundedAsync(stream, maximumBytes, cancellationToken);
+        return JsonSerializer.Deserialize<T>(bytes)
             ?? throw new InvalidDataException("坚果云同步标记为空。");
     }
 
-    private static IReadOnlyList<ClipboardHistoryItem> ApplyEvents(
+    internal static async Task<byte[]> ReadBoundedAsync(Stream stream, int maximumBytes, CancellationToken cancellationToken)
+    {
+        using var memory = new MemoryStream();
+        var buffer = new byte[16 * 1024];
+        int count;
+        while ((count = await stream.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, maximumBytes + 1 - (int)memory.Length)), cancellationToken)) > 0)
+        {
+            memory.Write(buffer, 0, count);
+            if (memory.Length > maximumBytes) { throw new InvalidDataException("远端同步数据超过允许大小。"); }
+        }
+        return memory.ToArray();
+    }
+
+    private static void ValidateEvent(ClipboardCloudEvent entry)
+    {
+        if (entry.Sequence <= 0 || entry.DeviceId == Guid.Empty || !Enum.IsDefined(entry.Kind)
+            || entry.DeletedIds is null || entry.DeletedIds.Contains(Guid.Empty)
+            || (entry.Kind == ClipboardCloudEventKind.Upsert && (entry.Item is null
+                || entry.Item.Id == Guid.Empty || !Enum.IsDefined(entry.Item.Kind) || entry.Item.Payload is null)))
+        { throw new InvalidDataException("远端剪贴板事件无效。"); }
+    }
+
+    internal static IReadOnlyList<ClipboardHistoryItem> ApplyEvents(
         IReadOnlyList<ClipboardHistoryItem> local,
-        IReadOnlyList<ClipboardCloudEvent> events)
+        IReadOnlyList<ClipboardCloudEvent> events,
+        IReadOnlyDictionary<Guid, DateTimeOffset>? deleted = null)
     {
         var items = local.ToDictionary(item => item.Id);
-        var tombstones = new Dictionary<Guid, DateTimeOffset>();
-        foreach (var entry in events.OrderBy(item => item.Timestamp))
+        var tombstones = deleted is null ? new Dictionary<Guid, DateTimeOffset>() : new Dictionary<Guid, DateTimeOffset>(deleted);
+        foreach (var entry in events.OrderBy(item => item.Timestamp).ThenBy(item => item.DeviceId.ToString("N"), StringComparer.Ordinal).ThenBy(item => item.Sequence))
         {
             if (entry.Kind == ClipboardCloudEventKind.Delete)
             {
                 foreach (var id in entry.DeletedIds)
                 {
-                    tombstones[id] = entry.Timestamp;
-                    items.Remove(id);
+                    if (!tombstones.TryGetValue(id, out var priorDelete) || entry.Timestamp > priorDelete) { tombstones[id] = entry.Timestamp; }
+                    if (items.TryGetValue(id, out var current) && current.EffectiveUpdatedAt <= tombstones[id]) { items.Remove(id); }
                 }
 
                 continue;
@@ -368,7 +456,9 @@ public sealed class ClipboardCloudSyncService : IDisposable
             if (!tombstones.TryGetValue(item.Id, out var deletedAt) || item.EffectiveUpdatedAt > deletedAt)
             {
                 if (!items.TryGetValue(item.Id, out var previous)
-                    || item.EffectiveUpdatedAt > previous.EffectiveUpdatedAt)
+                    || item.EffectiveUpdatedAt > previous.EffectiveUpdatedAt
+                    || (item.EffectiveUpdatedAt == previous.EffectiveUpdatedAt
+                        && StringComparer.Ordinal.Compare(TieKey(item), TieKey(previous)) > 0))
                 {
                     // An upsert published without image bytes must not erase the
                     // receiver's stored copy of the same content.
@@ -390,17 +480,24 @@ public sealed class ClipboardCloudSyncService : IDisposable
             .ToList();
     }
 
-    private long NextSequenceLocked()
-    {
-        var result = _state.NextSequence;
-        _state.NextSequence += 1;
-        return result;
-    }
+    private static string TieKey(ClipboardHistoryItem item) => string.Join("\0",
+        item.IsPinned ? "1" : "0", item.ContentHash?.ToLowerInvariant() ?? "", item.SourceApplication ?? "", string.Join("\0", item.Payload));
 
     private void EnqueueLocked(ClipboardCloudEvent entry)
     {
         _state.Pending.Add(entry);
+        RememberDeletion(entry);
         SaveState();
+    }
+
+    private void RememberDeletion(ClipboardCloudEvent entry)
+    {
+        if (entry.Kind != ClipboardCloudEventKind.Delete) { return; }
+        foreach (var id in entry.DeletedIds)
+        {
+            if (!_state.Tombstones.TryGetValue(id, out var prior) || entry.Timestamp > prior)
+            { _state.Tombstones[id] = entry.Timestamp; }
+        }
     }
 
     private ClipboardCloudState LoadState()
@@ -412,14 +509,30 @@ public sealed class ClipboardCloudSyncService : IDisposable
             return state;
         }
 
+        if (result.Kind != SecureStoreLoadResultKind.Missing)
+        {
+            _stateError = result.Message ?? "同步状态不可读，已锁定，原密文保留。";
+            return new ClipboardCloudState { DeviceId = Guid.NewGuid() };
+        }
         var created = new ClipboardCloudState { DeviceId = Guid.NewGuid() };
-        _stateStore.Save(created);
+        if (!_stateStore.Save(created)) { _stateError = "无法保存加密同步状态。"; }
         return created;
     }
 
     private void SaveState()
     {
-        _stateStore.Save(_state);
+        if (!_stateStore.Save(_state))
+        {
+            _stateError = "同步状态保存失败；同步已暂停，原密文保留。";
+            throw new SecureStorageException(_stateError);
+        }
+        PublishSnapshots();
+    }
+
+    private void PublishSnapshots()
+    {
+        Volatile.Write(ref _publishedInbox, _state.Inbox.Count == 0 ? null : new ClipboardCloudBatch(_state.Inbox.ToList()));
+        Volatile.Write(ref _publishedTombstones, new Dictionary<Guid, DateTimeOffset>(_state.Tombstones));
     }
 
     private static IReadOnlyList<string> ValidateRemoteFolder(string value)
@@ -458,19 +571,22 @@ public sealed class ClipboardCloudSyncService : IDisposable
     private sealed class ClipboardCloudState
     {
         public Guid DeviceId { get; set; }
+        public string? Scope { get; set; }
 
         public long NextSequence { get; set; } = 1;
 
         public Dictionary<Guid, long> KnownSequences { get; set; } = [];
 
         public List<ClipboardCloudEvent> Pending { get; set; } = [];
+        public List<ClipboardCloudEvent> Inbox { get; set; } = [];
+        public Dictionary<Guid, DateTimeOffset> Tombstones { get; set; } = [];
     }
 
     private sealed record RemoteFolders(string Root, string Heads, string Events, string DeviceEvents);
 
     private sealed record ClipboardCloudHead(int Version, Guid DeviceId, long LastSequence, DateTimeOffset UpdatedAt);
 
-    private sealed class ClipboardCloudEvent
+    internal sealed class ClipboardCloudEvent
     {
         public long Sequence { get; set; }
 
@@ -503,13 +619,13 @@ public sealed class ClipboardCloudSyncService : IDisposable
         };
     }
 
-    private enum ClipboardCloudEventKind
+    internal enum ClipboardCloudEventKind
     {
         Upsert,
         Delete
     }
 
-    private sealed class ClipboardCloudRecord
+    internal sealed class ClipboardCloudRecord
     {
         public Guid Id { get; set; }
         public ClipboardItemKind Kind { get; set; }
@@ -538,8 +654,12 @@ public sealed class ClipboardCloudSyncService : IDisposable
     }
 }
 
+internal sealed record ClipboardCloudBatch(IReadOnlyList<ClipboardCloudSyncService.ClipboardCloudEvent> Events);
+
 public sealed record ClipboardCloudSyncResult(bool Success, bool WasSkipped, IReadOnlyList<ClipboardHistoryItem>? Items, string? Message)
 {
+    internal ClipboardCloudBatch? Batch { get; init; }
+
     public static ClipboardCloudSyncResult Succeeded(IReadOnlyList<ClipboardHistoryItem>? items, string message) => new(true, false, items, message);
     public static ClipboardCloudSyncResult Failed(string message) => new(false, false, null, message);
     public static ClipboardCloudSyncResult Skipped() => new(true, true, null, null);

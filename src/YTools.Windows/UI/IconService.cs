@@ -9,6 +9,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using YTools.ModuleKit;
+using YTools.Core;
 
 namespace YTools.UI;
 
@@ -66,10 +67,11 @@ public static class IconService
 
     public static ImageSource? IconFor(string path)
     {
-        if (string.IsNullOrEmpty(path))
+        if (!LocalPathPolicy.TryNormalize(path, out var localPath))
         {
             return null;
         }
+        path = localPath;
 
         if (IconCache.TryGetValue(path, out var cached))
         {

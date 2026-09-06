@@ -20,6 +20,7 @@ public partial class PreviewPanel : UserControl
     ];
 
     private CancellationTokenSource? _cancellation;
+    private long _previewRequest;
 
     public PreviewPanel()
     {
@@ -29,6 +30,7 @@ public partial class PreviewPanel : UserControl
 
     public void ShowPath(string? path)
     {
+        var request = Interlocked.Increment(ref _previewRequest);
         _cancellation?.Cancel();
         _cancellation = new CancellationTokenSource();
         if (string.IsNullOrEmpty(path) || (!File.Exists(path) && !Directory.Exists(path)))
@@ -38,13 +40,21 @@ public partial class PreviewPanel : UserControl
         }
 
         TitleText.Text = Path.GetFileName(path);
+        ImagePreview.Source = null;
+        TextPreview.Clear();
+        ImagePreview.Visibility = System.Windows.Visibility.Collapsed;
+        TextPreview.Visibility = System.Windows.Visibility.Collapsed;
+        InfoPreview.Visibility = System.Windows.Visibility.Collapsed;
         LoadingText.Visibility = System.Windows.Visibility.Visible;
-        _ = LoadAsync(path, _cancellation.Token);
+        _ = LoadAsync(path, request, _cancellation.Token);
     }
 
     public void Clear()
     {
+        Interlocked.Increment(ref _previewRequest);
         _cancellation?.Cancel();
+        ImagePreview.Source = null;
+        TextPreview.Clear();
         ImagePreview.Visibility = System.Windows.Visibility.Collapsed;
         TextPreview.Visibility = System.Windows.Visibility.Collapsed;
         InfoPreview.Visibility = System.Windows.Visibility.Collapsed;
@@ -52,7 +62,7 @@ public partial class PreviewPanel : UserControl
         TitleText.Text = "";
     }
 
-    private async Task LoadAsync(string path, CancellationToken cancellationToken)
+    private async Task LoadAsync(string path, long request, CancellationToken cancellationToken)
     {
         try
         {
@@ -60,7 +70,7 @@ public partial class PreviewPanel : UserControl
             if (ImageExtensions.Contains(extension))
             {
                 var image = await Task.Run(() => DecodeImage(path), cancellationToken);
-                if (cancellationToken.IsCancellationRequested)
+                if (!IsCurrentRequest(request, cancellationToken))
                 {
                     return;
                 }
@@ -75,7 +85,7 @@ public partial class PreviewPanel : UserControl
                 if (info.Length <= 512 * 1024)
                 {
                     var text = await Task.Run(() => File.ReadAllText(path), cancellationToken);
-                    if (cancellationToken.IsCancellationRequested)
+                    if (!IsCurrentRequest(request, cancellationToken))
                     {
                         return;
                     }
@@ -86,12 +96,12 @@ public partial class PreviewPanel : UserControl
                 }
                 else
                 {
-                    ShowInfo(path);
+                    ShowInfo(path, request, cancellationToken);
                 }
             }
             else
             {
-                ShowInfo(path);
+                ShowInfo(path, request, cancellationToken);
             }
         }
         catch (OperationCanceledException)
@@ -100,12 +110,23 @@ public partial class PreviewPanel : UserControl
         }
         catch
         {
-            ShowInfo(path);
+            ShowInfo(path, request, cancellationToken);
         }
     }
 
-    private void ShowInfo(string path)
+    private bool IsCurrentRequest(long request, CancellationToken cancellationToken)
     {
+        return !cancellationToken.IsCancellationRequested
+            && request == Interlocked.Read(ref _previewRequest);
+    }
+
+    private void ShowInfo(string path, long request, CancellationToken cancellationToken)
+    {
+        if (!IsCurrentRequest(request, cancellationToken))
+        {
+            return;
+        }
+
         LoadingText.Visibility = System.Windows.Visibility.Collapsed;
         InfoIconText.Text = IconService.GlyphFor("doc.text.magnifyingglass");
         InfoNameText.Text = Path.GetFileName(path);
@@ -130,6 +151,11 @@ public partial class PreviewPanel : UserControl
         bitmap.BeginInit();
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
         bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+        // Preview content is displayed in a narrow pane. Decode to its useful
+        // display size so a multi-megapixel photograph cannot allocate its full
+        // pixel buffer merely because the user moved the selection onto it.
+        bitmap.DecodePixelWidth = 520;
+        bitmap.DecodePixelHeight = 520;
         bitmap.UriSource = new Uri(path, UriKind.Absolute);
         bitmap.EndInit();
         bitmap.Freeze();

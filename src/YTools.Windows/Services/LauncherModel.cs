@@ -28,6 +28,8 @@ public sealed class LauncherModel : ObservableObject
     private readonly DebouncedAction _fileSearchDebouncer = new();
     private readonly DebouncedAction _previewDebouncer = new();
     private CancellationTokenSource? _searchCancellation;
+    private long _searchGeneration;
+    private long _fileSearchPublicationGeneration;
     private string _query = "";
     private List<LauncherResult> _results = [];
     private List<LauncherResult> _fileResults = [];
@@ -59,6 +61,9 @@ public sealed class LauncherModel : ObservableObject
             onOpenSettings,
             onShowLargeType,
             ownerProvider);
+        _actionDispatcher.BusyStateChanged += (_, _) => RaisePropertyChanged(nameof(IsActionBusy));
+        _actionDispatcher.BackgroundOperationCompleted += (_, result) => _ = Apply(result);
+        _fileSearch.FallbackIndexRefreshed += (_, _) => RefreshFileResultsAfterIndexBuild();
         preferences.PropertyChanged += (_, args) =>
         {
             switch (args.PropertyName)
@@ -118,6 +123,8 @@ public sealed class LauncherModel : ObservableObject
         get => _isSearchPending;
         private set => SetField(ref _isSearchPending, value);
     }
+
+    public bool IsActionBusy => _actionDispatcher.IsBusy;
 
     public int SelectedIndex
     {
@@ -196,8 +203,10 @@ public sealed class LauncherModel : ObservableObject
             var trimmed = Query.Trim();
             return trimmed.StartsWith('/')
                 || trimmed.StartsWith('~')
-                || trimmed.StartsWith(@"\\", StringComparison.Ordinal)
-                || (trimmed.Length >= 2 && trimmed[1] == ':');
+                || (trimmed.Length >= 3
+                    && char.IsAsciiLetter(trimmed[0])
+                    && trimmed[1] == ':'
+                    && (trimmed[2] == '\\' || trimmed[2] == '/'));
         }
     }
 
@@ -596,6 +605,7 @@ public sealed class LauncherModel : ObservableObject
         _searchCancellation?.Cancel();
         var cancellation = new CancellationTokenSource();
         _searchCancellation = cancellation;
+        var generation = Interlocked.Increment(ref _searchGeneration);
 
         var request = new BackgroundSearchRequest(
             requestedQuery,
@@ -608,7 +618,8 @@ public sealed class LauncherModel : ObservableObject
             _preferences.ApplicationAliases,
             _preferences.CustomApplicationPaths,
             MakeRequestModules(requestedQuery),
-            cancellation.Token);
+            cancellation.Token,
+            generation);
 
         _ = Task.Run(
                 () => _searchCoordinator.SearchAsync(request),
@@ -618,7 +629,7 @@ public sealed class LauncherModel : ObservableObject
                 // A canceled generation is normally superseded by a newer one,
                 // which owns the pending flag; only reset when this is still
                 // the newest request.
-                var isNewestRequest = Query == requestedQuery && _searchCancellation == cancellation;
+                var isNewestRequest = IsCurrentSearch(requestedQuery, generation, cancellation.Token);
                 if (task.IsFaulted)
                 {
                     if (isNewestRequest)
@@ -642,7 +653,7 @@ public sealed class LauncherModel : ObservableObject
                     return;
                 }
 
-                if (Query == requestedQuery)
+                if (isNewestRequest)
                 {
                     _backgroundResults = task.Result.ToList();
                     IsSearchPending = false;
@@ -656,11 +667,15 @@ public sealed class LauncherModel : ObservableObject
         var fileQuery = IsFileNavigationActive || !includeFiles
             ? ""
             : requestedQuery;
-        ScheduleFileSearch(fileQuery, requestedQuery, cancellation.Token);
+        ScheduleFileSearch(fileQuery, requestedQuery, generation, cancellation.Token);
         RebuildResults();
     }
 
-    private void ScheduleFileSearch(string fileQuery, string requestedQuery, CancellationToken cancellationToken)
+    private void ScheduleFileSearch(
+        string fileQuery,
+        string requestedQuery,
+        long generation,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(fileQuery))
         {
@@ -670,25 +685,12 @@ public sealed class LauncherModel : ObservableObject
         var additionalDelay = Math.Max(0, 0.3 - _preferences.SearchInputDelay);
         var start = () =>
         {
-            if (Query != requestedQuery)
+            if (!IsCurrentSearch(requestedQuery, generation, cancellationToken))
             {
                 return;
             }
 
-            _ = _fileSearch.SearchAsync(
-                    fileQuery,
-                    FileSearchMode.Default,
-                    _preferences.SearchScopePaths,
-                    _preferences.MaximumSearchResults,
-                    cancellationToken)
-                .ContinueWith(task =>
-                {
-                    if (task.IsCompletedSuccessfully && Query == requestedQuery)
-                    {
-                        _fileResults = task.Result.ToList();
-                        RebuildResults();
-                    }
-                }, TaskScheduler.FromCurrentSynchronizationContext());
+            RunFileSearch(fileQuery, requestedQuery, generation, cancellationToken);
         };
         if (additionalDelay <= 0)
         {
@@ -698,6 +700,76 @@ public sealed class LauncherModel : ObservableObject
         {
             var milliseconds = (int)(additionalDelay * 1_000);
             _fileSearchDebouncer.Schedule(TimeSpan.FromMilliseconds(milliseconds), start);
+        }
+    }
+
+    private void RunFileSearch(
+        string fileQuery,
+        string requestedQuery,
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        var publicationGeneration = Interlocked.Increment(ref _fileSearchPublicationGeneration);
+        _ = _fileSearch.SearchAsync(
+                fileQuery,
+                FileSearchMode.Default,
+                _preferences.SearchScopePaths,
+                _preferences.MaximumSearchResults,
+                cancellationToken)
+            .ContinueWith(task =>
+            {
+                var canPublish = publicationGeneration == Volatile.Read(ref _fileSearchPublicationGeneration)
+                    && IsCurrentSearch(requestedQuery, generation, cancellationToken);
+                if (task.IsCompletedSuccessfully && canPublish)
+                {
+                    _fileResults = task.Result.ToList();
+                    RebuildResults();
+                }
+                else if (task.IsFaulted && canPublish)
+                {
+                    _fileResults = [];
+                    RebuildResults();
+                }
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    private bool IsCurrentSearch(string query, long generation, CancellationToken cancellationToken)
+    {
+        return SearchPublicationPolicy.CanPublish(
+            Query,
+            query,
+            Volatile.Read(ref _searchGeneration),
+            generation,
+            cancellationToken);
+    }
+
+    private void RefreshFileResultsAfterIndexBuild()
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        void Refresh()
+        {
+            var cancellation = _searchCancellation;
+            var requestedQuery = Query;
+            var generation = Volatile.Read(ref _searchGeneration);
+            var includeFiles = _preferences.IsSearchContentEnabled(SearchContentType.Files)
+                && (_preferences.IncludeFilesInDefaultResults
+                    || FileSearchService.HasExplicitMode(requestedQuery));
+            if (cancellation is not null
+                && includeFiles
+                && !IsFileNavigationActive
+                && IsCurrentSearch(requestedQuery, generation, cancellation.Token))
+            {
+                RunFileSearch(requestedQuery, requestedQuery, generation, cancellation.Token);
+            }
+        }
+
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            _ = dispatcher.BeginInvoke(Refresh);
+        }
+        else
+        {
+            Refresh();
         }
     }
 
@@ -861,6 +933,8 @@ public sealed class LauncherModel : ObservableObject
             case ActionExecutionOutcome.ClearFileBufferAndHide:
                 ClearFileBuffer();
                 return true;
+            case ActionExecutionOutcome.BackgroundStarted:
+                return false;
             default:
                 return false;
         }

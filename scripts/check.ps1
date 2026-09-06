@@ -36,29 +36,9 @@ if ($process.ExitCode -ne 0) {
 Get-Content $log
 
 Write-Host '==> Forbidden API scan'
-$patterns = @(
-    'HttpClient',
-    'WebClient',
-    'TcpClient',
-    'UdpClient',
-    'NetworkStream',
-    'Socket\(',
-    'Assembly\.Load',
-    'Assembly\.LoadFrom',
-    'Assembly\.LoadFile',
-    'Activator\.CreateInstance',
-    'AppDomain\.CurrentDomain\.Load',
-    'AppDomain\.CreateDomain',
-    'cmd\.exe',
-    'powershell\.exe',
-    '/bin/(sh|bash|zsh)'
-)
-$hits = Get-ChildItem -Path src\YTools.Windows -Recurse -Filter *.cs |
-    Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
-    Select-String -Pattern $patterns
-if ($hits) {
-    $hits | ForEach-Object { Write-Host "FORBIDDEN: $($_.Path):$($_.LineNumber): $($_.Line.Trim())" }
-    throw 'Forbidden network, web, dynamic-code or shell API found in runtime sources'
-}
+$python = Get-Command python -ErrorAction SilentlyContinue
+if ($null -eq $python) { $python = Get-Command python3 -ErrorAction Stop }
+Invoke-NativeCommand 'security scan' { & $python.Source scripts/security_scan.py }
+Invoke-NativeCommand 'security scan fixture tests' { & $python.Source scripts/security_scan_test.py }
 
 Write-Host 'Windows build, tests, self-test and security scan passed'

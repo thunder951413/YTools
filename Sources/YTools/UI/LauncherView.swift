@@ -46,6 +46,23 @@ struct LauncherView: View {
                         .onSubmit {
                             if model.activateSelected() { onActivate() }
                         }
+                    if model.isSearchPending {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("正在搜索")
+                    }
+                    if !model.query.isEmpty {
+                        Button {
+                            _ = model.clearQuery()
+                            searchFocused = true
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("清除搜索（Esc）")
+                        .accessibilityLabel("清除搜索")
+                    }
                 }
                 .padding(.horizontal, 22)
                 .frame(height: style.headerHeight)
@@ -79,6 +96,7 @@ struct LauncherView: View {
                                 model.selectedActionIndex = index
                                 if model.activateSelected() { onActivate() }
                             }
+                            .accessibilityHint("按 Return 执行动作")
                             .id(action.id)
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
@@ -109,6 +127,7 @@ struct LauncherView: View {
                                     model.selectedIndex = index
                                     if model.activate(result) { onActivate() }
                                 }
+                                .accessibilityHint("按 Return 打开；按右方向键显示动作")
                                 .contextMenu {
                                     if let url = result.fileURL {
                                         Button("打开") {
@@ -195,7 +214,7 @@ struct LauncherView: View {
     }
 }
 
-private struct ResultRow: View {
+struct ResultRow: View {
     let result: LauncherResult
     let selected: Bool
     let compact: Bool

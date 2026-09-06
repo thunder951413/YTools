@@ -1,4 +1,5 @@
 using System.IO;
+using YTools.Core;
 using YTools.Models;
 using YTools.ModuleKit;
 
@@ -49,21 +50,23 @@ public sealed class ActionRegistry
                 resourcePath));
             if (isApplication)
             {
-                var processName = Path.GetFileNameWithoutExtension(resourcePath);
-                actions.Add(Action(
-                    "hide-application",
-                    "隐藏应用",
-                    "隐藏正在运行的应用窗口",
-                    "eye.slash",
-                    LauncherActionKind.Perform,
-                    new ResultAction.HideApplication(processName)));
-                actions.Add(Action(
-                    "quit-application",
-                    "退出应用",
-                    "请求应用正常退出",
-                    "xmark.circle",
-                    LauncherActionKind.Perform,
-                    new ResultAction.QuitApplication(processName)));
+                if (TryGetExecutableIdentity(resourcePath, out var executablePath))
+                {
+                    actions.Add(Action(
+                        "hide-application",
+                        "隐藏应用",
+                        "隐藏该可执行文件正在运行的窗口",
+                        "eye.slash",
+                        LauncherActionKind.Perform,
+                        new ResultAction.HideApplication(executablePath)));
+                    actions.Add(Action(
+                        "quit-application",
+                        "退出应用",
+                        "请求该可执行文件正常退出",
+                        "xmark.circle",
+                        LauncherActionKind.Perform,
+                        new ResultAction.QuitApplication(executablePath)));
+                }
             }
 
             if (!isApplication)
@@ -224,5 +227,38 @@ public sealed class ActionRegistry
             ? "~" + path[profile.Length..]
             : path;
         return display.EndsWith('\\') ? display : display + "\\";
+    }
+
+    internal static bool TryGetExecutableIdentity(string path, out string executablePath)
+    {
+        executablePath = "";
+        if (!LocalPathPolicy.TryNormalize(path, out var normalized)
+            || !Path.GetExtension(normalized).Equals(".exe", StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(normalized))
+        {
+            return false;
+        }
+
+        try
+        {
+            var file = new FileInfo(normalized);
+            if (file.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                if (file.ResolveLinkTarget(returnFinalTarget: true) is not FileInfo target
+                    || !LocalPathPolicy.TryNormalize(target.FullName, out normalized)
+                    || !Path.GetExtension(normalized).Equals(".exe", StringComparison.OrdinalIgnoreCase)
+                    || !File.Exists(normalized))
+                {
+                    return false;
+                }
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        executablePath = normalized;
+        return true;
     }
 }

@@ -8,23 +8,63 @@ import YToolsModuleKit
 final class SnippetManager: ObservableObject, SnippetSaving {
     @Published private(set) var items: [SnippetItem]
     @Published private(set) var storageError: String?
-    private let store = SecureCodableStore(name: "snippets")
+    @Published private(set) var isLoaded = false
+    @Published private(set) var isSaving = false
+    private let writer: OrderedSecureStoreWriter
     private let saveDebouncer = DebouncedAction()
-    private var persistedItems: [SnippetItem] = []
+    private var pendingMutations: [PendingMutation] = []
+    private var initializationTask: Task<Void, Never>?
+    private var revision: UInt64 = 0
+    private var queuedRevision: UInt64 = 0
+    private var latestSaveTask: Task<Bool, Never>?
 
     init() {
-        switch store.load([SnippetItem].self) {
+        self.writer = OrderedSecureStoreWriter { SecureCodableStore(name: "snippets") }
+        items = []
+        storageError = nil
+        startLoading()
+    }
+
+    init(storeFactory: @escaping @Sendable () -> SecureCodableStore) {
+        self.writer = OrderedSecureStoreWriter(storeFactory: storeFactory)
+        items = []
+        storageError = nil
+        startLoading()
+    }
+
+    var storageStatus: String {
+        if !isLoaded { return "正在读取加密片段…" }
+        if isSaving { return "正在加密保存…" }
+        return storageError ?? "已安全保存"
+    }
+
+    private func startLoading() {
+        initializationTask = Task { [weak self, writer] in
+            let result = await writer.load([SnippetItem].self)
+            guard let self else { return }
+            applyLoad(result)
+        }
+    }
+
+    private func applyLoad(_ result: BackgroundStoreLoad<[SnippetItem]>) {
+        guard !isLoaded else { return }
+        var loaded: [SnippetItem]
+        switch result {
         case .missing:
-            items = []
+            loaded = []
             storageError = nil
-        case let .loaded(loaded):
-            items = loaded
+        case let .loaded(value):
+            loaded = value
             storageError = nil
         case let .unavailable(message), let .corrupted(message):
-            items = []
+            loaded = []
             storageError = message
         }
-        persistedItems = items
+        pendingMutations.forEach { $0.apply(to: &loaded) }
+        pendingMutations.removeAll()
+        items = loaded
+        isLoaded = true
+        if revision > 0 { _ = queueCurrentSnapshot(failureMessage: "无法写入加密文本片段；现有文件未被覆盖。") }
     }
 
     func searchModule(clipboardText: String, now: Date = Date()) -> SnippetSearchModule {
@@ -35,12 +75,25 @@ final class SnippetManager: ObservableObject, SnippetSaving {
 
     @discardableResult
     func save(text: String, title: String? = nil, keyword: String = "", collection: String = "默认") -> Bool {
+        beginSave(text: text, title: title, keyword: keyword, collection: collection) != nil
+    }
+
+    func savePersisted(text: String, title: String? = nil, keyword: String = "", collection: String = "默认") async -> Bool {
+        guard let targetRevision = beginSave(text: text, title: title, keyword: keyword, collection: collection) else { return false }
+        await initializationTask?.value
+        if queuedRevision < targetRevision {
+            return await queueCurrentSnapshot(failureMessage: "无法写入加密文本片段；现有文件未被覆盖。").value
+        }
+        return await waitForQueuedWrites()
+    }
+
+    private func beginSave(text: String, title: String?, keyword: String, collection: String) -> UInt64? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
+        guard !trimmed.isEmpty else { return nil }
         let inferredTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalTitle = inferredTitle.flatMap { $0.isEmpty ? nil : $0 } ?? preview(trimmed, limit: 36)
         let now = Date()
-        items.insert(SnippetItem(
+        let item = SnippetItem(
             id: UUID(),
             title: finalTitle,
             keyword: keyword,
@@ -48,13 +101,15 @@ final class SnippetManager: ObservableObject, SnippetSaving {
             collection: collection,
             createdAt: now,
             updatedAt: now
-        ), at: 0)
-        return persistCurrent(failureMessage: "无法写入加密文本片段；现有文件未被覆盖。")
+        )
+        apply(.insert(item))
+        if isLoaded { _ = queueCurrentSnapshot(failureMessage: "无法写入加密文本片段；现有文件未被覆盖。") }
+        return revision
     }
 
     func delete(_ item: SnippetItem) {
-        items.removeAll { $0.id == item.id }
-        _ = persistCurrent(failureMessage: "无法保存删除操作。")
+        apply(.delete(item.id))
+        if isLoaded { _ = queueCurrentSnapshot(failureMessage: "无法保存删除操作。") }
     }
 
     func update(
@@ -64,34 +119,78 @@ final class SnippetManager: ObservableObject, SnippetSaving {
         content: String? = nil,
         collection: String? = nil
     ) {
-        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
-        if let title { items[index].title = title }
-        if let keyword { items[index].keyword = keyword }
-        if let content { items[index].content = content }
-        if let collection { items[index].collection = collection }
-        items[index].updatedAt = Date()
+        guard items.contains(where: { $0.id == id }) else { return }
+        apply(.update(id, title, keyword, content, collection, Date()))
         saveDebouncer.schedule(after: .milliseconds(350)) { [weak self] in
-            _ = self?.persistCurrent(failureMessage: "无法保存文本片段修改。")
+            guard let self, self.isLoaded else { return }
+            _ = self.queueCurrentSnapshot(failureMessage: "无法保存文本片段修改。")
         }
     }
 
-    func flushPendingChanges() {
+    func flushPendingChanges() async {
         saveDebouncer.cancel()
-        guard items != persistedItems else { return }
-        _ = persistCurrent(failureMessage: "无法保存文本片段修改。")
+        await initializationTask?.value
+        if queuedRevision < revision {
+            _ = await queueCurrentSnapshot(failureMessage: "无法保存文本片段修改。").value
+        }
+        _ = await waitForQueuedWrites()
     }
 
-    @discardableResult
-    private func persistCurrent(failureMessage: String) -> Bool {
+    func waitUntilLoaded() async { await initializationTask?.value }
+
+    private func apply(_ mutation: PendingMutation) {
         saveDebouncer.cancel()
-        if store.save(items) {
-            persistedItems = items
-            storageError = nil
-            return true
+        mutation.apply(to: &items)
+        if !isLoaded { pendingMutations.append(mutation) }
+        revision &+= 1
+    }
+
+    private func queueCurrentSnapshot(failureMessage: String) -> Task<Bool, Never> {
+        let snapshot = items
+        let saveRevision = revision
+        queuedRevision = max(queuedRevision, saveRevision)
+        isSaving = true
+        let previous = latestSaveTask
+        let task = Task { [weak self, writer] in
+            _ = await previous?.value
+            let success = await writer.save(snapshot)
+            guard let self else { return success }
+            if saveRevision == revision {
+                isSaving = false
+                storageError = success ? nil : failureMessage
+            }
+            return success
         }
-        items = persistedItems
-        storageError = failureMessage
-        return false
+        latestSaveTask = task
+        return task
+    }
+
+    private func waitForQueuedWrites() async -> Bool {
+        // Submitting a sentinel save is unnecessary: every returned save task
+        // completes only after all earlier actor operations.
+        if queuedRevision < revision { return false }
+        guard let latestSaveTask else { return queuedRevision == revision && storageError == nil }
+        return await latestSaveTask.value
+    }
+
+    private enum PendingMutation {
+        case insert(SnippetItem)
+        case delete(UUID)
+        case update(UUID, String?, String?, String?, String?, Date)
+
+        func apply(to items: inout [SnippetItem]) {
+            switch self {
+            case let .insert(item): items.insert(item, at: 0)
+            case let .delete(id): items.removeAll { $0.id == id }
+            case let .update(id, title, keyword, content, collection, date):
+                guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+                if let title { items[index].title = title }
+                if let keyword { items[index].keyword = keyword }
+                if let content { items[index].content = content }
+                if let collection { items[index].collection = collection }
+                items[index].updatedAt = date
+            }
+        }
     }
 
     private func preview(_ text: String, limit: Int = 72) -> String {

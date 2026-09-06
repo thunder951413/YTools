@@ -30,13 +30,14 @@ struct SettingsRow<Trailing: View>: View {
     @ViewBuilder let trailing: Trailing
 
     var body: some View {
-        HStack {
+        HStack(alignment: .center, spacing: 24) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                 Text(detail).font(.caption).foregroundStyle(.secondary)
             }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
             trailing
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 }

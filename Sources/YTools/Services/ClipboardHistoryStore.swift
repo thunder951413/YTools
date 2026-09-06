@@ -63,16 +63,19 @@ final class ClipboardHistoryStore {
     private let manifestURL: URL
     private let recordsURL: URL
     private let thumbnailsURL: URL
+    private let suppliedKey: (@Sendable (Bool) throws -> Data)?
+    private var writeLocked = false
     private let maximumEncryptedBytes = 200 * 1_024 * 1_024
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, rootURL: URL? = nil, keyProvider: (@Sendable (Bool) throws -> Data)? = nil) {
+        suppliedKey = keyProvider
         let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         // Retain the original storage namespace so the product rename does not
         // orphan an existing encrypted clipboard archive.
-        let root = applicationSupport.appendingPathComponent("ZToolsNative", isDirectory: true)
+        let root = rootURL ?? applicationSupport.appendingPathComponent("ZToolsNative", isDirectory: true)
         legacyFileURL = root.appendingPathComponent("clipboard-history.v1.enc")
         vaultURL = root.appendingPathComponent("clipboard-vault-v2", isDirectory: true)
         manifestURL = vaultURL.appendingPathComponent("manifest.enc")
@@ -115,7 +118,9 @@ final class ClipboardHistoryStore {
         _ requestedItems: [ClipboardHistoryItem],
         originalImages: [UUID: Data] = [:]
     ) throws -> [ClipboardHistoryItem] {
-        let key = try encryptionKey(createIfMissing: true)
+        guard !writeLocked else { throw ClipboardStoreError.corrupted("存在不可读记录，原保险库保持只读。") }
+        let hasArchive = FileManager.default.fileExists(atPath: manifestURL.path) || FileManager.default.fileExists(atPath: legacyFileURL.path)
+        let key = try encryptionKey(createIfMissing: !hasArchive)
         let existing = try currentManifest(key: key)
         let existingByID = Dictionary(uniqueKeysWithValues: existing.entries.map { ($0.id, $0) })
         var candidateEntries: [Entry] = []
@@ -129,7 +134,7 @@ final class ClipboardHistoryStore {
                         id: old.id,
                         kind: old.kind,
                         displayText: item.displayText,
-                        createdAt: old.createdAt,
+                        createdAt: item.createdAt,
                         sourceApplication: item.sourceApplication,
                         contentHash: item.contentHash ?? old.contentHash,
                         encryptedByteCount: old.encryptedByteCount,
@@ -212,6 +217,7 @@ final class ClipboardHistoryStore {
     }
 
     func removePersistedHistory() throws {
+        writeLocked = false
         if FileManager.default.fileExists(atPath: vaultURL.path) {
             try FileManager.default.removeItem(at: vaultURL)
         }
@@ -268,6 +274,7 @@ final class ClipboardHistoryStore {
                 let thumbnail: Data?
                 switch entry.kind {
                 case .image:
+                    _ = try JSONDecoder().decode(Record.self, from: open(Data(contentsOf: recordURL(entry.id)), key: key))
                     payload = [entry.displayText]
                     thumbnail = try loadThumbnail(entry.id, key: key)
                 case .text, .files:
@@ -292,7 +299,8 @@ final class ClipboardHistoryStore {
                 skipped += 1
             }
         }
-        let warning = skipped == 0 ? nil : "有 \(skipped) 条剪贴板记录损坏，已跳过但未覆盖原密文。"
+        writeLocked = skipped > 0
+        let warning = skipped == 0 ? nil : "有 \(skipped) 条剪贴板记录损坏，原密文已保留；存储只读，新增内容仅保留在本次运行中。"
         return .loaded(items, warning: warning)
     }
 
@@ -342,6 +350,7 @@ final class ClipboardHistoryStore {
 
     private func encryptionKey(createIfMissing: Bool) throws -> Data {
         do {
+            if let suppliedKey { return try suppliedKey(createIfMissing) }
             return try keyAccessor.key(createIfMissing: createIfMissing)
         } catch {
             throw ClipboardStoreError.keyUnavailable(error.localizedDescription)

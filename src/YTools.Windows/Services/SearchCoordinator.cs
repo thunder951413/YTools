@@ -20,7 +20,8 @@ public sealed record BackgroundSearchRequest(
     IReadOnlyDictionary<string, string> ApplicationAliases,
     IReadOnlyList<string> CustomApplicationPaths,
     IReadOnlyList<RegisteredSearchModule> RequestModules,
-    CancellationToken CancellationToken);
+    CancellationToken CancellationToken,
+    long Generation = 0);
 
 /// <summary>
 /// Owns every non-file query provider. All results—including trusted
@@ -76,6 +77,7 @@ public sealed class SearchCoordinator
                     request.FileNavigationSortAscending,
                     request.FileNavigationFoldersFirst),
                 cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             return Sanitize(
                 results,
                 descriptor,
@@ -87,7 +89,11 @@ public sealed class SearchCoordinator
         if (request.EnabledContentTypes.Contains(SearchContentType.Applications))
         {
             tasks.Add(Task.Run(
-                () => SearchApplications(request.Query, request.ApplicationAliases, request.CustomApplicationPaths),
+                () => SearchApplications(
+                    request.Query,
+                    request.ApplicationAliases,
+                    request.CustomApplicationPaths,
+                    cancellationToken),
                 cancellationToken));
         }
 
@@ -106,21 +112,24 @@ public sealed class SearchCoordinator
             }
 
             tasks.Add(Task.Run(
-                () => SearchModule(registration.Module, request.Query, policy),
+                () => SearchModule(registration.Module, request.Query, policy, cancellationToken),
                 cancellationToken));
         }
 
         var completed = await Task.WhenAll(tasks);
+        cancellationToken.ThrowIfCancellationRequested();
         return completed.SelectMany(results => results).ToList();
     }
 
     private IReadOnlyList<LauncherResult> SearchApplications(
         string query,
         IReadOnlyDictionary<string, string> aliases,
-        IReadOnlyList<string> customApplicationPaths)
+        IReadOnlyList<string> customApplicationPaths,
+        CancellationToken cancellationToken)
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var descriptor = new ModuleDescriptor(
                 "applications",
                 "应用程序",
@@ -130,6 +139,7 @@ public sealed class SearchCoordinator
                     ModuleCapability.ApplicationLaunch
                 });
             var results = _applications.Search(query, aliases, customApplicationPaths);
+            cancellationToken.ThrowIfCancellationRequested();
             return Sanitize(
                 results,
                 descriptor,
@@ -139,6 +149,10 @@ public sealed class SearchCoordinator
                         ModuleCapability.LocalFileRead,
                         ModuleCapability.ApplicationLaunch
                     }));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
@@ -150,18 +164,26 @@ public sealed class SearchCoordinator
     private static async Task<IReadOnlyList<LauncherResult>> SearchModule(
         IYToolsModule module,
         string query,
-        ModuleResultPolicy policy)
+        ModuleResultPolicy policy,
+        CancellationToken cancellationToken)
     {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(2));
         try
         {
-            var request = new ModuleSearchRequest(query, 40);
-            var results = await module.SearchAsync(request);
+            var request = new ModuleSearchRequest(query, 40, timeout.Token);
+            var results = await module.SearchAsync(request).WaitAsync(timeout.Token);
+            cancellationToken.ThrowIfCancellationRequested();
             return results
                 .Take(request.MaximumResults)
                 .Select(result => policy.Sanitize(result, module.Descriptor))
                 .Where(result => result is not null)
                 .Cast<LauncherResult>()
                 .ToList();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {

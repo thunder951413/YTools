@@ -2,9 +2,9 @@ name: Swift validation
 
 on:
   push:
-    branches: [main]
+    branches: [main, windows]
   pull_request:
-    branches: [main]
+    branches: [main, windows]
   workflow_dispatch:
 
 permissions:

@@ -8,30 +8,47 @@ enum SecureStoreLoadResult<Value> {
     case corrupted(String)
 }
 
-final class SecureCodableStore {
+final class SecureCodableStore: @unchecked Sendable {
     private let fileURL: URL
-    private let keyAccessor: KeychainKeyAccessor
+    private let keyProvider: @Sendable (Bool) throws -> Data
+    private let lock = NSRecursiveLock()
+    private var locked = false
 
     init(name: String, fileManager: FileManager = .default) {
-        keyAccessor = KeychainKeyAccessor(
+        let keyAccessor = KeychainKeyAccessor(
             service: "com.ztools.native.secure-store",
             account: "\(name)-key-v1",
             missingKeyMessage: "加密文件存在，但钥匙串密钥缺失；为防止覆盖，存储已锁定。",
             randomGenerationMessage: "无法生成安全随机密钥。"
         )
+        keyProvider = { try keyAccessor.key(createIfMissing: $0) }
         let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         // Compatibility namespace retained across the product rename.
         let directory = support.appendingPathComponent("ZToolsNative", isDirectory: true)
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         fileURL = directory.appendingPathComponent("\(name).v1.enc")
     }
 
+    init(fileURL: URL, keyProvider: @escaping @Sendable (Bool) throws -> Data) {
+        self.fileURL = fileURL
+        self.keyProvider = keyProvider
+    }
+
     func load<Value: Decodable>(_ type: Value.Type) -> SecureStoreLoadResult<Value> {
+        lock.lock()
+        defer { lock.unlock() }
+        let result = loadValue(type)
+        switch result {
+        case .unavailable, .corrupted: locked = true
+        default: break
+        }
+        return result
+    }
+
+    private func loadValue<Value: Decodable>(_ type: Value.Type) -> SecureStoreLoadResult<Value> {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return .missing }
         let key: Data
-        do { key = try keyAccessor.key(createIfMissing: false) }
+        do { key = try keyProvider(false) }
         catch { return .unavailable(error.localizedDescription) }
         let encrypted: Data
         do {
@@ -50,18 +67,27 @@ final class SecureCodableStore {
 
     @discardableResult
     func save<Value: Encodable>(_ value: Value) -> Bool {
-        guard let key = try? keyAccessor.key(createIfMissing: true),
-              let clear = try? JSONEncoder().encode(value),
-              let combined = try? AES.GCM.seal(clear, using: SymmetricKey(data: key)).combined else {
-            return false
-        }
+        lock.lock()
+        defer { lock.unlock() }
+        guard !locked else { return false }
         do {
+            let directory = fileURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            let exists = FileManager.default.fileExists(atPath: fileURL.path)
+            let key = try keyProvider(!exists)
+            if exists {
+                let prior = try AES.GCM.SealedBox(combined: Data(contentsOf: fileURL))
+                _ = try AES.GCM.open(prior, using: SymmetricKey(data: key))
+            }
+            let clear = try JSONEncoder().encode(value)
+            guard let combined = try AES.GCM.seal(clear, using: SymmetricKey(data: key)).combined else { return false }
             try combined.write(to: fileURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
             return true
         } catch {
+            locked = true
             return false
         }
     }
-
 }
