@@ -100,6 +100,38 @@ actor ClipboardCloudSyncService {
         return await synchronize(localItems: [], pullRemote: false)
     }
 
+    /// Saves the outbox without acquiring the network gate. A slow upload must
+    /// never prevent a local mutation from becoming durable before app exit.
+    func enqueueChangedItem(_ item: ClipboardHistoryItem, configuration: Configuration) -> Result {
+        enqueueMutation(configuration: configuration) {
+            .upsert(sequence: state.nextSequence, deviceID: state.deviceID, item: item)
+        }
+    }
+
+    func enqueueDeleted(_ ids: [UUID], timestamp: Date, configuration: Configuration) -> Result {
+        guard !ids.isEmpty else { return Result(success: true, items: nil, message: "") }
+        return enqueueMutation(configuration: configuration) {
+            .delete(sequence: state.nextSequence, deviceID: state.deviceID, ids: Array(Set(ids)), timestamp: timestamp)
+        }
+    }
+
+    private func enqueueMutation(configuration: Configuration, create: () -> Event) -> Result {
+        guard configuration.enabled else { return Result(success: true, items: nil, message: "") }
+        do {
+            try loadState()
+            try bindScope(configuration: configuration, allowScopeChange: !running)
+            try enqueue(create())
+            return Result(success: true, items: nil, message: "剪贴板变更已加密保存，等待上传。")
+        } catch { return Result(success: false, items: nil, message: "同步待发送记录保存失败：\(error.localizedDescription)") }
+    }
+
+    func uploadPending(configuration: Configuration) async -> Result {
+        await acquire()
+        defer { release() }
+        self.configuration = configuration
+        return await synchronize(localItems: [], pullRemote: false)
+    }
+
     func publishDeleted(_ ids: [UUID], timestamp: Date, configuration: Configuration) async -> Result {
         await acquire()
         defer { release() }
@@ -166,10 +198,13 @@ actor ClipboardCloudSyncService {
         }
     }
 
-    private func bindScope() throws {
-        guard case let .loaded(credentials) = credentialStore.load(Credentials.self) else { return }
-        let scope = credentials.username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() + "/" + (try validatedFolder(configuration.folder)).joined(separator: "/")
+    private func bindScope(configuration requested: Configuration? = nil, allowScopeChange: Bool = true) throws {
+        guard case let .loaded(credentials) = credentialStore.load(Credentials.self) else {
+            throw CloudError.storage("尚未保存或无法读取坚果云同步凭据。")
+        }
+        let scope = credentials.username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() + "/" + (try validatedFolder((requested ?? configuration).folder)).joined(separator: "/")
         guard state.scope != scope else { return }
+        guard allowScopeChange else { throw CloudError.storage("正在同步原目录，请稍后再更换同步账号或目录。") }
         if state.scope != nil {
             guard state.pending.isEmpty, state.inbox.isEmpty else {
                 throw CloudError.storage("旧同步目录仍有待处理变更，请先恢复原账号和目录完成同步。")
@@ -246,7 +281,7 @@ actor ClipboardCloudSyncService {
     private func pullChangedEvents(folders: Folders, credentials: Credentials) async throws -> [Event] {
         let listed = try await request(method: "PROPFIND", path: folders.heads, body: Data("<propfind xmlns=\"DAV:\"><propname/></propfind>".utf8), credentials: credentials, depth: "1")
         guard listed.status == 207 else { throw CloudError.requestFailed(listed.status) }
-        let names = XMLHrefParser.hrefs(in: listed.data).compactMap { URL(string: $0)?.lastPathComponent ?? URL(fileURLWithPath: $0).lastPathComponent }
+        let names = try XMLHrefParser.hrefs(in: listed.data).compactMap { URL(string: $0)?.lastPathComponent ?? URL(fileURLWithPath: $0).lastPathComponent }
             .filter { $0.hasSuffix(".head") }
         var events: [Event] = []
         var advances: [UUID: Int64] = [:]
@@ -479,12 +514,41 @@ enum CloudCryptography {
     }
 }
 
-private final class XMLHrefParser: NSObject, XMLParserDelegate {
-    private var values: [String] = []; private var reading = false; private var current = ""
-    static func hrefs(in data: Data) -> [String] { let parser = XMLParser(data: data); let delegate = XMLHrefParser(); parser.delegate = delegate; return parser.parse() ? delegate.values : [] }
-    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) { if elementName == "href" { reading = true; current = "" } }
-    func parser(_ parser: XMLParser, foundCharacters string: String) { if reading { current += string } }
-    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) { if elementName == "href" { values.append(current); reading = false } }
+final class XMLHrefParser: NSObject, XMLParserDelegate {
+    private var values: [String] = []
+    private var reading = false
+    private var current = ""
+
+    static func hrefs(in data: Data) throws -> [String] {
+        let parser = XMLParser(data: data)
+        let delegate = XMLHrefParser()
+        parser.shouldProcessNamespaces = true
+        parser.shouldResolveExternalEntities = false
+        parser.delegate = delegate
+        guard parser.parse() else {
+            throw parser.parserError ?? CocoaError(.fileReadCorruptFile)
+        }
+        return delegate.values
+    }
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
+                qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
+        if elementName == "href", namespaceURI == "DAV:" || namespaceURI == nil || namespaceURI == "" {
+            reading = true
+            current = ""
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if reading { current += string }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        if reading, elementName == "href", namespaceURI == "DAV:" || namespaceURI == nil || namespaceURI == "" {
+            values.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
+            reading = false
+        }
+    }
 }
 
 private extension Array {

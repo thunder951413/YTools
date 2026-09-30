@@ -9,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using YTools.Infrastructure;
+using YTools.Core;
 using YTools.Models;
 using YTools.Services;
 
@@ -74,6 +75,7 @@ public partial class SettingsWindow : Window
         };
         snippets.PropertyChanged += _snippetChanged;
         DataContext = preferences;
+        RefreshVersionStatus();
         _scopePaths.Clear();
         foreach (var path in preferences.SearchScopePaths)
         {
@@ -108,12 +110,35 @@ public partial class SettingsWindow : Window
                 {
                     ApplyDarkTitleBar();
                 }
+                if (args.PropertyName is nameof(AppPreferences.ClipboardCloudSyncEnabled))
+                { RefreshVersionStatus(); }
             };
             preferences.PropertyChanged += _preferenceChanged;
         }
 
         BuildPages();
         SelectFirstTab();
+    }
+
+    private void RefreshVersionStatus()
+    {
+        var version = typeof(SettingsWindow).Assembly.GetName().Version?.ToString(3) ?? "开发版";
+        VersionStatusText.Text = $"v{version} · " + (_preferences?.ClipboardCloudSyncEnabled == true
+            ? "坚果云加密同步已启用" : "本机模式 · 同步已关闭");
+    }
+
+    private void SettingsSearch_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (NavList?.ItemsSource is null) { return; }
+        var view = System.Windows.Data.CollectionViewSource.GetDefaultView(NavList.ItemsSource);
+        view.Filter = item => item is NavItem nav && SettingsSearchCatalog.Matches(nav.SectionId, SettingsSearchBox.Text);
+        var first = view.Cast<NavItem>().FirstOrDefault();
+        if (NavList.SelectedItem is not NavItem selected || !view.Contains(selected))
+        {
+            NavList.SelectedItem = first;
+            if (first is null)
+            { PageHost.Content = new TextBlock { Text = "没有匹配设置，请尝试其他关键词。", Style = (Style)FindResource("HintText") }; }
+        }
     }
 
     public void RefreshChrome()
@@ -143,16 +168,16 @@ public partial class SettingsWindow : Window
         _pages.Clear();
         _navItems.AddRange(
         [
-            new NavItem("通用", "\uE713"),
-            new NavItem("搜索", "\uE721"),
-            new NavItem("应用别名", "\uE8F1"),
-            new NavItem("自定义应用", "\uE8F1"),
-            new NavItem("外观", "\uE790"),
-            new NavItem("快捷键", "\uE765"),
-            new NavItem("剪贴板", "\uE8C8"),
-            new NavItem("片段", "\uE8FD"),
-            new NavItem("系统命令", "\uE756"),
-            new NavItem("隐私", "\uE72E")
+            new NavItem("通用", "\uE713", "general"),
+            new NavItem("搜索", "\uE721", "search"),
+            new NavItem("应用别名", "\uE8F1", "applicationAliases"),
+            new NavItem("自定义应用", "\uE8F1", "customApplications"),
+            new NavItem("外观", "\uE790", "appearance"),
+            new NavItem("快捷键", "\uE765", "shortcuts"),
+            new NavItem("剪贴板", "\uE8C8", "clipboard"),
+            new NavItem("片段", "\uE8FD", "snippets"),
+            new NavItem("系统命令", "\uE756", "systemCommands"),
+            new NavItem("隐私", "\uE72E", "privacy")
         ]);
         NavList.ItemsSource = _navItems;
         _pages[_navItems[0]] = SafePage("通用", BuildGeneralPage);
@@ -1241,7 +1266,7 @@ public partial class SettingsWindow : Window
 
     internal sealed record EnumOption(string Title, object Value);
 
-    private sealed record NavItem(string Title, string Glyph);
+    private sealed record NavItem(string Title, string Glyph, string SectionId);
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);

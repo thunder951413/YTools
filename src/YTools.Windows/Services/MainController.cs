@@ -45,6 +45,7 @@ public sealed class MainController
     private EventWaitHandle? _showLauncherEvent;
     private HotKeyDefinition? _lastWorkingLauncher;
     private HotKeyDefinition? _lastWorkingClipboard;
+    private bool _shutdownRequested;
 
     public void Start()
     {
@@ -80,7 +81,7 @@ public sealed class MainController
         _tray.ShowClipboardRequested += ShowClipboard;
         _tray.TogglePauseRequested += ToggleClipboardPause;
         _tray.ShowSettingsRequested += OpenSettings;
-        _tray.QuitRequested += () => Application.Current.Shutdown();
+        _tray.QuitRequested += async () => await RequestShutdownAsync();
 
         _preferences.HotKeysChanged += ConfigureHotKeys;
         _preferences.ClearUsageLearningRequested += () => _launcher?.ClearUsageLearning();
@@ -111,6 +112,18 @@ public sealed class MainController
         _clipboardMonitor?.Dispose();
         _messages?.Dispose();
         _messages = null;
+    }
+
+    private async Task RequestShutdownAsync()
+    {
+        if (_shutdownRequested) { return; }
+        _shutdownRequested = true;
+        _hotKeys?.RemoveAll();
+        _launcherWindow?.HidePanel();
+        _clipboardWindow?.HidePanel();
+        _settingsWindow?.Close();
+        if (_clipboard is not null) { await _clipboard.FlushPendingChangesAsync(); }
+        Application.Current.Shutdown();
     }
 
     /// <summary>Diagnostic entry: opens the settings window directly.</summary>

@@ -73,7 +73,7 @@ public partial class ClipboardWindow : Window
         }
     }
 
-    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    private async void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (_manager is null)
         {
@@ -100,7 +100,7 @@ public partial class ClipboardWindow : Window
         switch (routed.Kind)
         {
             case PanelCommandKind.ActivateSelected:
-                if (_manager.CopySelected())
+                if (await _manager.CopySelectedAsync())
                 {
                     HidePanel();
                 }
@@ -165,7 +165,8 @@ public partial class ClipboardWindow : Window
 
     private void ClearRecent_Click(object sender, RoutedEventArgs e)
     {
-        _manager?.ClearRecent(30);
+        if (_manager is not null && ConfirmClear("永久清空最近 30 分钟的剪贴板历史？"))
+        { _manager.ClearRecent(30); }
     }
 
     private async void SyncNow_Click(object sender, RoutedEventArgs e)
@@ -191,17 +192,15 @@ public partial class ClipboardWindow : Window
             return;
         }
 
-        var confirmation = MessageBox.Show(
-            this,
-            "永久清空全部剪贴板历史？加密密文将被删除，此操作无法撤销。",
-            "清空剪贴板历史",
-            MessageBoxButton.OKCancel,
-            MessageBoxImage.Warning);
-        if (confirmation == MessageBoxResult.OK)
+        if (ConfirmClear("永久清空全部剪贴板历史？"))
         {
             _manager.Clear();
         }
     }
+
+    private bool ConfirmClear(string question) => MessageBox.Show(this,
+        question + "\n\n" + _manager?.DeletionScopeDescription,
+        "清理剪贴板历史", MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK;
 
     private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
@@ -213,7 +212,10 @@ public partial class ClipboardWindow : Window
 
         var menu = new ContextMenu();
         var copy = new MenuItem { Header = "复制" };
-        copy.Click += (_, _) => _manager?.Copy(item);
+        copy.Click += async (_, _) =>
+        {
+            if (_manager is not null && await _manager.CopyAsync(item)) { HidePanel(); }
+        };
         var pin = new MenuItem { Header = item.IsPinned ? "取消固定" : "固定" };
         pin.Click += (_, _) => _manager?.TogglePinned(item);
         var delete = new MenuItem { Header = "删除" };

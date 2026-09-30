@@ -16,9 +16,14 @@ public sealed class ClipboardPersistenceService : IDisposable
     private readonly Thread _worker;
     private ClipboardHistoryStore? _store;
     private int _latestRevision;
+    private int _disposed;
+    private readonly Func<ClipboardHistoryStore> _storeFactory;
 
-    public ClipboardPersistenceService()
+    public ClipboardPersistenceService() : this(() => new ClipboardHistoryStore()) { }
+
+    internal ClipboardPersistenceService(Func<ClipboardHistoryStore> storeFactory)
     {
+        _storeFactory = storeFactory;
         _worker = new Thread(RunQueue)
         {
             IsBackground = true,
@@ -91,7 +96,12 @@ public sealed class ClipboardPersistenceService : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) { return; }
         _queue.CompleteAdding();
+        // The worker never calls Dispatcher: joining drains queued ciphertext
+        // writes safely even when Dispose is the final process-exit fallback.
+        _worker.Join();
+        _queue.Dispose();
     }
 
     private async Task<T> EnqueueAsync<T>(Func<Task<T>> operation)
@@ -121,6 +131,6 @@ public sealed class ClipboardPersistenceService : IDisposable
 
     private ClipboardHistoryStore StoreInstance()
     {
-        return _store ??= new ClipboardHistoryStore();
+        return _store ??= _storeFactory();
     }
 }

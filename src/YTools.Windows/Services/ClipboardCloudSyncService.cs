@@ -17,6 +17,7 @@ namespace YTools.Services;
 /// </summary>
 public sealed class ClipboardCloudSyncService : IDisposable
 {
+    public readonly record struct Configuration(bool Enabled, string Folder);
     private const string Server = "https://dav.jianguoyun.com";
     internal const int MaximumEventBytes = 8 * 1024 * 1024;
     private const int EnvelopeBytes = 49;
@@ -96,6 +97,50 @@ public sealed class ClipboardCloudSyncService : IDisposable
     public Task SyncNowAsync(IReadOnlyList<ClipboardHistoryItem> items, Action<ClipboardCloudSyncResult> completed) =>
         Task.Run(() => SynchronizeAsync(items, completed));
 
+    public Task UploadPendingAsync(Action<ClipboardCloudSyncResult> completed) =>
+        Task.Run(() => SynchronizeAsync([], completed, pullRemote: false));
+
+    public Task<ClipboardCloudSyncResult> EnqueueChangedItemAsync(ClipboardHistoryItem item, Configuration? configuration = null) =>
+        EnqueueAsync((sequence, device) => ClipboardCloudEvent.Upsert(sequence, device, item), configuration);
+
+    public Task<ClipboardCloudSyncResult> EnqueueDeletedAsync(IEnumerable<Guid> ids, DateTimeOffset timestamp, Configuration? configuration = null)
+    {
+        var unique = ids.Distinct().ToList();
+        return unique.Count == 0 ? Task.FromResult(ClipboardCloudSyncResult.Skipped()) : EnqueueAsync(
+            (sequence, device) => ClipboardCloudEvent.Delete(sequence, device, unique, timestamp), configuration);
+    }
+
+    private Task<ClipboardCloudSyncResult> EnqueueAsync(Func<long, Guid, ClipboardCloudEvent> create, Configuration? configuration)
+    {
+        var enabled = configuration?.Enabled ?? _preferences.ClipboardCloudSyncEnabled;
+        var folder = configuration?.Folder ?? _preferences.ClipboardCloudSyncFolder;
+        return Task.Run(async () =>
+        {
+            await _initialize;
+            if (_disposed || !enabled) { return ClipboardCloudSyncResult.Skipped(); }
+            try
+            {
+                lock (_stateLock)
+                {
+                    if (_stateError is not null) { throw new SecureStorageException(_stateError); }
+                    var credentials = CredentialsOrThrow();
+                    var scope = credentials.Username.Trim().ToLowerInvariant() + "/" + string.Join('/', ValidateRemoteFolder(folder));
+                    if (_syncGate.CurrentCount == 0 && _state.Scope != scope)
+                    { throw new InvalidOperationException("正在同步原目录，请稍后再更换同步账号或目录。"); }
+                    BindScope(credentials, folder);
+                    var entry = create(_state.NextSequence, _state.DeviceId);
+                    if (JsonSerializer.SerializeToUtf8Bytes(entry).Length > MaximumEventBytes - EnvelopeBytes)
+                    { throw new InvalidDataException("剪贴板同步记录过大，未加入上传队列。"); }
+                    _state.NextSequence += 1;
+                    EnqueueLocked(entry);
+                }
+                return ClipboardCloudSyncResult.Succeeded(null, "剪贴板变更已加密保存，等待上传。");
+            }
+            catch (Exception exception)
+            { return ClipboardCloudSyncResult.Failed($"同步待发送记录保存失败：{SafeMessage(exception)}"); }
+        });
+    }
+
     public Task PublishChangedItemAsync(ClipboardHistoryItem item, Action<ClipboardCloudSyncResult> completed) =>
         PublishAsync((sequence, device) => ClipboardCloudEvent.Upsert(sequence, device, item), completed);
 
@@ -155,8 +200,14 @@ public sealed class ClipboardCloudSyncService : IDisposable
 
     public void Dispose()
     {
-        _pullTimer?.Dispose();
+        StopPeriodicPull();
         _disposed = true; // In-flight work owns the gate until completion.
+    }
+
+    public void StopPeriodicPull()
+    {
+        _pullTimer?.Dispose();
+        _pullTimer = null;
     }
 
     private async Task SynchronizeAsync(
@@ -214,9 +265,9 @@ public sealed class ClipboardCloudSyncService : IDisposable
         return result.Value;
     }
 
-    private void BindScope(ClipboardCloudCredentials credentials)
+    private void BindScope(ClipboardCloudCredentials credentials, string? folder = null)
     {
-        var scope = credentials.Username.Trim().ToLowerInvariant() + "/" + string.Join('/', ValidateRemoteFolder(_preferences.ClipboardCloudSyncFolder));
+        var scope = credentials.Username.Trim().ToLowerInvariant() + "/" + string.Join('/', ValidateRemoteFolder(folder ?? _preferences.ClipboardCloudSyncFolder));
         if (_state.Scope == scope) { return; }
         if (_state.Scope is not null)
         {

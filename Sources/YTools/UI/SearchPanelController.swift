@@ -379,7 +379,11 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             case .launcher:
                 guard launcher.activateSelected() else { return false }
             case .clipboard:
-                guard clipboard.copySelected() else { return false }
+                Task { [weak self] in
+                    guard let self, await self.clipboard.copySelected() else { return }
+                    self.hide()
+                }
+                return true
             }
             hide()
         case let .activateResult(index):

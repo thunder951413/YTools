@@ -6,6 +6,64 @@ import YToolsModuleKit
 
 @MainActor
 final class NativeViewSnapshotTests: XCTestCase {
+    func testClipboardPanelRendersCopyFailureWithSyntheticHistory() async throws {
+        guard let outputValue = ProcessInfo.processInfo.environment["YTOOLS_UI_SNAPSHOT_DIR"], !outputValue.isEmpty else {
+            throw XCTSkip("Set YTOOLS_UI_SNAPSHOT_DIR to render clipboard panel review PNGs.")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ytools-panel-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = Data(repeating: 1, count: 32)
+        _ = try ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }).persist([
+            ClipboardHistoryItem(id: UUID(), kind: .text,
+                payload: ["用于验证完整剪贴板面板的长文本：复制失败时应显示原因并保留列表，工具栏、固定按钮和底部快捷键都应保持可见。"],
+                createdAt: Date(), sourceApplication: "Synthetic Fixture", isPinned: true)
+        ])
+        let suite = "ytools-panel-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults, launchAtLoginService: SnapshotLoginService())
+        let board = NSPasteboard(name: .init("ytools-test-\(UUID())"))
+        defer { board.releaseGlobally() }
+        let manager = ClipboardHistoryManager(preferences: preferences,
+            persistence: ClipboardPersistenceService { ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }) },
+            cloudSync: ClipboardCloudSyncService(
+                credentialStore: SecureCodableStore(fileURL: directory.appendingPathComponent("credentials.enc")) { _ in key },
+                stateStore: SecureCodableStore(fileURL: directory.appendingPathComponent("state.enc")) { _ in key },
+                transport: SnapshotCloudTransport()),
+            pasteboard: board, monitorsClipboard: false)
+        await manager.waitUntilLoaded()
+        let copied = await manager.copy(ClipboardHistoryItem(id: UUID(), kind: .image, payload: ["missing"], createdAt: Date(), sourceApplication: nil))
+        XCTAssertFalse(copied)
+        XCTAssertNotNil(manager.copyError)
+        let output = URL(fileURLWithPath: outputValue, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for scheme in [ColorScheme.light, .dark] {
+            // ImageRenderer cannot draw AppKit-backed TextField/Picker/List.
+            // Host the real panel in an offscreen native window instead.
+            _ = NSApplication.shared
+            let frame = NSRect(x: 0, y: 0, width: 720, height: 420)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            defer { window.close() }
+            let view = NSHostingView(rootView: ClipboardHistoryView(manager: manager, preferences: preferences, onActivate: {})
+                .frame(width: 720, height: 420).colorScheme(scheme))
+            window.contentView = view
+            view.frame = frame
+            view.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            let image = NSImage(size: frame.size)
+            image.addRepresentation(bitmap)
+            XCTAssertEqual(image.size.width, 720)
+            XCTAssertEqual(image.size.height, 420)
+            try writePng(image, to: output.appendingPathComponent("clipboard-panel-\(name(for: scheme)).png"))
+        }
+        await manager.flushPendingChanges()
+    }
+
     func testNativeRowsAndSettingsGroupRenderInLightAndDarkThemes() throws {
         guard let outputValue = ProcessInfo.processInfo.environment["YTOOLS_UI_SNAPSHOT_DIR"],
               !outputValue.isEmpty else {
@@ -103,5 +161,17 @@ final class NativeViewSnapshotTests: XCTestCase {
     private enum SnapshotError: Error {
         case unavailableImage
         case unavailablePng
+    }
+}
+
+@MainActor
+private struct SnapshotLoginService: LaunchAtLoginManaging {
+    var isEnabled: Bool { false }
+    func setEnabled(_ enabled: Bool) throws {}
+}
+
+private struct SnapshotCloudTransport: ClipboardCloudTransport {
+    func send(_ request: URLRequest, maximumBytes: Int) async throws -> (status: Int, data: Data) {
+        throw URLError(.unsupportedURL)
     }
 }

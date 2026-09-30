@@ -53,6 +53,7 @@ struct SettingsRootView: View {
             ForEach(SettingsSection.allCases) { section in
                 Button {
                     navigation.selection = section
+                    navigation.searchText = ""
                 } label: {
                     Label(section.title, systemImage: section.icon)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -69,7 +70,7 @@ struct SettingsRootView: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            Text("默认本机模式 · 同步默认关闭")
+            Text("\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · \(preferences.clipboardCloudSyncEnabled ? "坚果云加密同步已启用" : "本机模式 · 同步已关闭")")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)

@@ -41,7 +41,16 @@ public sealed class ClipboardReliabilityTests
         var device = Guid.NewGuid();
         var forward = ApplyEvents([plain, extra], [ClipboardCloudEvent.Upsert(1, device, pinned)]);
         var reverse = ApplyEvents([pinned, extra], [ClipboardCloudEvent.Upsert(2, device, plain)]);
-        Assert.Equal(forward, reverse);
+        Assert.Equal(forward.Count, reverse.Count);
+        foreach (var left in forward)
+        {
+            var right = Assert.Single(reverse, item => item.Id == left.Id);
+            Assert.Equal(left.Payload, right.Payload);
+            Assert.Equal(left.BinaryData, right.BinaryData);
+            // Record equality compares collection references; compare their
+            // contents above and all remaining record fields here.
+            Assert.Equal(left, right with { Payload = left.Payload, BinaryData = left.BinaryData });
+        }
         Assert.Contains(extra, forward);
     }
 

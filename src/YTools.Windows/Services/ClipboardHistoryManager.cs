@@ -56,6 +56,17 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     private string _appliedQuery = "";
     private ClipboardFilter _appliedFilter = ClipboardFilter.All;
     private const int MaximumVisibleItems = 100;
+    private readonly HashSet<Task> _localWork = [];
+    private bool _isShuttingDown;
+    private bool _disposed;
+    private Task? _uploadTask;
+    private bool _uploadRequested;
+    private bool _isCopying;
+    private string? _copyError;
+    private bool _isClearing;
+    private readonly System.ComponentModel.PropertyChangedEventHandler _preferenceChanged;
+    private ClipboardCloudSyncService.Configuration CloudConfiguration =>
+        new(_preferences.ClipboardCloudSyncEnabled, _preferences.ClipboardCloudSyncFolder);
 
     public ClipboardHistoryManager(AppPreferences preferences, ClipboardMonitor monitor)
     {
@@ -65,8 +76,8 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         _cloudSync = new ClipboardCloudSyncService(preferences);
         _monitor.Changed += OnClipboardChanged;
 
-        _ = LoadAsync();
-        preferences.PropertyChanged += (_, args) =>
+        TrackLocalWork(LoadAsync());
+        _preferenceChanged = (_, args) =>
         {
             switch (args.PropertyName)
             {
@@ -88,6 +99,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
                     break;
             }
         };
+        preferences.PropertyChanged += _preferenceChanged;
     }
 
     public IReadOnlyList<ClipboardHistoryItem> Items => _items;
@@ -170,6 +182,12 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     }
 
     public bool HasCloudSyncCredentials => _cloudSync.HasCredentials;
+    public string? CopyError { get => _copyError; private set => SetField(ref _copyError, value); }
+    public bool IsCopying { get => _isCopying; private set => SetField(ref _isCopying, value); }
+    public bool IsClearing { get => _isClearing; private set => SetField(ref _isClearing, value); }
+    public string DeletionScopeDescription => _preferences.ClipboardCloudSyncEnabled
+        ? "删除会加密同步到同一账号和目录下的其他设备，离线设备会在恢复同步后删除；无法撤销。"
+        : "本机加密记录将被永久删除，无法撤销。";
 
     public async Task<string?> SaveCloudSyncCredentialsAsync(string username, string appPassword, string syncPassphrase)
     {
@@ -197,8 +215,45 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        if (_disposed) { return; }
+        _disposed = true;
+        _isShuttingDown = true;
         _monitor.Changed -= OnClipboardChanged;
+        _preferences.PropertyChanged -= _preferenceChanged;
         _cloudSync.Dispose();
+        _filterDebouncer.Cancel();
+        _persistence.Dispose();
+    }
+
+    public async Task FlushPendingChangesAsync()
+    {
+        _isShuttingDown = true;
+        _monitor.Changed -= OnClipboardChanged;
+        _preferences.PropertyChanged -= _preferenceChanged;
+        _cloudSync.StopPeriodicPull();
+        _filterDebouncer.Cancel();
+        // Capture completions can schedule a save. Keep the Dispatcher alive
+        // and drain local work until every follow-up and outbox save is done.
+        while (_localWork.Count > 0)
+        {
+            var batch = _localWork.ToArray();
+            try { await Task.WhenAll(batch); }
+            catch (Exception exception) { StorageError = $"剪贴板后台保存失败：{exception.Message}"; }
+            _localWork.ExceptWith(batch);
+        }
+    }
+
+    private void TrackLocalWork(Task work)
+    {
+        _localWork.Add(work);
+        _ = ObserveLocalWorkAsync(work);
+    }
+
+    private async Task ObserveLocalWorkAsync(Task work)
+    {
+        try { await work; }
+        catch (Exception exception) { StorageError = $"剪贴板后台保存失败：{exception.Message}"; }
+        finally { _localWork.Remove(work); }
     }
 
     public void PrepareForPresentation()
@@ -237,7 +292,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         SelectedIndex = (SelectedIndex + offset + visible.Count) % visible.Count;
     }
 
-    public bool CopySelected()
+    public async Task<bool> CopySelectedAsync()
     {
         EnsureFilterIsCurrent();
         if (!_filteredItems.Any() || !_filteredItems.Indices().Contains(SelectedIndex))
@@ -245,16 +300,27 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
             return false;
         }
 
-        Copy(_filteredItems[SelectedIndex]);
-        return true;
+        return await CopyAsync(_filteredItems[SelectedIndex]);
     }
 
-    public async void Copy(ClipboardHistoryItem item)
+    public async Task<bool> CopyAsync(ClipboardHistoryItem item)
     {
-        if (await WriteToSystemClipboard(item))
+        if (IsCopying || _isShuttingDown) { return false; }
+        IsCopying = true;
+        CopyError = null;
+        try
         {
+            if (!await WriteToSystemClipboard(item))
+            {
+                CopyError = "无法读取原件或写入系统剪贴板，请稍后重试。";
+                return false;
+            }
+            if (_isShuttingDown) { return false; }
             PromoteToTop(item);
+            return true;
         }
+        catch (Exception exception) { CopyError = $"复制失败：{exception.Message}"; return false; }
+        finally { IsCopying = false; }
     }
 
     private async Task<bool> WriteToSystemClipboard(ClipboardHistoryItem item)
@@ -289,7 +355,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         }
 
         var timestamp = DateTimeOffset.UtcNow;
-        var promoted = item with { CreatedAt = timestamp, UpdatedAt = timestamp };
+        var promoted = _items[index] with { CreatedAt = timestamp, UpdatedAt = timestamp };
         _items.RemoveAt(index);
         _items.Insert(0, promoted);
         SortItems();
@@ -318,7 +384,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
             // Never cache a failed load: after persistence completes the vault
             // can serve the original even though it could not just now.
             _imageTasks.Remove(item.Id);
-            return item.BinaryData;
+            return null;
         }
 
         return data;
@@ -343,6 +409,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
 
     public void Delete(ClipboardHistoryItem item)
     {
+        if (IsClearing) { return; }
         _items.RemoveAll(existing => existing.Id == item.Id);
         SelectedIndex = Math.Min(SelectedIndex, Math.Max(_filteredItems.Count - 1, 0));
         RebuildFilteredItems();
@@ -362,6 +429,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
 
     public void TogglePinned(ClipboardHistoryItem item)
     {
+        if (IsClearing) { return; }
         var index = _items.FindIndex(existing => existing.Id == item.Id);
         if (index < 0)
         {
@@ -392,19 +460,23 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
 
     public void Clear()
     {
+        if (!_storageReady || IsClearing) { return; }
+        IsClearing = true;
         var previous = _items;
-        foreach (var item in previous) { _localDeletedForSync[item.Id] = DateTimeOffset.UtcNow; }
+        var deletedAt = DateTimeOffset.UtcNow;
+        foreach (var item in previous) { _localDeletedForSync[item.Id] = deletedAt; }
         _items = [];
         SelectedIndex = 0;
         _persistenceRevision += 1;
         var revision = _persistenceRevision;
         _persistenceWritable = false;
         RebuildFilteredItems();
-        _ = ClearAsync(previous, previous.Select(item => item.Id).ToList(), revision);
+        TrackLocalWork(ClearAsync(previous, previous.Select(item => item.Id).ToList(), revision, deletedAt, CloudConfiguration));
     }
 
     public void ClearRecent(int minutes)
     {
+        if (IsClearing) { return; }
         var cutoff = DateTimeOffset.UtcNow.AddMinutes(-minutes);
         var removed = _items.Where(item => item.CreatedAt >= cutoff).Select(item => item.Id).ToList();
         _items.RemoveAll(item => removed.Contains(item.Id));
@@ -413,25 +485,35 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         PersistCurrent(deletedIds: removed);
     }
 
-    private async Task ClearAsync(List<ClipboardHistoryItem> previous, IReadOnlyList<Guid> deletedIds, int revision)
+    private async Task ClearAsync(List<ClipboardHistoryItem> previous, IReadOnlyList<Guid> deletedIds, int revision,
+        DateTimeOffset deletedAt, ClipboardCloudSyncService.Configuration configuration)
+    {
+        try { await ClearAndEnqueueAsync(previous, deletedIds, revision, deletedAt, configuration); }
+        finally { IsClearing = false; }
+    }
+
+    private async Task ClearAndEnqueueAsync(List<ClipboardHistoryItem> previous, IReadOnlyList<Guid> deletedIds, int revision,
+        DateTimeOffset deletedAt, ClipboardCloudSyncService.Configuration configuration)
     {
         var (success, error) = await _persistence.ClearAsync(revision);
         if (!success)
         {
+            if (revision != _persistenceRevision) { return; }
             _items = previous;
             _persistenceWritable = false;
             StorageError = $"无法清除剪贴板密文：{error}";
+            RebuildFilteredItems();
             return;
         }
 
-        _persistenceWritable = true;
-        StorageError = null;
-        StorageByteCount = 0;
-        if (_items.Count > 0)
+        if (revision == _persistenceRevision)
         {
-            PersistCurrent();
+            _persistenceWritable = true;
+            StorageError = null;
+            StorageByteCount = 0;
+            if (_items.Count > 0) { PersistCurrent(); }
         }
-        PublishDeleted(deletedIds);
+        await HandleEnqueueResultAsync(await _cloudSync.EnqueueDeletedAsync(deletedIds, deletedAt, configuration));
     }
 
     private async Task LoadAsync()
@@ -480,7 +562,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
 
     private void PollPasteboard()
     {
-        if (!_storageReady)
+        if (!_storageReady || _isShuttingDown)
         {
             return;
         }
@@ -506,14 +588,14 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
             return;
         }
 
-        _ = Task.Run(() => ProcessCapture(capture))
+        TrackLocalWork(Task.Run(() => ProcessCapture(capture))
             .ContinueWith(task =>
             {
                 if (task.IsCompletedSuccessfully && task.Result is { } processed)
                 {
                     Ingest(processed);
                 }
-            }, TaskScheduler.FromCurrentSynchronizationContext());
+            }, TaskScheduler.FromCurrentSynchronizationContext()));
     }
 
     private ClipboardCapture? MakeCapture()
@@ -713,10 +795,8 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         var revision = _persistenceRevision;
         var snapshot = _items.ToList();
         var images = originalImages ?? new Dictionary<Guid, byte[]>();
-        _ = _persistence.PersistAsync(snapshot, images, revision)
-            .ContinueWith(
-                task => _ = HandlePersistCompletion(task, revision, changedItem, deletedIds, deletedAt, acknowledge),
-                TaskScheduler.FromCurrentSynchronizationContext());
+        TrackLocalWork(HandlePersistCompletion(_persistence.PersistAsync(snapshot, images, revision),
+            revision, changedItem, deletedIds, deletedAt, acknowledge, images, CloudConfiguration));
     }
 
     private async Task HandlePersistCompletion(
@@ -725,16 +805,13 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         ClipboardHistoryItem? changedItem,
         IReadOnlyList<Guid>? deletedIds,
         DateTimeOffset deletedAt,
-        ClipboardCloudBatch? acknowledge)
+        ClipboardCloudBatch? acknowledge,
+        IReadOnlyDictionary<Guid, byte[]> originalImages,
+        ClipboardCloudSyncService.Configuration configuration)
     {
         try
         {
-            if (!task.IsCompletedSuccessfully)
-            {
-                return;
-            }
-
-            var (success, normalized, error) = task.Result;
+            var (success, normalized, error) = await task;
             if (!success)
             {
                 if (revision != _persistenceRevision) { return; }
@@ -757,11 +834,11 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
             if (changedItem is not null)
             {
                 var itemToPublish = normalized?.FirstOrDefault(item => item.Id == changedItem.Id) ?? changedItem;
-                await PublishChangedItemAsync(itemToPublish);
+                await EnqueueChangedItemAsync(itemToPublish, originalImages.GetValueOrDefault(itemToPublish.Id), configuration);
             }
             else if (deletedIds is { Count: > 0 })
             {
-                _ = _cloudSync.PublishDeletedAsync(deletedIds, ApplyCloudSyncResult, deletedAt);
+                await HandleEnqueueResultAsync(await _cloudSync.EnqueueDeletedAsync(deletedIds, deletedAt, configuration));
             }
         }
         catch (Exception exception)
@@ -772,6 +849,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
 
     private void StartCloudSync()
     {
+        if (_isShuttingDown) { return; }
         _cloudSync.StartPeriodicPull(SnapshotItemsForSync, ApplyCloudSyncResult);
         if (_preferences.ClipboardCloudSyncEnabled && _cloudSync.PendingBatch is { } batch)
         { ApplyCloudSyncResult(ClipboardCloudSyncResult.Succeeded(null, "正在恢复已接收的剪贴板变更…") with { Batch = batch }); }
@@ -788,11 +866,12 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
             : _dispatcher.Invoke(() => _items.ToList());
     }
 
-    private async Task PublishChangedItemAsync(ClipboardHistoryItem item)
+    private async Task EnqueueChangedItemAsync(ClipboardHistoryItem item, byte[]? originalImage,
+        ClipboardCloudSyncService.Configuration configuration)
     {
-        if (item.Kind != ClipboardItemKind.Image || item.BinaryData is null)
+        if (item.Kind != ClipboardItemKind.Image)
         {
-            _ = _cloudSync.PublishChangedItemAsync(item, ApplyCloudSyncResult);
+            await HandleEnqueueResultAsync(await _cloudSync.EnqueueChangedItemAsync(item, configuration));
             return;
         }
 
@@ -802,7 +881,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         byte[]? fullImage = null;
         try
         {
-            fullImage = await _persistence.ImageDataAsync(item.Id);
+            fullImage = originalImage ?? await _persistence.ImageDataAsync(item.Id);
         }
         catch
         {
@@ -812,16 +891,36 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         var publishable = fullImage is { Length: > 0 }
             ? item with { BinaryData = fullImage }
             : item with { BinaryData = null };
-        _ = _cloudSync.PublishChangedItemAsync(publishable, ApplyCloudSyncResult);
+        await HandleEnqueueResultAsync(await _cloudSync.EnqueueChangedItemAsync(publishable, configuration));
     }
 
-    private void PublishDeleted(IReadOnlyList<Guid> ids)
+    private Task HandleEnqueueResultAsync(ClipboardCloudSyncResult result)
     {
-        _ = _cloudSync.PublishDeletedAsync(ids, ApplyCloudSyncResult);
+        if (result.WasSkipped) { return Task.CompletedTask; }
+        CloudSyncStatus = result.Message;
+        if (!result.Success || _isShuttingDown) { return Task.CompletedTask; }
+        _uploadRequested = true;
+        _uploadTask ??= UploadPendingAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task UploadPendingAsync()
+    {
+        await Task.Yield(); // Assign _uploadTask before a skipped upload can complete.
+        try
+        {
+            while (_uploadRequested && !_isShuttingDown)
+            {
+                _uploadRequested = false;
+                await _cloudSync.UploadPendingAsync(ApplyCloudSyncResult);
+            }
+        }
+        finally { _uploadTask = null; }
     }
 
     private void ApplyCloudSyncResult(ClipboardCloudSyncResult result)
     {
+        if (_isShuttingDown) { return; }
         if (result.WasSkipped)
         {
             return;

@@ -85,11 +85,16 @@
                                FontSize="11.5"
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,3,0,0" />
+                    <TextBox x:Name="SettingsSearchBox" Margin="0,12,0,0" Padding="8,6"
+                             TextChanged="SettingsSearch_TextChanged"
+                             AutomationProperties.Name="搜索设置分类"
+                             ToolTip="搜索设置，例如：坚果云、快捷键、主题" />
                 </StackPanel>
                 <TextBlock DockPanel.Dock="Bottom"
-                           Text="v0.1.0 · 本机模式 · 无网络模块"
+                           x:Name="VersionStatusText"
                            FontSize="11"
                            Foreground="{DynamicResource TextSecondaryBrush}"
+                           TextWrapping="Wrap"
                            Margin="20,0,20,16" />
                 <ListBox x:Name="NavList"
                          DockPanel.Dock="Top"

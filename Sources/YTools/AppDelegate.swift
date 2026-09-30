@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsController: SettingsWindowController?
     private var snippets: SnippetManager?
     private var recentDocuments: RecentDocumentsManager?
+    private var clipboard: ClipboardHistoryManager?
     private var hotKeyManager: HotKeyManager?
     private var statusItem: NSStatusItem?
     private var pauseClipboardMenuItem: NSMenuItem?
@@ -46,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.settingsController = settingsController
         self.snippets = snippets
         self.recentDocuments = recentDocuments
+        self.clipboard = clipboard
         self.hotKeyManager = hotKeyManager
         preferences.hotKeysDidChange = { [weak self] in self?.configureHotKeys() }
         preferences.menuBarVisibilityDidChange = { [weak self] in self?.updateStatusItemVisibility() }
@@ -178,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !terminationFlushStarted else { return .terminateLater }
         terminationFlushStarted = true
         Task { [weak self] in
+            await self?.clipboard?.flushPendingChanges()
             await self?.snippets?.flushPendingChanges()
             await self?.recentDocuments?.flushPendingChanges()
             self?.terminationFlushFinished = true

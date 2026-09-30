@@ -113,6 +113,8 @@ public static class SelfTest
 
             var clipboardPolicy = new ClipboardTextPolicy(100);
             Check("clipboardPolicy.limit", !clipboardPolicy.ShouldStore(new string('a', 101)));
+            Check("settingsSearch.sync", SettingsSearchCatalog.Matches("clipboard", "WEBDAV 同步口令")
+                && !SettingsSearchCatalog.Matches("appearance", "坚果云"));
 
             var placement = RelativePanelPlacement.Create(0.25, 0.5, 800, 600);
             Check(

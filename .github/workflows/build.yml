@@ -19,7 +19,13 @@ jobs:
       - name: Show Swift version
         run: swift --version
       - name: Strict build and core checks
+        env:
+          YTOOLS_UI_SNAPSHOT_DIR: ${{ runner.temp }}/ytools-ui
         run: ./scripts/check.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTools-native-ui-review
+          path: ${{ runner.temp }}/ytools-ui/*.png
       - name: Build ad-hoc signed app
         run: ./scripts/build-app.sh
       - name: Verify app signature

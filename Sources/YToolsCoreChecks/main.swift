@@ -19,6 +19,10 @@ struct YToolsCoreChecks {
         try checkPanelCommandRouter()
         try checkSearchNormalization()
         try checkClipboardPolicy()
+        guard SettingsSearchCatalog.matches(sectionID: "clipboard", query: "WEBDAV 同步口令"),
+              !SettingsSearchCatalog.matches(sectionID: "appearance", query: "坚果云") else {
+            throw CheckFailure.message("Settings search cannot find encrypted sync settings")
+        }
         try checkRelativePanelPlacement()
         try checkModuleBoundary()
         print("YToolsCore checks passed")

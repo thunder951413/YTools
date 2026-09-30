@@ -18,7 +18,7 @@ struct ClipboardHistoryView: View {
                     .font(.system(size: 24, weight: .medium))
                     .focused($searchFocused)
                     .onSubmit {
-                        if manager.copySelected() { onActivate() }
+                        Task { if await manager.copySelected() { onActivate() } }
                     }
                 Picker("类型", selection: $manager.filter) {
                     ForEach(ClipboardHistoryManager.Filter.allCases) { filter in
@@ -46,14 +46,20 @@ struct ClipboardHistoryView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("清空全部历史")
-                .disabled(manager.items.isEmpty)
+                .disabled(manager.items.isEmpty || manager.isClearing)
             }
             .padding(.horizontal, 22)
             .frame(height: 72)
 
             Divider()
 
-            if let error = manager.storageError {
+            if let error = manager.copyError {
+                statusMessage(error, symbol: "exclamationmark.triangle.fill", tint: .orange)
+            } else if manager.isCopying {
+                statusMessage("正在复制…", symbol: "doc.on.clipboard", tint: .secondary)
+            } else if manager.isClearing {
+                statusMessage("正在清理加密历史…", symbol: "trash", tint: .secondary)
+            } else if let error = manager.storageError {
                 statusMessage(error, symbol: "exclamationmark.triangle.fill", tint: .orange)
             } else if manager.isLoading {
                 HStack(spacing: 8) {
@@ -74,7 +80,9 @@ struct ClipboardHistoryView: View {
                     manager.query.isEmpty ? "暂无剪贴板历史" : "没有匹配内容",
                     systemImage: manager.query.isEmpty ? "clipboard" : "line.3.horizontal.decrease.circle",
                     description: Text(manager.query.isEmpty
-                        ? "复制文本、文件或图片后会在这里出现；历史仅在本机加密保存"
+                        ? (preferences.clipboardCloudSyncEnabled
+                            ? "复制文本、文件或图片后会在这里出现；已启用坚果云加密同步"
+                            : "复制文本、文件或图片后会在这里出现；历史在本机加密保存")
                         : "可清除关键词或切换“全部”查看其他记录")
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -90,13 +98,11 @@ struct ClipboardHistoryView: View {
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 manager.selectedIndex = index
-                                manager.copy(item)
-                                onActivate()
+                                Task { if await manager.copy(item) { onActivate() } }
                             }
                             .contextMenu {
                                 Button("复制") {
-                                    manager.copy(item)
-                                    onActivate()
+                                    Task { if await manager.copy(item) { onActivate() } }
                                 }
                                 Button("删除", role: .destructive) {
                                     manager.delete(item)
@@ -152,7 +158,9 @@ struct ClipboardHistoryView: View {
             Button("清空全部", role: .destructive) { manager.clear() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("所选范围内的本机加密记录将被永久删除。")
+            Text(preferences.clipboardCloudSyncEnabled
+                ? "所选范围内的记录将被永久删除。删除会加密同步到同一账号和目录下的其他设备，离线设备会在恢复同步后删除；无法撤销。"
+                : "所选范围内的本机加密记录将被永久删除，无法撤销。")
         }
     }
 

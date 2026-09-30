@@ -15,7 +15,7 @@ public sealed class ClipboardCloudSyncTests
 
         Assert.NotEqual(clear, encrypted);
         Assert.Equal(clear, ClipboardCloudCryptography.Open(encrypted, "a-long-enough-sync-passphrase"));
-        Assert.Throws<CryptographicException>(() => ClipboardCloudCryptography.Open(encrypted, "another-sync-passphrase"));
+        Assert.ThrowsAny<CryptographicException>(() => ClipboardCloudCryptography.Open(encrypted, "another-sync-passphrase"));
     }
 
     [Fact]

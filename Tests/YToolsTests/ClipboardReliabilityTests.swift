@@ -1,3 +1,4 @@
+import AppKit
 import CryptoKit
 import Foundation
 import XCTest
@@ -6,6 +7,159 @@ import XCTest
 @MainActor
 final class ClipboardReliabilityTests: XCTestCase {
     private let device = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+
+    func testExplicitClearCanRecoverUnreadableHistoryAndDrainBeforeExit() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = Data(repeating: 2, count: 32)
+        let store = ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key })
+        let manifest = directory.appendingPathComponent("clipboard-vault-v2/manifest.enc")
+        try Data("corrupt fixture".utf8).write(to: manifest)
+        let suite = "ytools-clipboard-clear-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults, launchAtLoginService: FixtureLoginService())
+        let pasteboard = NSPasteboard(name: .init("ytools-test-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let service = ClipboardCloudSyncService(
+            credentialStore: SecureCodableStore(fileURL: directory.appendingPathComponent("credentials.enc")) { _ in key },
+            stateStore: SecureCodableStore(fileURL: directory.appendingPathComponent("state.enc")) { _ in key }, transport: PausedCloudTransport())
+        let manager = ClipboardHistoryManager(preferences: preferences,
+            persistence: ClipboardPersistenceService { ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }) },
+            cloudSync: service, pasteboard: pasteboard, monitorsClipboard: false)
+        await manager.waitUntilLoaded()
+        XCTAssertNotNil(manager.storageError)
+        XCTAssertEqual(try Data(contentsOf: manifest), Data("corrupt fixture".utf8))
+        manager.clear()
+        manager.clear() // Repeated request while clearing must not replace the first job.
+        await manager.flushPendingChanges()
+        XCTAssertFalse(manager.isClearing)
+        XCTAssertNil(manager.storageError)
+        if case .missing = store.load() {} else { XCTFail("Explicit clear should remove the unreadable ciphertext") }
+    }
+
+    func testClipboardShutdownDrainsHistoryAndDeletionOutbox() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = Data(repeating: 5, count: 32)
+        let now = Date()
+        let entry = ClipboardHistoryItem(id: UUID(), kind: .text, payload: ["synthetic"], createdAt: now, sourceApplication: nil)
+        _ = try ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }).persist([entry])
+        let suite = "ytools-clipboard-shutdown-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults, launchAtLoginService: FixtureLoginService())
+        preferences.clipboardCloudSyncEnabled = true
+        let stateURL = directory.appendingPathComponent("state.enc")
+        let service = ClipboardCloudSyncService(
+            credentialStore: SecureCodableStore(fileURL: directory.appendingPathComponent("credentials.enc")) { _ in key },
+            stateStore: SecureCodableStore(fileURL: stateURL) { _ in key }, transport: PausedCloudTransport())
+        _ = await service.saveCredentials(username: "fixture", appPassword: "fixture", syncPassphrase: "fixture-secret-long")
+        let pasteboard = NSPasteboard(name: .init("ytools-test-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let manager = ClipboardHistoryManager(preferences: preferences,
+            persistence: ClipboardPersistenceService { ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }) },
+            cloudSync: service, pasteboard: pasteboard, monitorsClipboard: false)
+        await manager.waitUntilLoaded()
+        manager.togglePinned(entry)
+        manager.delete(entry)
+        await manager.flushPendingChanges()
+        let reopened = ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key })
+        guard case let .loaded(items, _) = reopened.load() else { return XCTFail("Expected encrypted empty history") }
+        XCTAssertTrue(items.isEmpty)
+        if case let .loaded(snapshot) = SecureCodableStore(fileURL: stateURL, keyProvider: { _ in key }).load(OutboxSnapshot.self) {
+            XCTAssertEqual(snapshot.pending.count, 2)
+            XCTAssertEqual(snapshot.pending.last?.deletedIDs, [entry.id])
+        } else { XCTFail("Shutdown must drain the deletion outbox") }
+    }
+
+    func testHistoryCopyPromotesOnlyAfterSuccessfulWriteAndMissingImageReportsFailure() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = Data(repeating: 4, count: 32)
+        let originalDate = Date().addingTimeInterval(-60)
+        let entry = ClipboardHistoryItem(id: UUID(), kind: .text, payload: ["synthetic-copy"], createdAt: originalDate, sourceApplication: nil)
+        _ = try ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }).persist([entry])
+        let suite = "ytools-clipboard-copy-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults, launchAtLoginService: FixtureLoginService())
+        let pasteboard = NSPasteboard(name: .init("ytools-test-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let service = ClipboardCloudSyncService(
+            credentialStore: SecureCodableStore(fileURL: directory.appendingPathComponent("credentials.enc")) { _ in key },
+            stateStore: SecureCodableStore(fileURL: directory.appendingPathComponent("state.enc")) { _ in key }, transport: PausedCloudTransport())
+        let manager = ClipboardHistoryManager(preferences: preferences,
+            persistence: ClipboardPersistenceService { ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }) },
+            cloudSync: service, pasteboard: pasteboard, monitorsClipboard: false)
+        await manager.waitUntilLoaded()
+        let copied = await manager.copySelected()
+        XCTAssertTrue(copied)
+        XCTAssertEqual(pasteboard.string(forType: .string), "synthetic-copy")
+        XCTAssertGreaterThan(try XCTUnwrap(manager.items.first?.createdAt), originalDate)
+        let missing = ClipboardHistoryItem(id: UUID(), kind: .image, payload: ["missing"], createdAt: Date(), sourceApplication: nil,
+            binaryData: Data([1, 2, 3]))
+        let failed = await manager.copy(missing)
+        XCTAssertFalse(failed, "A thumbnail must never substitute for a missing original")
+        XCTAssertNotNil(manager.copyError)
+        XCTAssertEqual(pasteboard.string(forType: .string), "synthetic-copy")
+        await manager.flushPendingChanges()
+        guard case let .loaded(items, _) = ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }).load() else {
+            return XCTFail("Expected promoted ciphertext history")
+        }
+        XCTAssertGreaterThan(try XCTUnwrap(items.first?.createdAt), originalDate)
+    }
+
+    func testWebDAVHrefsSupportNamespacesWhitespaceAndEscapes() throws {
+        for xml in [
+            "<multistatus><response><href> /dav/Review/a&amp;b.head </href></response></multistatus>",
+            "<multistatus xmlns=\"DAV:\"><response><href> /dav/Review/a&amp;b.head </href></response></multistatus>",
+            "<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href> /dav/Review/a&amp;b.head </d:href></d:response></d:multistatus>",
+            "<server:multistatus xmlns:server=\"DAV:\"><server:response><server:href> /dav/Review/a&amp;b.head </server:href></server:response></server:multistatus>"
+        ] {
+            XCTAssertEqual(try XMLHrefParser.hrefs(in: Data(xml.utf8)), ["/dav/Review/a&b.head"])
+        }
+        XCTAssertEqual(try XMLHrefParser.hrefs(in: Data("<multistatus xmlns:x=\"urn:other\"><x:href>unrelated.head</x:href></multistatus>".utf8)), [])
+    }
+
+    func testMalformedWebDAVXMLIsReportedRatherThanAnEmptyDirectory() {
+        XCTAssertThrowsError(try XMLHrefParser.hrefs(in: Data("<d:multistatus xmlns:d=\"DAV:\"><d:href>truncated".utf8)))
+    }
+
+    func testOutboxRemainsDurableWhileUploadIsSuspended() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = Data(repeating: 6, count: 32)
+        let stateURL = directory.appendingPathComponent("state.enc")
+        let transport = PausedCloudTransport()
+        let service = ClipboardCloudSyncService(
+            credentialStore: SecureCodableStore(fileURL: directory.appendingPathComponent("credentials.enc")) { _ in key },
+            stateStore: SecureCodableStore(fileURL: stateURL) { _ in key }, transport: transport)
+        _ = await service.saveCredentials(username: "test", appPassword: "test", syncPassphrase: "fixture-secret-long")
+        let config = ClipboardCloudSyncService.Configuration(enabled: true, folder: "Review")
+        let first = item(id: UUID(), updated: 100)
+        let firstQueued = await service.enqueueChangedItem(first, configuration: config)
+        XCTAssertTrue(firstQueued.success, firstQueued.message)
+        let upload = Task { await service.uploadPending(configuration: config) }
+        await transport.waitUntilPaused()
+        let second = item(id: UUID(), updated: 200)
+        let secondQueued = await service.enqueueChangedItem(second, configuration: config)
+        let deleted = await service.enqueueDeleted([first.id], timestamp: Date(timeIntervalSince1970: 300), configuration: config)
+        XCTAssertTrue(secondQueued.success, secondQueued.message)
+        XCTAssertTrue(deleted.success, deleted.message)
+        let reopened = SecureCodableStore(fileURL: stateURL) { _ in key }
+        if case let .loaded(snapshot) = reopened.load(OutboxSnapshot.self) {
+            XCTAssertEqual(snapshot.nextSequence, 4)
+            XCTAssertEqual(snapshot.pending.map(\.sequence), [1, 2, 3])
+            XCTAssertEqual(snapshot.pending.last?.deletedIDs, [first.id])
+        } else { XCTFail("Outbox must be durable before the network resumes") }
+        await transport.resume()
+        let result = await upload.value
+        XCTAssertTrue(result.success, result.message)
+        if case let .loaded(snapshot) = reopened.load(OutboxSnapshot.self) {
+            XCTAssertEqual(snapshot.pending.map(\.sequence), [2, 3], "Finishing the older upload must preserve newly queued changes")
+        } else { XCTFail("Expected saved remaining outbox") }
+    }
 
     private func item(id: UUID, updated: TimeInterval, pinned: Bool = false) -> ClipboardHistoryItem {
         ClipboardHistoryItem(id: id, kind: .text, payload: ["fixture"], createdAt: Date(timeIntervalSince1970: 100),
@@ -179,7 +333,7 @@ private actor CloudFixtureTransport: ClipboardCloudTransport {
                let sequence = object["LastSequence"] as? Int { publishedHeads.append(sequence) }
             return (201, Data())
         case "PROPFIND":
-            return (207, Data("<multistatus><response><href>/dav/Review/heads/\(first).head</href></response><response><href>/dav/Review/heads/\(second).head</href></response></multistatus>".utf8))
+            return (207, Data("<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href>/dav/Review/heads/\(first).head</d:href></d:response><d:response><d:href>/dav/Review/heads/\(second).head</d:href></d:response></d:multistatus>".utf8))
         case "GET":
             if url.path.hasSuffix(".head") {
                 let raw = url.lastPathComponent.replacingOccurrences(of: ".head", with: "")
@@ -192,5 +346,37 @@ private actor CloudFixtureTransport: ClipboardCloudTransport {
             return (200, events[device]!)
         default: throw URLError(.unsupportedURL)
         }
+    }
+}
+
+private struct OutboxSnapshot: Codable {
+    let nextSequence: Int64
+    let pending: [ClipboardCloudSyncService.Event]
+}
+
+@MainActor
+private struct FixtureLoginService: LaunchAtLoginManaging {
+    var isEnabled: Bool { false }
+    func setEnabled(_ enabled: Bool) throws {}
+}
+
+private actor PausedCloudTransport: ClipboardCloudTransport {
+    private var paused = false
+    private var pauseWaiter: CheckedContinuation<Void, Never>?
+    private var resumeWaiter: CheckedContinuation<Void, Never>?
+    func waitUntilPaused() async {
+        if !paused { await withCheckedContinuation { pauseWaiter = $0 } }
+    }
+    func resume() { resumeWaiter?.resume(); resumeWaiter = nil }
+    func send(_ request: URLRequest, maximumBytes: Int) async throws -> (status: Int, data: Data) {
+        if request.httpMethod == "PUT", !paused {
+            paused = true
+            await withCheckedContinuation { continuation in
+                resumeWaiter = continuation
+                pauseWaiter?.resume()
+                pauseWaiter = nil
+            }
+        }
+        return (201, Data())
     }
 }
