@@ -104,6 +104,8 @@ public partial class LauncherWindow : Window
         });
     }
 
+    private void CancelFileTransfer_Click(object sender, RoutedEventArgs e) => _model?.CancelFileOperation();
+
     private void OnModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
@@ -279,6 +281,8 @@ public partial class LauncherWindow : Window
                 return _model.ShowActionsForSelected();
             case PanelCommandKind.NavigateBack:
                 return _model.DismissSecondaryView() || _model.NavigateToParent();
+            case PanelCommandKind.ToggleClipboardPreview:
+                return false;
             case PanelCommandKind.TogglePreview:
                 _model.TogglePreview();
                 return true;
@@ -655,7 +659,7 @@ public partial class LauncherWindow : Window
 
     private bool ShouldIgnoreWhileComposing(Key key)
     {
-        if (key is not (Key.Enter or Key.Up or Key.Down or Key.Left or Key.Right or Key.Back))
+        if (key is not (Key.Escape or Key.Enter or Key.Up or Key.Down or Key.Left or Key.Right or Key.Back))
         {
             return false;
         }

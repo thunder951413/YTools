@@ -87,7 +87,7 @@
                                Margin="0,3,0,0" />
                     <TextBox x:Name="SettingsSearchBox" Margin="0,12,0,0" Padding="8,6"
                              TextChanged="SettingsSearch_TextChanged"
-                             AutomationProperties.Name="搜索设置分类"
+                             AutomationProperties.Name="搜索具体设置"
                              ToolTip="搜索设置，例如：坚果云、快捷键、主题" />
                 </StackPanel>
                 <TextBlock DockPanel.Dock="Bottom"

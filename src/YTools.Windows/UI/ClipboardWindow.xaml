@@ -121,6 +121,7 @@
                              AutomationProperties.Name="筛选剪贴板历史"
                              ToolTip="输入文字筛选剪贴板历史" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0">
+                        <Button Content="预览" Click="TogglePreview_Click" Margin="0,0,6,0" Padding="10,6" ToolTip="内容预览（Ctrl+P）" AutomationProperties.Name="切换剪贴板内容预览" />
                         <Button x:Name="SyncButton" Content="立即同步" Click="SyncNow_Click" Margin="0,0,6,0" Padding="10,6"
                                 AutomationProperties.Name="立即同步剪贴板" ToolTip="加密同步已保存的剪贴板记录" />
                         <Button Content="清空 30 分钟" Click="ClearRecent_Click" Margin="0,0,6,0" Padding="10,6"
@@ -143,17 +144,41 @@
                            Visibility="{Binding IsCopying, Converter={StaticResource BoolToVisibility}}" />
             </StackPanel>
             <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition x:Name="ClipboardPreviewColumn" Width="0" />
+                </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6">
+                <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6">
                     <TextBlock Text="{Binding PageDescription}" VerticalAlignment="Center" Margin="0,0,12,0"
                                FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" />
                     <Button Content="加载更多（100 条）" Click="LoadMore_Click" Padding="10,4"
                             Visibility="{Binding HasMore, Converter={StaticResource BoolToVisibility}}"
                             AutomationProperties.Name="加载更多匹配的剪贴板记录" />
                 </StackPanel>
+                <Border x:Name="ClipboardPreviewBorder" Grid.Column="1" Margin="6,0,0,0" Padding="12"
+                        Background="{DynamicResource InputBackgroundBrush}" Visibility="{Binding IsVisible, Converter={StaticResource BoolToVisibility}}">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <TextBlock Text="内容预览" FontWeight="SemiBold" Margin="0,0,0,8" Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBox Grid.Row="1" Text="{Binding Text, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto" AcceptsReturn="True" BorderThickness="0" Background="Transparent"
+                                 Foreground="{DynamicResource TextPrimaryBrush}" AutomationProperties.Name="剪贴板全文或完整文件路径"
+                                 Visibility="{Binding Item.Kind, Converter={StaticResource KindVisibility}, ConverterParameter=notimage}" />
+                        <Image Grid.Row="1" Source="{Binding Image}" Stretch="Uniform" AutomationProperties.Name="图片原件预览"
+                               Visibility="{Binding Item.Kind, Converter={StaticResource KindVisibility}, ConverterParameter=image}" />
+                        <TextBlock Grid.Row="1" Text="正在读取加密原件…" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock Grid.Row="1" Text="{Binding Error}" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <StackPanel Grid.Row="2">
+                        <TextBlock Text="{Binding ImageDimensions}" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,6,0,0" />
+                        <TextBlock Text="{Binding Detail}" Margin="0,8,0,0" FontSize="11" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+                    </Grid>
+                </Border>
                 <ListBox x:Name="ClipboardList"
                          ItemsSource="{Binding FilteredItems}"
                          SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}"

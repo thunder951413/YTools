@@ -51,6 +51,16 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 final class SettingsNavigationModel: ObservableObject {
     @Published var selection: SettingsSection = .general
     @Published var searchText = ""
+    @Published var targetID: String?
+    @Published var targetRevision = 0
+
+    func open(_ target: SettingsSearchTarget) {
+        guard let section = SettingsSection(rawValue: target.sectionID) else { return }
+        selection = section
+        searchText = ""
+        targetID = target.id
+        targetRevision += 1
+    }
 
     func matches(_ section: SettingsSection) -> Bool {
         SettingsSearchCatalog.matches(sectionID: section.rawValue, query: searchText)

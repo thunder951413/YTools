@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import YToolsCore
 
 @MainActor
 final class FileImporterPresentation: ObservableObject {
@@ -39,6 +40,7 @@ struct SettingsRow<Trailing: View>: View {
             trailing
                 .fixedSize(horizontal: true, vertical: false)
         }
+        .settingsTarget(SettingsSearchCatalog.targetID(forRowTitle: title) ?? "row:" + title)
     }
 }
 

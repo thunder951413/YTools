@@ -87,9 +87,14 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
                 return event
             }
             if self.handleTextEditingShortcut(event) { return nil }
-            if [36, 123, 124, 125, 126].contains(Int(event.keyCode)),
+            if [53, 51, 36, 123, 124, 125, 126].contains(Int(event.keyCode)),
                let textView = self.window?.firstResponder as? NSTextView,
                textView.hasMarkedText() {
+                return event
+            }
+            if [36, 123, 124, 125, 126].contains(Int(event.keyCode)),
+               let editor = self.window?.firstResponder as? NSTextView,
+               let window = self.window, editor !== self.searchTextField(in: window)?.currentEditor() {
                 return event
             }
             self.shiftPreviewTimer?.invalidate()
@@ -244,7 +249,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         case .launcher:
             count = launcher.layoutRowCount
         case .clipboard:
-            count = clipboard.filteredItems.count
+            count = clipboard.preview.isVisible ? max(clipboard.filteredItems.count, 4) : clipboard.filteredItems.count
         }
         let rowHeight = preferences.compactResults
             ? DesignTokens.compactRowHeight
@@ -397,6 +402,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         case .escape:
             if state.mode == .launcher, launcher.dismissSecondaryView() { return true }
             if state.mode == .launcher, launcher.clearQuery() { return true }
+            if state.mode == .clipboard, clipboard.preview.isVisible { clipboard.preview.hide(); return true }
             if state.mode == .clipboard, clipboard.clearQuery() { return true }
             hide()
         case let .moveSelection(offset):
@@ -420,6 +426,8 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
                 }
                 NSSound(named: "Glass")?.play()
             }
+        case .toggleClipboardPreview:
+            clipboard.togglePreview()
         case .togglePreview:
             launcher.togglePreview()
         case .showLargeType:

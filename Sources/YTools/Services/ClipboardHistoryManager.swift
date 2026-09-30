@@ -32,6 +32,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     @Published var query = "" {
         didSet {
             guard query != oldValue else { return }
+            preview.clearContent()
             filterRevision += 1
             filterTask?.cancel()
             visibleLimit = pageSize
@@ -44,10 +45,12 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
             }
         }
     }
-    @Published var selectedIndex = 0
+    @Published var selectedIndex = 0 { didSet { updatePreview() } }
+    let preview: ClipboardPreviewController
     @Published var filter: Filter = .all {
         didSet {
             guard filter != oldValue else { return }
+            preview.clearContent()
             visibleLimit = pageSize
             selectedIndex = 0
             filterDebouncer.cancel()
@@ -89,14 +92,16 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     private var localWorkTail: Task<Void, Never>?
     private var localWorkGeneration = 0
     private var isShuttingDown = false
+    private let catchupDebouncer = DebouncedAction()
+    private var catchupRequested = false
     private var uploadTask: Task<Void, Never>?
     private var uploadRequested = false
     private let pasteboard: NSPasteboard
     private var loadingTask: Task<Void, Never>?
 
     var layoutInvalidations: AnyPublisher<Void, Never> {
-        $filteredItems
-            .map(\.count)
+        $filteredItems.map(\.count).combineLatest(preview.$isVisible)
+            .map { count, visible in visible ? max(count, 4) : count }
             .removeDuplicates()
             .map { _ in () }
             .eraseToAnyPublisher()
@@ -107,6 +112,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
          pasteboard: NSPasteboard = .general, monitorsClipboard: Bool = true) {
         self.preferences = preferences
         self.persistence = persistence
+        self.preview = ClipboardPreviewController { id in await persistence.imageData(for: id) }
         self.cloudSync = cloudSync
         self.pasteboard = pasteboard
         self.lastChangeCount = pasteboard.changeCount
@@ -143,7 +149,9 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     }
 
     func shutdown() {
+        preview.hide()
         isShuttingDown = true
+        catchupDebouncer.cancel()
         timer?.invalidate()
         timer = nil
         cloudPullTimer?.invalidate()
@@ -185,7 +193,18 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         rebuildFilteredItems()
     }
 
+    func togglePreview() {
+        ensureFilterIsCurrent()
+        if preview.isVisible { preview.hide() }
+        else { preview.show(filteredItems.indices.contains(selectedIndex) ? filteredItems[selectedIndex] : nil) }
+    }
+
+    private func updatePreview() {
+        preview.select(filteredItems.indices.contains(selectedIndex) ? filteredItems[selectedIndex] : nil)
+    }
+
     func prepareForPresentation() {
+        preview.hide()
         visibleLimit = pageSize
         query = ""
         filter = .all
@@ -510,6 +529,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         appliedFilter = requestedFilter
         selectedIndex = selectedID.flatMap { id in page.items.firstIndex { $0.id == id } }
             ?? min(selectedIndex, max(page.items.count - 1, 0))
+        updatePreview()
     }
 
     nonisolated private static func filterItems(
@@ -568,7 +588,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
                     self.storageError = nil
                 }
                 if !acknowledge.isEmpty {
-                    do { try await self.cloudSync.acknowledge(acknowledge) }
+                    do { try await self.cloudSync.acknowledge(acknowledge); self.scheduleCloudCatchup() }
                     catch { self.cloudSyncStatus = "同步确认待重试：\(error.localizedDescription)" }
                 }
                 // Publishing an event is independent of whether its old UI
@@ -644,6 +664,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
             while self.uploadRequested, !self.isShuttingDown {
                 self.uploadRequested = false
                 await self.applyCloudResult(await self.cloudSync.uploadPending(configuration: self.cloudConfiguration))
+                if self.uploadRequested { try? await Task.sleep(for: .milliseconds(500)) }
             }
             self.uploadTask = nil
         }
@@ -653,6 +674,8 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         guard !isShuttingDown else { return }
         guard !result.message.isEmpty else { return }
         cloudSyncStatus = result.message
+        if result.success && result.pendingUploads > 0 { await handleEnqueueResult(result) }
+        if result.success && result.hasMoreRemote { catchupRequested = true }
         guard result.success, let events = result.events, persistenceWritable else { return }
         var deleted = await cloudSync.deletionSnapshot()
         guard !isShuttingDown else { return }
@@ -663,6 +686,15 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         persistCurrent(acknowledge: events)
     }
 
+    private func scheduleCloudCatchup() {
+        guard catchupRequested, !isShuttingDown, preferences.clipboardCloudSyncEnabled, persistenceWritable else { return }
+        catchupRequested = false
+        catchupDebouncer.schedule(after: .seconds(1)) { [weak self] in
+            guard let self, !self.isShuttingDown, self.preferences.clipboardCloudSyncEnabled else { return }
+            Task { await self.syncCloudNow() }
+        }
+    }
+
     private func startCloudPullTimer() {
         cloudPullTimer?.invalidate()
         cloudPullTimer = nil
@@ -671,7 +703,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
             guard let self else { return }
             let events = await self.cloudSync.pendingEvents()
             if !events.isEmpty {
-                await self.applyCloudResult(.init(success: true, items: nil, message: "正在恢复已接收的剪贴板变更…", events: events))
+                await self.applyCloudResult(.init(success: true, items: nil, message: "正在恢复已接收的剪贴板变更…", events: events, hasMoreRemote: true))
             }
         }
         cloudPullTimer = Timer.scheduledTimer(

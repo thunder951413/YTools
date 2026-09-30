@@ -1,17 +1,32 @@
 import SwiftUI
+import YToolsCore
 
 struct SettingsRootView: View {
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var clipboardManager: ClipboardHistoryManager
     @ObservedObject var snippets: SnippetManager
     @ObservedObject var recentDocuments: RecentDocumentsManager
-    @StateObject private var navigation = SettingsNavigationModel()
+    @StateObject private var navigation: SettingsNavigationModel
     @FocusState private var searchFocused: Bool
+    private var appVersion: String {
+        guard Bundle.main.bundleIdentifier == "com.ztools.native" else { return "开发版" }
+        return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版"
+    }
+
+    init(preferences: AppPreferences, clipboardManager: ClipboardHistoryManager, snippets: SnippetManager,
+         recentDocuments: RecentDocumentsManager, navigation: SettingsNavigationModel = SettingsNavigationModel()) {
+        self.preferences = preferences
+        self.clipboardManager = clipboardManager
+        self.snippets = snippets
+        self.recentDocuments = recentDocuments
+        _navigation = StateObject(wrappedValue: navigation)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
             settingsSidebar
             Divider()
+            ScrollViewReader { proxy in
             ScrollView {
                 HStack(alignment: .top, spacing: 0) {
                     Spacer(minLength: 0)
@@ -19,6 +34,8 @@ struct SettingsRootView: View {
                         settingsHeader
                         if navigation.searchText.isEmpty {
                             selectedSection
+                                .id("section:" + navigation.selection.rawValue)
+                                .environment(\.highlightedSetting, navigation.targetID)
                         } else {
                             settingsSearchResults
                         }
@@ -28,8 +45,17 @@ struct SettingsRootView: View {
                 }
                 .padding(30)
             }
+            .task(id: navigation.targetRevision) {
+                guard let target = navigation.targetID else { return }
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+                proxy.scrollTo(target, anchor: .center)
+            }
+            }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .frame(minWidth: 720, minHeight: 500)
+        .autocorrectionDisabled(true)
         .tint(preferences.accentColor.color)
         .onReceive(NotificationCenter.default.publisher(for: .focusYToolsSettingsSearch)) { _ in
             searchFocused = true
@@ -53,6 +79,7 @@ struct SettingsRootView: View {
             ForEach(SettingsSection.allCases) { section in
                 Button {
                     navigation.selection = section
+                    navigation.targetID = nil
                     navigation.searchText = ""
                 } label: {
                     Label(section.title, systemImage: section.icon)
@@ -70,7 +97,7 @@ struct SettingsRootView: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            Text("\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · \(preferences.clipboardCloudSyncEnabled ? "坚果云加密同步已启用" : "本机模式 · 同步已关闭")")
+            Text("\(appVersion) · \(preferences.clipboardCloudSyncEnabled ? "坚果云加密同步已启用" : "本机模式 · 同步已关闭")")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
@@ -114,38 +141,46 @@ struct SettingsRootView: View {
         case .snippets:
             SnippetSettingsView(snippets: snippets)
         case .privacy:
-            PrivacySettingsView(recentDocuments: recentDocuments)
+            PrivacySettingsView(recentDocuments: recentDocuments) {
+                LocalDiagnosticReport.text(version: appVersion,
+                    platform: .macOS, backend: .spotlight, historyCount: clipboardManager.items.count,
+                    pinnedCount: clipboardManager.items.filter(\.pinned).count, snippetCount: snippets.items.count,
+                    preferencesHealthy: true, clipboardHealthy: clipboardManager.storageError == nil,
+                    snippetsHealthy: snippets.storageError == nil, recentDocumentsHealthy: recentDocuments.storageError == nil,
+                    cloudEnabled: preferences.clipboardCloudSyncEnabled)
+            }
         }
     }
 
     private var settingsSearchResults: some View {
         VStack(spacing: 10) {
-            let matches = SettingsSection.allCases.filter(navigation.matches)
-            if matches.isEmpty {
+            let targets = SettingsSearchCatalog.searchTargets(navigation.searchText)
+            let sections = SettingsSection.allCases.filter { section in navigation.matches(section) && !targets.contains(where: { $0.sectionID == section.rawValue }) }
+            if targets.isEmpty && sections.isEmpty {
                 ContentUnavailableView.search(text: navigation.searchText)
             } else {
-                ForEach(matches) { section in
-                    Button {
-                        navigation.selection = section
-                        navigation.searchText = ""
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: section.icon)
-                                .font(.title3)
-                                .foregroundStyle(Color.accentColor)
-                                .frame(width: 28)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(section.title).font(.headline)
-                                Text("打开相关设置").font(.caption).foregroundStyle(.secondary)
+                ForEach(targets) { target in
+                    Button { navigation.open(target) } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(target.title).font(.headline)
+                                Text(SettingsSection(rawValue: target.sectionID)?.title ?? "设置")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                        }
-                        .padding(14)
-                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                            Image(systemName: "arrow.right")
+                        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }.buttonStyle(.plain).accessibilityLabel("定位设置：" + target.title)
+                }
+                ForEach(sections) { section in
+                    Button("打开" + section.title) {
+                        navigation.selection = section
+                        navigation.searchText = ""
+                        navigation.targetID = "section:" + section.rawValue
+                        navigation.targetRevision += 1
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }

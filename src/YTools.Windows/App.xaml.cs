@@ -17,6 +17,12 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Contains("--ui-snapshot"))
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            _ = CaptureSnapshotsAsync();
+            return;
+        }
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         System.Windows.Forms.Application.ThreadException += (_, args) =>
         {
@@ -66,6 +72,28 @@ public partial class App : Application
         if (e.Args.Contains("--opensettings"))
         {
             _controller.ShowSettings();
+        }
+    }
+
+    private async Task CaptureSnapshotsAsync()
+    {
+        try
+        {
+            var output = Environment.GetEnvironmentVariable("YTOOLS_UI_SNAPSHOT_DIR") ?? throw new InvalidOperationException("Set YTOOLS_UI_SNAPSHOT_DIR.");
+            await WindowsUiSnapshotService.CaptureAsync(output);
+            Shutdown(0);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine(exception);
+            var output = Environment.GetEnvironmentVariable("YTOOLS_UI_SNAPSHOT_DIR");
+            if (output is not null && Directory.Exists(output))
+            {
+                try { File.WriteAllText(Path.Combine(output, "snapshot-error.txt"), exception.ToString()); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            Shutdown(1);
         }
     }
 

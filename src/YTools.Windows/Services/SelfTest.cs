@@ -70,7 +70,12 @@ public static class SelfTest
             Check("normalizer.abbreviation", normalizer.Forms("Visual Studio Code").Abbreviation == "vsc");
             Check("normalizer.fuzzy", normalizer.FuzzyScore("slk", "Slack") is { } fuzzy && fuzzy is >= 1 and <= 99);
 
+            Check("settings.specificTarget", SettingsSearchCatalog.SearchTargets("WEBDAV 同步口令").Select(target => target.Id).SequenceEqual(["CloudPassphrase"]));
+            Check("files.byteProgress", new FileTransferProgress(32, 64, FileTransferPhase.Copying).Percentage == 50);
+            Check("diagnostics.rejectVersionContent", !LocalDiagnosticReport.Text("private-text", DiagnosticPlatform.Windows, DiagnosticFileBackend.FileNameScan,
+                0, 0, 0, true, true, true, true, false).Contains("private-text", StringComparison.Ordinal));
             var router = new PanelCommandRouter();
+            Check("router.clipboardPreview", router.Command(new PanelKeyEvent(0x50, PanelKeyModifiers.Command), PanelInputMode.Clipboard)?.Kind == PanelCommandKind.ToggleClipboardPreview);
             Check(
                 "router.enter",
                 router.Command(new PanelKeyEvent(0x0D, PanelKeyModifiers.None), PanelInputMode.Launcher)?.Kind

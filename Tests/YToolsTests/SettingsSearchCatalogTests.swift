@@ -9,6 +9,15 @@ final class SettingsSearchCatalogTests: XCTestCase {
         }
     }
 
+    func testSpecificTargetsHaveUniqueIDsAndMatchAllTerms() {
+        XCTAssertEqual(Set(SettingsSearchCatalog.targets.map(\.id)).count, SettingsSearchCatalog.targets.count)
+        XCTAssertEqual(SettingsSearchCatalog.searchTargets("  WEBDAV\n同步口令  ").map(\.id), ["CloudPassphrase"])
+        XCTAssertEqual(SettingsSearchCatalog.searchTargets("保留 天数").map(\.id), ["ClipboardRetentionDays"])
+        XCTAssertTrue(SettingsSearchCatalog.searchTargets("主题 坚果云").isEmpty)
+        XCTAssertTrue(SettingsSearchCatalog.searchTargets(" ").isEmpty)
+        XCTAssertEqual(SettingsSearchCatalog.targetID(forRowTitle: "输入停止后搜索"), "SearchInputDelay")
+    }
+
     func testEveryQueryTermMustMatchTheSameCategory() {
         XCTAssertTrue(SettingsSearchCatalog.matches(sectionID: "appearance", query: "主题 深色"))
         XCTAssertFalse(SettingsSearchCatalog.matches(sectionID: "appearance", query: "主题 坚果云"))

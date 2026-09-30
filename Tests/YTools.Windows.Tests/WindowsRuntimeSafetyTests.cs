@@ -67,6 +67,22 @@ public class LocalPathPolicyTests
     }
 }
 
+public class FileSearchCapabilityTests
+{
+    [Theory]
+    [InlineData("内容 synthetic", FileSearchMode.Content)]
+    [InlineData("tag synthetic", FileSearchMode.Tag)]
+    public async Task UnavailableContentAndTagSearchDoNotUseFileNameFallback(string query, FileSearchMode mode)
+    {
+        var scans = 0;
+        using var service = new FileSearchService(false, (_, _) => { scans++; return []; });
+        var result = Assert.Single(await service.SearchAsync(query, mode, [], 8, CancellationToken.None));
+        Assert.Contains("不可用", result.Title);
+        Assert.IsType<ResultAction.None>(result.Action);
+        Assert.Equal(0, scans);
+    }
+}
+
 public class ApplicationActionIdentityTests
 {
     [Fact]

@@ -22,6 +22,21 @@ jobs:
       - name: Strict validation
         shell: pwsh
         run: ./scripts/check.ps1
+      - name: Render synthetic native windows
+        shell: pwsh
+        run: |
+          $env:YTOOLS_UI_SNAPSHOT_DIR = Join-Path $env:RUNNER_TEMP 'ytools-ui'
+          $exe = 'src/YTools.Windows/bin/Release/net8.0-windows/YTools.exe'
+          $process = Start-Process -FilePath $exe -ArgumentList '--ui-snapshot' -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            $log = Join-Path $env:YTOOLS_UI_SNAPSHOT_DIR 'snapshot-error.txt'
+            if (Test-Path $log) { Get-Content $log }
+            throw "Native UI snapshots failed: $($process.ExitCode)"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTools-windows-ui-review
+          path: ${{ runner.temp }}/ytools-ui/*.png
       - name: Publish single-file release
         run: ./scripts/build.ps1
       - uses: actions/upload-artifact@v4

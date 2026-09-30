@@ -73,6 +73,8 @@ struct LauncherView: View {
                     if model.isActionBusy { ProgressView().controlSize(.small) }
                     Text(model.actionStatusText).lineLimit(1).truncationMode(.middle)
                         .help(model.actionStatusText)
+                    Spacer(minLength: 0)
+                    if model.isActionBusy { Button("取消") { model.cancelFileOperation() }.accessibilityLabel("取消文件传输") }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)

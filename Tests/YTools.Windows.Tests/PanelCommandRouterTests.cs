@@ -7,6 +7,15 @@ public class PanelCommandRouterTests
     private readonly PanelCommandRouter _router = new();
 
     [Fact]
+    public void ClipboardPreviewShortcutOnlyMatchesItsExactModifiers()
+    {
+        Assert.Equal(PanelCommandKind.ToggleClipboardPreview,
+            _router.Command(new PanelKeyEvent(0x50, PanelKeyModifiers.Command), PanelInputMode.Clipboard)?.Kind);
+        Assert.Null(_router.Command(new PanelKeyEvent(0x50, PanelKeyModifiers.Command | PanelKeyModifiers.Shift), PanelInputMode.Clipboard));
+        Assert.Null(_router.Command(new PanelKeyEvent(0x50, PanelKeyModifiers.Command), PanelInputMode.Launcher));
+    }
+
+    [Fact]
     public void Enter_ActivatesSelected()
     {
         var command = _router.Command(

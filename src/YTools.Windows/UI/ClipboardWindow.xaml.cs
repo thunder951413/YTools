@@ -15,13 +15,25 @@ namespace YTools.UI;
 public partial class ClipboardWindow : Window
 {
     private readonly PanelCommandRouter _router = new();
+    private readonly ClipboardPreviewController _preview;
     private ClipboardHistoryManager? _manager;
     private SnippetManager? _snippets;
 
     public ClipboardWindow()
     {
         InitializeComponent();
+        _preview = new ClipboardPreviewController(id => _manager?.LoadPreviewImageAsync(id) ?? Task.FromResult<byte[]?>(null));
+        ClipboardPreviewBorder.DataContext = _preview;
+        _preview.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ClipboardPreviewController.IsVisible))
+            {
+                ClipboardPreviewColumn.Width = new GridLength(_preview.IsVisible ? 280 : 0);
+            }
+        };
     }
+
+    internal void ShowSnapshotPreview(ClipboardHistoryItem item) { _preview.Show(item); }
 
     public event Action? Hidden;
 
@@ -49,21 +61,32 @@ public partial class ClipboardWindow : Window
 
     public void HidePanel()
     {
+        _preview.Hide();
         Hide();
         Hidden?.Invoke();
     }
 
     private void OnManagerPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName is nameof(ClipboardHistoryManager.Query) or nameof(ClipboardHistoryManager.Filter))
+        { _preview.ClearContent(); }
         if (e.PropertyName is nameof(ClipboardHistoryManager.FilteredItems) or nameof(ClipboardHistoryManager.SelectedIndex))
         {
-            ClipboardList.ScrollIntoView(_manager?.FilteredItems.ElementAtOrDefault(_manager.SelectedIndex));
+            var selected = _manager?.FilteredItems.ElementAtOrDefault(_manager.SelectedIndex);
+            ClipboardList.ScrollIntoView(selected);
+            _preview.Select(selected);
         }
 
         if (e.PropertyName == nameof(ClipboardHistoryManager.CloudSyncStatus))
         {
             SyncStatusText.ToolTip = _manager?.CloudSyncStatus;
         }
+    }
+
+    private void TogglePreview_Click(object sender, RoutedEventArgs e)
+    {
+        if (_preview.IsVisible) { _preview.Hide(); }
+        else { _preview.Show(_manager?.FilteredItems.ElementAtOrDefault(_manager.SelectedIndex)); }
     }
 
     private void LoadMore_Click(object sender, RoutedEventArgs e) => _manager?.LoadMore();
@@ -83,11 +106,15 @@ public partial class ClipboardWindow : Window
             return;
         }
 
-        if ((e.Key is Key.Enter or Key.Up or Key.Down or Key.Left or Key.Right or Key.Back)
+        if ((e.Key is Key.Escape or Key.Enter or Key.Up or Key.Down or Key.Left or Key.Right or Key.Back)
             && IsComposingIme())
         {
             return;
         }
+
+        if (e.OriginalSource is TextBox previewTextBox && previewTextBox != SearchBox
+            && e.Key is Key.Enter or Key.Up or Key.Down or Key.Left or Key.Right or Key.Back or Key.Delete)
+        { return; }
 
         var keyCode = KeyInterop.VirtualKeyFromKey(e.Key);
         var modifiers = PanelModifiers(Keyboard.Modifiers);
@@ -109,7 +136,11 @@ public partial class ClipboardWindow : Window
                 }
 
                 break;
+            case PanelCommandKind.ToggleClipboardPreview:
+                TogglePreview_Click(this, new RoutedEventArgs());
+                break;
             case PanelCommandKind.Escape:
+                if (_preview.IsVisible) { _preview.Hide(); break; }
                 if (!_manager.ClearQuery())
                 {
                     HidePanel();

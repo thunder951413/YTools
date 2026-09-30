@@ -69,6 +69,7 @@ public sealed class LauncherModel : ObservableObject
         _actionDispatcher.BusyStateChanged += (_, _) =>
         {
             RaisePropertyChanged(nameof(IsActionBusy));
+            RaisePropertyChanged(nameof(CanCancelFileOperation));
             RaisePropertyChanged(nameof(ActionStatusText));
             RaisePropertyChanged(nameof(HasActionStatus));
         };
@@ -140,6 +141,8 @@ public sealed class LauncherModel : ObservableObject
     public Task FlushPendingActionsAsync() => _actionDispatcher.FlushPendingOperationsAsync();
 
     public bool IsActionBusy => _actionDispatcher.IsBusy;
+    public bool CanCancelFileOperation => _actionDispatcher.CanCancelOperation;
+    public void CancelFileOperation() => _actionDispatcher.CancelFileOperation();
 
     public int SelectedIndex
     {

@@ -19,6 +19,12 @@ public sealed class SnippetManager : ObservableObject
     private SecureCodableStore? _store;
     private bool _isLoaded;
     private bool _isSaving;
+    private bool _hasPendingChanges;
+    public bool HasPendingChanges
+    {
+        get => _hasPendingChanges;
+        private set { if (SetField(ref _hasPendingChanges, value)) { RaisePropertyChanged(nameof(StorageStatus)); } }
+    }
     private long _revision;
     private long _queuedRevision;
     private readonly Task _initialization;
@@ -114,7 +120,7 @@ public sealed class SnippetManager : ObservableObject
         }
     }
 
-    public string StorageStatus => !_isLoaded ? "正在读取加密片段…" : IsSaving ? "正在加密保存…" : StorageError ?? "已安全保存";
+    public string StorageStatus => !_isLoaded ? "正在读取加密片段…" : IsSaving ? "正在加密保存…" : StorageError ?? (HasPendingChanges ? "修改待保存…" : "已安全保存");
 
     public SnippetSearchModule SearchModule(string clipboardText, DateTimeOffset now)
     {
@@ -165,6 +171,15 @@ public sealed class SnippetManager : ObservableObject
             : WaitForRevisionAsync(revision);
     }
 
+    public Guid CreateDraft()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var item = new SnippetItem(Guid.NewGuid(), "新片段", "", "", "默认", now, now);
+        ApplyMutation(items => items.Insert(0, item));
+        if (_isLoaded) { _ = QueueCurrentSnapshot("无法保存新片段。"); }
+        return item.Id;
+    }
+
     public void Delete(SnippetItem item)
     {
         ApplyMutation(items => items.RemoveAll(existing => existing.Id == item.Id));
@@ -208,7 +223,7 @@ public sealed class SnippetManager : ObservableObject
         _saveDebouncer.Cancel();
         _initialization.GetAwaiter().GetResult();
         if (!_isLoaded && _loadedResult is { } loaded) { ApplyLoad(loaded); }
-        if (_queuedRevision < _revision) { _ = QueueCurrentSnapshot("无法保存文本片段修改。"); }
+        if (_queuedRevision < _revision || (HasPendingChanges && _revision > 0)) { _ = QueueCurrentSnapshot("无法保存文本片段修改。"); }
         _writer.DrainAsync().GetAwaiter().GetResult();
     }
 
@@ -220,7 +235,7 @@ public sealed class SnippetManager : ObservableObject
         PostToOwner(() =>
         {
             if (!_isLoaded && _loadedResult is { } loaded) { ApplyLoad(loaded); }
-            save = _queuedRevision < _revision
+            save = _queuedRevision < _revision || (HasPendingChanges && _revision > 0)
                 ? QueueCurrentSnapshot("无法保存文本片段修改。")
                 : _latestSaveTask;
         }, synchronous: true);
@@ -236,6 +251,7 @@ public sealed class SnippetManager : ObservableObject
         mutation(_items);
         if (!_isLoaded) { _pendingLoadMutations.Add(mutation); }
         _revision += 1;
+        HasPendingChanges = true;
         RaisePropertyChanged(nameof(Items));
     }
 
@@ -245,16 +261,23 @@ public sealed class SnippetManager : ObservableObject
         var revision = _revision;
         _queuedRevision = Math.Max(_queuedRevision, revision);
         IsSaving = true;
-        var task = _writer.Enqueue(() => _store?.Save(snapshot) == true);
+        var task = CompleteSnapshotAsync(_writer.Enqueue(() => _store?.Save(snapshot) == true), revision, failureMessage);
         _latestSaveTask = task;
-        _ = task.ContinueWith(completed => PostToOwner(() =>
+        return task;
+    }
+
+    private async Task<bool> CompleteSnapshotAsync(Task<bool> write, long revision, string failureMessage)
+    {
+        var success = await write.ConfigureAwait(false);
+        PostToOwner(() =>
         {
             if (revision != _revision) { return; }
             IsSaving = false;
-            StorageError = completed.IsCompletedSuccessfully && completed.Result ? null : failureMessage;
+            StorageError = success ? null : failureMessage;
+            HasPendingChanges = !success;
             RaisePropertyChanged(nameof(StorageStatus));
-        }), TaskScheduler.Default);
-        return task;
+        }, synchronous: true);
+        return success;
     }
 
     private async Task<bool> WaitForRevisionAsync(long revision)
@@ -318,6 +341,7 @@ public sealed class SnippetSearchModule : IYToolsModule
         }
 
         var results = _items
+            .Where(item => !string.IsNullOrWhiteSpace(item.Content))
             .Where(item =>
                 string.IsNullOrEmpty(term)
                 || item.Title.Contains(term, StringComparison.OrdinalIgnoreCase)

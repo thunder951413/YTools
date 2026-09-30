@@ -331,6 +331,8 @@ final class LauncherModel: ObservableObject {
         ]
     }
 
+    func cancelFileOperation() { actionDispatcher.cancelFileOperation() }
+
     @discardableResult
     func activateSelected() -> Bool {
         if isShowingActions { return activateSelectedAction() }

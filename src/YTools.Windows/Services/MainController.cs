@@ -103,6 +103,7 @@ public sealed class MainController
         _snippets?.FlushPendingChanges();
         _recentDocuments?.FlushPendingChanges();
         _launcher?.PersistLastQuery();
+        _preferences.FlushPendingChanges();
         _launcher?.Dispose();
         _clipboard?.Dispose();
         _tray?.Dispose();
@@ -124,6 +125,10 @@ public sealed class MainController
         _settingsWindow?.Close();
         if (_launcher is not null) { await _launcher.FlushPendingActionsAsync(); }
         if (_clipboard is not null) { await _clipboard.FlushPendingChangesAsync(); }
+        _launcher?.PersistLastQuery();
+        await _preferences.FlushPendingChangesAsync();
+        if (_snippets is not null) { await _snippets.FlushPendingChangesAsync(); }
+        if (_recentDocuments is not null) { await _recentDocuments.FlushPendingChangesAsync(); }
         Application.Current.Shutdown();
     }
 

@@ -64,6 +64,8 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     public string PageDescription => $"已显示 {_filteredItems.Count} / 匹配 {TotalMatches} 条";
     private readonly HashSet<Task> _localWork = [];
     private bool _isShuttingDown;
+    private readonly DebouncedAction _catchupDebouncer = new();
+    private bool _catchupRequested;
     private bool _disposed;
     private Task? _uploadTask;
     private bool _uploadRequested;
@@ -224,6 +226,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         if (_disposed) { return; }
         _disposed = true;
         _isShuttingDown = true;
+        _catchupDebouncer.Cancel();
         _monitor.Changed -= OnClipboardChanged;
         _preferences.PropertyChanged -= _preferenceChanged;
         _cloudSync.Dispose();
@@ -234,6 +237,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     public async Task FlushPendingChangesAsync()
     {
         _isShuttingDown = true;
+        _catchupDebouncer.Cancel();
         _monitor.Changed -= OnClipboardChanged;
         _preferences.PropertyChanged -= _preferenceChanged;
         _cloudSync.StopPeriodicPull();
@@ -378,6 +382,12 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     }
 
     /// <summary>Full-size image bytes: vault record first, in-memory copy as fallback.</summary>
+    public Task<byte[]?> LoadPreviewImageAsync(Guid id)
+    {
+        var item = _items.FirstOrDefault(item => item.Id == id && item.Kind == ClipboardItemKind.Image);
+        return item is null ? Task.FromResult<byte[]?>(null) : ResolveOriginalImageData(item);
+    }
+
     private async Task<byte[]?> ResolveOriginalImageData(ClipboardHistoryItem item)
     {
         if (_imageTasks.TryGetValue(item.Id, out var cached))
@@ -842,7 +852,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
                 StorageError = null;
                 RebuildFilteredItems();
             }
-            if (acknowledge is not null) { await _cloudSync.AcknowledgeAsync(acknowledge); }
+            if (acknowledge is not null) { await _cloudSync.AcknowledgeAsync(acknowledge); ScheduleCloudCatchup(); }
             // Every successfully persisted mutation is published even when its
             // UI snapshot was superseded by a newer local revision.
             if (changedItem is not null)
@@ -866,7 +876,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         if (_isShuttingDown) { return; }
         _cloudSync.StartPeriodicPull(SnapshotItemsForSync, ApplyCloudSyncResult);
         if (_preferences.ClipboardCloudSyncEnabled && _cloudSync.PendingBatch is { } batch)
-        { ApplyCloudSyncResult(ClipboardCloudSyncResult.Succeeded(null, "正在恢复已接收的剪贴板变更…") with { Batch = batch }); }
+        { ApplyCloudSyncResult(ClipboardCloudSyncResult.Succeeded(null, "正在恢复已接收的剪贴板变更…") with { Batch = batch, HasMoreRemote = true }); }
     }
 
     /// <summary>
@@ -927,9 +937,20 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
             {
                 _uploadRequested = false;
                 await _cloudSync.UploadPendingAsync(ApplyCloudSyncResult);
+                if (_uploadRequested) { await Task.Delay(500); }
             }
         }
         finally { _uploadTask = null; }
+    }
+
+    private void ScheduleCloudCatchup()
+    {
+        if (!_catchupRequested || _isShuttingDown || !_preferences.ClipboardCloudSyncEnabled || !_persistenceWritable) { return; }
+        _catchupRequested = false;
+        _catchupDebouncer.Schedule(TimeSpan.FromSeconds(1), () =>
+        {
+            if (!_isShuttingDown && _preferences.ClipboardCloudSyncEnabled) { _ = SyncCloudNowAsync(); }
+        });
     }
 
     private void ApplyCloudSyncResult(ClipboardCloudSyncResult result)
@@ -941,6 +962,8 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         }
 
         CloudSyncStatus = result.Message;
+        if (result.Success && result.PendingUploads > 0) { _ = HandleEnqueueResultAsync(result); }
+        if (result.Success && result.HasMoreRemote) { _catchupRequested = true; }
         if (!result.Success || result.Batch is null || !_persistenceWritable) { return; }
         var merged = _cloudSync.MergeRemote(_items, result.Batch, _localDeletedForSync);
         _items = merged.ToList();

@@ -31,7 +31,9 @@ struct YToolsCoreChecks {
             throw CheckFailure.message("Progressive search or clipboard pagination regressed")
         }
         guard SettingsSearchCatalog.matches(sectionID: "clipboard", query: "WEBDAV 同步口令"),
-              !SettingsSearchCatalog.matches(sectionID: "appearance", query: "坚果云") else {
+              !SettingsSearchCatalog.matches(sectionID: "appearance", query: "坚果云"),
+              SettingsSearchCatalog.searchTargets("WEBDAV 同步口令").map(\.id) == ["CloudPassphrase"],
+              FileTransferProgress(completedBytes: 32, totalBytes: 64, phase: .copying).percentage == 50 else {
             throw CheckFailure.message("Settings search cannot find encrypted sync settings")
         }
         try checkRelativePanelPlacement()

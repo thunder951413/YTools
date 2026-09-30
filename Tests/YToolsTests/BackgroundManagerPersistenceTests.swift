@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import YTools
+import YToolsModuleKit
 
 @MainActor
 final class BackgroundManagerPersistenceTests: XCTestCase {
@@ -38,7 +39,34 @@ final class BackgroundManagerPersistenceTests: XCTestCase {
 
         let saved = await manager.savePersisted(text: "newest", title: "newest")
         XCTAssertFalse(saved)
+        XCTAssertTrue(manager.hasPendingChanges)
+        XCTAssertNotEqual(manager.storageStatus, "已安全保存")
         XCTAssertTrue(manager.items.contains { $0.title == "newest" })
+    }
+
+    func testDraftIsDurableButSearchableOnlyAfterContentIsEntered() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SecureCodableStore(fileURL: root.appendingPathComponent("drafts.enc")) { _ in Data(repeating: 7, count: 32) }
+        let manager = SnippetManager { store }
+        await manager.waitUntilLoaded()
+        let first = manager.createDraft()
+        await manager.flushPendingChanges()
+        XCTAssertFalse(manager.hasPendingChanges)
+        let blankResults = try await manager.searchModule(clipboardText: "").search(ModuleSearchRequest(query: "snip"))
+        XCTAssertTrue(blankResults.isEmpty)
+        manager.update(id: first, content: "first edit")
+        XCTAssertTrue(manager.hasPendingChanges)
+        let second = manager.createDraft()
+        manager.update(id: second, title: "Second", content: "second edit")
+        manager.update(id: first, content: "latest first edit")
+        await manager.flushPendingChanges()
+        XCTAssertFalse(manager.hasPendingChanges)
+        guard case let .loaded(items) = store.load([SnippetItem].self) else { return XCTFail("Missing durable drafts") }
+        XCTAssertEqual(items.first { $0.id == first }?.content, "latest first edit")
+        XCTAssertEqual(items.first { $0.id == second }?.content, "second edit")
+        let results = try await manager.searchModule(clipboardText: "").search(ModuleSearchRequest(query: "snip"))
+        XCTAssertEqual(results.count, 2)
     }
 
     func testRecentDocumentRecordedDuringLoadSurvivesFlush() async throws {

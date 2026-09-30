@@ -320,6 +320,36 @@ final class ClipboardReliabilityTests: XCTestCase {
         XCTAssertEqual(heads, [1, 2])
     }
 
+    func testUploadCatchupReportsRemainingQueueAndDoesNotAdvertiseUnpublishedEvents() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = Data(repeating: 8, count: 32)
+        let transport = try CloudFixtureTransport()
+        let stateStore = SecureCodableStore(fileURL: directory.appendingPathComponent("state.enc")) { _ in key }
+        let service = ClipboardCloudSyncService(
+            credentialStore: SecureCodableStore(fileURL: directory.appendingPathComponent("credentials.enc")) { _ in key },
+            stateStore: stateStore, transport: transport)
+        _ = await service.saveCredentials(username: "test", appPassword: "test", syncPassphrase: "fixture-secret-long")
+        let config = ClipboardCloudSyncService.Configuration(enabled: true, folder: "Review")
+        for index in 0..<51 {
+            let result = await service.enqueueChangedItem(item(id: UUID(), updated: Double(index + 100)), configuration: config)
+            XCTAssertTrue(result.success)
+        }
+        let first = await service.uploadPending(configuration: config)
+        XCTAssertTrue(first.success)
+        XCTAssertEqual(first.pendingUploads, 1)
+        XCTAssertTrue(first.message.contains("待上传 1"))
+        let firstHeads = await transport.publishedHeads
+        XCTAssertEqual(firstHeads, [50])
+        guard case let .loaded(snapshot) = stateStore.load(OutboxSnapshot.self) else { return XCTFail("Missing durable outbox") }
+        XCTAssertEqual(snapshot.pending.map(\.sequence), [51])
+        let second = await service.uploadPending(configuration: config)
+        XCTAssertTrue(second.success)
+        XCTAssertEqual(second.pendingUploads, 0)
+        let heads = await transport.publishedHeads
+        XCTAssertEqual(heads, [50, 51])
+    }
+
     func testPartiallyCorruptedClipboardVaultPreservesEveryOriginalFile() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

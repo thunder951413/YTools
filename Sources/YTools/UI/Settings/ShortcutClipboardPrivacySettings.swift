@@ -43,8 +43,10 @@ struct ClipboardSettingsView: View {
                     Divider()
                 }
                 Toggle("记录剪贴板历史", isOn: $preferences.clipboardEnabled)
+                    .settingsTarget("ClipboardEnabled")
                 Divider()
                 Toggle("暂停记录（保留现有历史）", isOn: $preferences.clipboardPaused)
+                    .settingsTarget("ClipboardPaused")
                     .disabled(!preferences.clipboardEnabled)
                 Divider()
                 SettingsRow(title: "保留时间", detail: "过期记录会自动删除") {
@@ -79,6 +81,7 @@ struct ClipboardSettingsView: View {
                 }
                 Divider()
                 Toggle("记录图片（最大 5 MB）", isOn: $preferences.clipboardStoreImages)
+                    .settingsTarget("ClipboardStoreImages")
                 Text("图片与文本一起写入 AES-GCM 加密历史。为减少敏感数据和磁盘占用，此项默认关闭。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -91,6 +94,7 @@ struct ClipboardSettingsView: View {
 
             SettingsCard(title: "坚果云加密同步", icon: "arrow.triangle.2.circlepath") {
                 Toggle("启用坚果云同步", isOn: $preferences.clipboardCloudSyncEnabled)
+                    .settingsTarget("ClipboardCloudSyncEnabled")
                 Text("仅在你启用后联网。每条新增或删除记录独立 AES-GCM 加密；相同内容只累计复制次数，不上传。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -112,10 +116,13 @@ struct ClipboardSettingsView: View {
                 }
                 Divider()
                 TextField("坚果云用户名", text: $clipboardManager.cloudUsernameInput)
+                    .settingsTarget("CloudUsername")
                     .textFieldStyle(.roundedBorder)
                 SecureField("坚果云应用密码", text: $clipboardManager.cloudAppPasswordInput)
+                    .settingsTarget("CloudAppPassword")
                     .textFieldStyle(.roundedBorder)
                 SecureField("同步口令（至少 12 个字符；所有设备必须一致）", text: $clipboardManager.cloudSyncPassphraseInput)
+                    .settingsTarget("CloudPassphrase")
                     .textFieldStyle(.roundedBorder)
                 HStack {
                     Button("加密保存凭据") {
@@ -159,7 +166,7 @@ struct ClipboardSettingsView: View {
                 }
                 Divider()
                 Button("选择应用…") { fileImporter.isPresented = true }
-            }
+            }.settingsTarget("ClipboardIgnoredApplications")
         }
         .fileImporter(
             isPresented: $fileImporter.isPresented,
@@ -183,9 +190,20 @@ struct ClipboardSettingsView: View {
 
 struct PrivacySettingsView: View {
     @ObservedObject var recentDocuments: RecentDocumentsManager
+    var diagnosticReport: () -> String = { "YTools 本机诊断" }
+    @State private var diagnosticCopied = false
 
     var body: some View {
         VStack(spacing: 14) {
+            SettingsCard(title: "本机诊断", icon: "stethoscope") {
+                Text("仅包含版本、能力状态与记录数量；复制时不联网，不包含用户内容或凭据。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button(diagnosticCopied ? "诊断已复制" : "复制本机诊断") {
+                    let board = NSPasteboard.general
+                    board.clearContents()
+                    diagnosticCopied = board.setString(diagnosticReport(), forType: .string)
+                }
+            }
             SettingsCard(title: "本机数据", icon: "internaldrive") {
                 PrivacyLine(
                     icon: "lock.fill",

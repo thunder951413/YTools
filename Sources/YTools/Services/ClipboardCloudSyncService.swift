@@ -1,6 +1,7 @@
 import CommonCrypto
 import CryptoKit
 import Foundation
+import YToolsCore
 
 /// Incremental Jianguoyun synchronization shared with the Windows build.
 /// Each clipboard mutation is one immutable encrypted event; small per-device
@@ -12,6 +13,8 @@ actor ClipboardCloudSyncService {
         let items: [ClipboardHistoryItem]?
         let message: String
         var events: [Event]? = nil
+        var pendingUploads = 0
+        var hasMoreRemote = false
     }
 
     private static let server = URL(string: "https://dav.jianguoyun.com/dav/")!
@@ -25,6 +28,7 @@ actor ClipboardCloudSyncService {
     private let stateStore: SecureCodableStore
     private var state = State(deviceID: UUID())
     private var createdRemoteRoot: String?
+    private var hasMoreRemote = false
 
     init(credentialStore: SecureCodableStore = SecureCodableStore(name: "clipboard-cloud-credentials"),
          stateStore: SecureCodableStore = SecureCodableStore(name: "clipboard-cloud-state"),
@@ -187,12 +191,12 @@ actor ClipboardCloudSyncService {
             let folders = try await ensureFolders(credentials: credentials)
             try await publishPending(folders: folders, credentials: credentials)
             guard pullRemote else {
-                return Result(success: true, items: nil, message: "剪贴板变更已加密上传。")
+                return Result(success: true, items: nil, message: queueMessage("剪贴板变更已加密上传。"), pendingUploads: state.pending.count)
             }
             if state.inbox.isEmpty { _ = try await pullChangedEvents(folders: folders, credentials: credentials) }
             return Result(success: true, items: nil,
-                message: state.inbox.isEmpty ? "坚果云无新的剪贴板变更。" : "正在保存收到的剪贴板变更…",
-                events: state.inbox.isEmpty ? nil : state.inbox)
+                message: queueMessage(state.inbox.isEmpty ? "坚果云无新的剪贴板变更。" : "正在保存收到的剪贴板变更…"),
+                events: state.inbox.isEmpty ? nil : state.inbox, pendingUploads: state.pending.count, hasMoreRemote: hasMoreRemote)
         } catch {
             return Result(success: false, items: nil, message: "坚果云同步失败：\(error.localizedDescription)")
         }
@@ -248,12 +252,20 @@ actor ClipboardCloudSyncService {
         }
     }
 
+    private func queueMessage(_ message: String) -> String {
+        message + (state.pending.isEmpty ? "" : " 待上传 \(state.pending.count) 条，分批继续。")
+            + (hasMoreRemote ? " 远端仍有变更，保存本批后继续追赶。" : "")
+    }
+
     private func publishPending(folders: Folders, credentials: Credentials) async throws {
         let pending = state.pending.sorted { $0.sequence < $1.sequence }
         guard !pending.isEmpty else { return }
-        for event in pending {
+        var uploaded: Int64?
+        var uploadedBytes = 0
+        for event in pending.prefix(CloudBatchBudget.maximumUploadEvents) {
             let clear = try encoded(event)
             guard clear.count <= 8 * 1_024 * 1_024 - 49 else { throw CloudError.eventTooLarge }
+            if !CloudBatchBudget.canInclude(count: 0, bytes: uploadedBytes, nextBytes: clear.count + 49) { break }
             let encrypted = try CloudCryptography.seal(clear, passphrase: credentials.syncPassphrase)
             let response = try await request(
                 method: "PUT",
@@ -262,9 +274,11 @@ actor ClipboardCloudSyncService {
                 credentials: credentials
             )
             guard [200, 201, 204].contains(response.status) else { throw CloudError.requestFailed(response.status) }
+            uploaded = event.sequence
+            uploadedBytes += encrypted.count
         }
 
-        guard let latest = pending.last?.sequence else { return }
+        guard let latest = uploaded else { return }
         let head = Head(version: 2, deviceID: state.deviceID, lastSequence: latest, updatedAt: Date())
         let response = try await request(
             method: "PUT",
@@ -283,6 +297,7 @@ actor ClipboardCloudSyncService {
         guard listed.status == 207 else { throw CloudError.requestFailed(listed.status) }
         let names = try XMLHrefParser.hrefs(in: listed.data).compactMap { URL(string: $0)?.lastPathComponent ?? URL(fileURLWithPath: $0).lastPathComponent }
             .filter { $0.hasSuffix(".head") }
+        hasMoreRemote = false
         var events: [Event] = []
         var advances: [UUID: Int64] = [:]
         var receivedBytes = 0
@@ -294,7 +309,7 @@ actor ClipboardCloudSyncService {
             guard head.deviceID != state.deviceID, head.lastSequence > known else { continue }
             let eventFolder = childPath(folders.events, deviceDirectoryName(head.deviceID))
             for sequence in (known + 1)...head.lastSequence {
-                if events.count >= 200 || receivedBytes >= 16 * 1_024 * 1_024 { break }
+                if !CloudBatchBudget.canInclude(count: events.count, bytes: receivedBytes, nextBytes: 8 * 1_024 * 1_024, eventLimit: CloudBatchBudget.maximumPullEvents) { hasMoreRemote = true; break }
                 let encrypted = try await download(path: childPath(eventFolder, eventName(sequence)), credentials: credentials, limit: 8 * 1_024 * 1_024)
                 receivedBytes += encrypted.count
                 let event = try decoded(Event.self, from: CloudCryptography.open(encrypted, passphrase: credentials.syncPassphrase))
@@ -303,7 +318,7 @@ actor ClipboardCloudSyncService {
                 events.append(event)
                 advances[head.deviceID] = sequence
             }
-            if events.count >= 200 || receivedBytes >= 16 * 1_024 * 1_024 { break }
+            if !CloudBatchBudget.canInclude(count: events.count, bytes: receivedBytes, nextBytes: 8 * 1_024 * 1_024, eventLimit: CloudBatchBudget.maximumPullEvents) { hasMoreRemote = true; break }
         }
         if !events.isEmpty {
             state.inbox.append(contentsOf: events)

@@ -3,12 +3,30 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using YTools.Infrastructure;
 using YTools.Services;
+using YTools.Services.Storage;
+using YTools.Core;
+using System.Windows;
 
 namespace YTools.Models;
 
 public sealed class AppPreferences : ObservableObject
 {
     private const int CurrentSchemaVersion = 8;
+    private readonly string _settingsPath;
+    private readonly Func<bool> _loginState;
+    private readonly PreferencePersistenceService _persistence;
+    private readonly DebouncedAction _saveDebouncer = new();
+    private Task<bool>? _latestSave;
+    private bool _storageLocked;
+    private bool _preserveUnreadable;
+    private long _saveRevision;
+    private long _writeRevision;
+    private string? _storageError;
+    private bool _hasPendingSave;
+    public string? StorageError { get => _storageError; private set { if (SetField(ref _storageError, value)) { RaisePropertyChanged(nameof(StorageStatus)); } } }
+    public bool HasPendingSave { get => _hasPendingSave; private set { if (SetField(ref _hasPendingSave, value)) { RaisePropertyChanged(nameof(StorageStatus)); } } }
+    public string StorageStatus => StorageError ?? (HasPendingSave ? "设置待保存…" : "设置已保存");
+
 
     private bool _launchAtLogin;
     private HotKeyDefinition _launcherHotKey;
@@ -59,8 +77,12 @@ public sealed class AppPreferences : ObservableObject
     private string? _hotKeyError;
     private string? _launchAtLoginError;
 
-    public AppPreferences()
+    public AppPreferences() : this(AppPaths.SettingsFile, () => LaunchAtLoginService.IsEnabled) { }
+    internal AppPreferences(string settingsPath, Func<bool> loginState)
     {
+        _settingsPath = settingsPath;
+        _loginState = loginState;
+        _persistence = new PreferencePersistenceService(settingsPath, JsonOptions);
         Load();
     }
 
@@ -843,6 +865,7 @@ public sealed class AppPreferences : ObservableObject
     {
         // One write at the end instead of one per property.
         _suppressSave = true;
+        if (_storageLocked) { _storageLocked = false; _preserveUnreadable = true; StorageError = null; }
         try
         {
             LaunchAtLogin = false;
@@ -914,8 +937,7 @@ public sealed class AppPreferences : ObservableObject
 
     private void Load()
     {
-        AppPaths.EnsureDirectories();
-        if (!File.Exists(AppPaths.SettingsFile))
+        if (!File.Exists(_settingsPath))
         {
             ApplyDefaults();
             return;
@@ -923,16 +945,14 @@ public sealed class AppPreferences : ObservableObject
 
         try
         {
-            var json = File.ReadAllText(AppPaths.SettingsFile);
+            if (new FileInfo(_settingsPath).Length > 4 * 1024 * 1024) { throw new IOException("Preferences exceed the local size limit"); }
+            var json = File.ReadAllText(_settingsPath);
             var data = JsonSerializer.Deserialize<PreferencesData>(json, JsonOptions);
-            if (data is null)
-            {
-                ApplyDefaults();
-                return;
-            }
+            if (data is null) { throw new JsonException("Empty preferences document"); }
 
+            if (data.SchemaVersion > CurrentSchemaVersion) { throw new JsonException("Unsupported newer preferences schema"); }
             Migrate(data);
-            _launchAtLogin = LaunchAtLoginService.IsEnabled;
+            _launchAtLogin = _loginState();
             _launcherHotKey = ValidHotKey(data.LauncherHotKey, HotKeyDefinition.LauncherDefault);
             _clipboardHotKey = ValidHotKey(data.ClipboardHotKey, HotKeyDefinition.ClipboardDefault);
             _theme = data.Theme ?? AppTheme.System;
@@ -980,7 +1000,7 @@ public sealed class AppPreferences : ObservableObject
             _clipboardEnabled = data.ClipboardEnabled ?? true;
             _clipboardPaused = data.ClipboardPaused ?? false;
             _clipboardRetentionDays = new[] { 1, 7, 30, 90 }.Contains(data.ClipboardRetentionDays ?? 7)
-                ? data.ClipboardRetentionDays!.Value
+                ? data.ClipboardRetentionDays ?? 7
                 : 7;
             _clipboardMaximumItems = Math.Clamp(data.ClipboardMaximumItems ?? 300, 50, 1_000);
             _clipboardMaximumTextCharacters = Math.Clamp(
@@ -989,6 +1009,7 @@ public sealed class AppPreferences : ObservableObject
                 10_000);
             _clipboardStoreImages = data.ClipboardStoreImages ?? false;
             _clipboardIgnoredProcessNames = (data.ClipboardIgnoredProcessNames ?? [])
+                .Where(name => !string.IsNullOrWhiteSpace(name))
                 .Select(name => name.Trim().ToLowerInvariant())
                 .Where(name => !string.IsNullOrEmpty(name))
                 .Distinct()
@@ -1001,15 +1022,17 @@ public sealed class AppPreferences : ObservableObject
             _clipboardCloudSyncIntervalMinutes = Math.Clamp(data.ClipboardCloudSyncIntervalMinutes ?? 15, 15, 240);
             Save();
         }
-        catch
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException or InvalidOperationException)
         {
+            _storageLocked = true;
+            StorageError = "无法读取设置文件，原件已保留。可在通用设置中显式恢复默认值后重新保存。";
             ApplyDefaults();
         }
     }
 
     private void ApplyDefaults()
     {
-        _launchAtLogin = LaunchAtLoginService.IsEnabled;
+        _launchAtLogin = _loginState();
         _launcherHotKey = HotKeyDefinition.LauncherDefault;
         _clipboardHotKey = HotKeyDefinition.ClipboardDefault;
         _theme = AppTheme.System;
@@ -1029,73 +1052,110 @@ public sealed class AppPreferences : ObservableObject
 
     private void Save()
     {
-        if (_suppressSave)
-        {
-            return;
-        }
+        if (_suppressSave || _storageLocked) { return; }
+        HasPendingSave = true;
+        var revision = ++_saveRevision;
+        _saveDebouncer.Schedule(TimeSpan.FromMilliseconds(200), () => QueueSnapshot(revision));
+    }
 
-        try
+    private void QueueSnapshot(long revision)
+    {
+        if (revision != _saveRevision || _storageLocked) { return; }
+        var writeRevision = ++_writeRevision;
+        var data = new PreferencesData
         {
-            var data = new PreferencesData
+            SchemaVersion = CurrentSchemaVersion,
+            LaunchAtLogin = _launchAtLogin,
+            LauncherHotKey = _launcherHotKey,
+            ClipboardHotKey = _clipboardHotKey,
+            Theme = _theme,
+            AccentColor = _accentColor,
+            LauncherAppearanceStyle = _launcherAppearanceStyle,
+            PanelPosition = _panelPosition,
+            ScreenPreference = _screenPreference,
+            SavedPanelTopLeft = _savedPanelTopLeft?.ToArray(),
+            SavedPanelPlacement = _savedPanelPlacement,
+            ForcedKeyboardInputSourceID = _forcedKeyboardInputSourceID,
+            ShowTrayIcon = _showTrayIcon,
+            CompactResults = _compactResults,
+            PanelWidth = _panelWidth,
+            PanelCornerRadius = _panelCornerRadius,
+            ShowSubtitles = _showSubtitles,
+            ShowNumberShortcuts = _showNumberShortcuts,
+            SearchInputDelay = _searchInputDelay,
+            PreviewSelectionDelay = _previewSelectionDelay,
+            ResultExpansionDuration = _resultExpansionDuration,
+            LastLauncherQuery = _lastLauncherQuery,
+            EnabledSearchContentTypes = _enabledSearchContentTypes.ToList(),
+            EnabledSystemCommands = _enabledSystemCommands.ToList(),
+            SystemCommandKeywords = _systemCommandKeywords.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value),
+            IncludeFilesInDefaultResults = _includeFilesInDefaultResults,
+            IncludeAutomaticDictionary = _includeAutomaticDictionary,
+            MaximumSearchResults = _maximumSearchResults,
+            SearchScopePaths = _searchScopePaths.ToList(),
+            ApplicationAliases = _applicationAliases.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value),
+            CustomApplicationPaths = _customApplicationPaths.ToList(),
+            FileNavigationShowsHiddenFiles = _fileNavigationShowsHiddenFiles,
+            FileNavigationSort = _fileNavigationSort,
+            FileNavigationSortAscending = _fileNavigationSortAscending,
+            FileNavigationFoldersFirst = _fileNavigationFoldersFirst,
+            ClipboardEnabled = _clipboardEnabled,
+            ClipboardPaused = _clipboardPaused,
+            ClipboardRetentionDays = _clipboardRetentionDays,
+            ClipboardMaximumItems = _clipboardMaximumItems,
+            ClipboardMaximumTextCharacters = _clipboardMaximumTextCharacters,
+            ClipboardStoreImages = _clipboardStoreImages,
+            ClipboardIgnoredProcessNames = _clipboardIgnoredProcessNames.ToList(),
+            ClipboardCloudSyncEnabled = _clipboardCloudSyncEnabled,
+            ClipboardCloudSyncFolder = _clipboardCloudSyncFolder,
+            ClipboardCloudSyncIntervalMinutes = _clipboardCloudSyncIntervalMinutes
+        };
+        var write = _persistence.SaveAsync(data, _preserveUnreadable);
+        _latestSave = write;
+        _ = write.ContinueWith(completed =>
+        {
+            void UpdateStatus()
             {
-                SchemaVersion = CurrentSchemaVersion,
-                LaunchAtLogin = _launchAtLogin,
-                LauncherHotKey = _launcherHotKey,
-                ClipboardHotKey = _clipboardHotKey,
-                Theme = _theme,
-                AccentColor = _accentColor,
-                LauncherAppearanceStyle = _launcherAppearanceStyle,
-                PanelPosition = _panelPosition,
-                ScreenPreference = _screenPreference,
-                SavedPanelTopLeft = _savedPanelTopLeft,
-                SavedPanelPlacement = _savedPanelPlacement,
-                ForcedKeyboardInputSourceID = _forcedKeyboardInputSourceID,
-                ShowTrayIcon = _showTrayIcon,
-                CompactResults = _compactResults,
-                PanelWidth = _panelWidth,
-                PanelCornerRadius = _panelCornerRadius,
-                ShowSubtitles = _showSubtitles,
-                ShowNumberShortcuts = _showNumberShortcuts,
-                SearchInputDelay = _searchInputDelay,
-                PreviewSelectionDelay = _previewSelectionDelay,
-                ResultExpansionDuration = _resultExpansionDuration,
-                LastLauncherQuery = _lastLauncherQuery,
-                EnabledSearchContentTypes = _enabledSearchContentTypes.ToList(),
-                EnabledSystemCommands = _enabledSystemCommands.ToList(),
-                SystemCommandKeywords = _systemCommandKeywords.ToDictionary(
-                    pair => pair.Key,
-                    pair => pair.Value),
-                IncludeFilesInDefaultResults = _includeFilesInDefaultResults,
-                IncludeAutomaticDictionary = _includeAutomaticDictionary,
-                MaximumSearchResults = _maximumSearchResults,
-                SearchScopePaths = _searchScopePaths.ToList(),
-                ApplicationAliases = _applicationAliases.ToDictionary(
-                    pair => pair.Key,
-                    pair => pair.Value),
-                CustomApplicationPaths = _customApplicationPaths.ToList(),
-                FileNavigationShowsHiddenFiles = _fileNavigationShowsHiddenFiles,
-                FileNavigationSort = _fileNavigationSort,
-                FileNavigationSortAscending = _fileNavigationSortAscending,
-                FileNavigationFoldersFirst = _fileNavigationFoldersFirst,
-                ClipboardEnabled = _clipboardEnabled,
-                ClipboardPaused = _clipboardPaused,
-                ClipboardRetentionDays = _clipboardRetentionDays,
-                ClipboardMaximumItems = _clipboardMaximumItems,
-                ClipboardMaximumTextCharacters = _clipboardMaximumTextCharacters,
-                ClipboardStoreImages = _clipboardStoreImages,
-                ClipboardIgnoredProcessNames = _clipboardIgnoredProcessNames.ToList(),
-                ClipboardCloudSyncEnabled = _clipboardCloudSyncEnabled,
-                ClipboardCloudSyncFolder = _clipboardCloudSyncFolder,
-                ClipboardCloudSyncIntervalMinutes = _clipboardCloudSyncIntervalMinutes
-            };
-            var json = JsonSerializer.Serialize(data, JsonOptions);
-            File.WriteAllText(AppPaths.SettingsFile, json);
-            AppPaths.RestrictFile(AppPaths.SettingsFile);
-        }
-        catch
+                if (revision != _saveRevision || writeRevision != _writeRevision) { return; }
+                var success = completed.IsCompletedSuccessfully && completed.Result;
+                if (success) { _preserveUnreadable = false; }
+                HasPendingSave = !success;
+                StorageError = success ? null : "设置保存失败；上次保存的设置仍保留，请重试。";
+            }
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is not null && !dispatcher.CheckAccess()) { _ = dispatcher.BeginInvoke(UpdateStatus); }
+            else { UpdateStatus(); }
+        }, TaskScheduler.Default);
+    }
+
+    public async Task FlushPendingChangesAsync()
+    {
+        _saveDebouncer.Cancel();
+        if (HasPendingSave && !_storageLocked) { QueueSnapshot(_saveRevision); }
+        var flushRevision = _saveRevision;
+        var write = _latestSave;
+        if (write is not null)
         {
-            // Preferences are non-critical; never crash the launcher for a write failure.
+            var success = await write;
+            if (_latestSave == write && flushRevision == _saveRevision)
+            {
+                if (success) { _preserveUnreadable = false; }
+                HasPendingSave = !success;
+                StorageError = success ? null : "设置保存失败；上次保存的设置仍保留，请重试。";
+            }
         }
+        await _persistence.DrainAsync();
+    }
+
+    public void FlushPendingChanges()
+    {
+        _saveDebouncer.Cancel();
+        if (HasPendingSave && !_storageLocked) { QueueSnapshot(_saveRevision); }
+        _persistence.DrainAsync().GetAwaiter().GetResult();
     }
 
     private static void Migrate(PreferencesData data)
@@ -1135,8 +1195,7 @@ public sealed class AppPreferences : ObservableObject
         var output = new List<string>();
         foreach (var path in paths)
         {
-            var full = Path.GetFullPath(path);
-            if (Directory.Exists(full) && seen.Add(full))
+            if (LocalPathPolicy.TryNormalize(path, out var full) && Directory.Exists(full) && seen.Add(full))
             {
                 output.Add(full);
             }

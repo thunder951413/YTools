@@ -234,9 +234,13 @@
                      stale result text underneath the search field. -->
                 <Border Grid.Row="1" Height="32" Padding="18,4"
                         Visibility="{Binding HasActionStatus, Converter={StaticResource BoolToVisibility}}">
-                    <TextBlock Text="{Binding ActionStatusText}" ToolTip="{Binding ActionStatusText}"
-                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" FontSize="11"
-                               Foreground="{DynamicResource AccentBrush}" AutomationProperties.LiveSetting="Polite" />
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Content="取消" Click="CancelFileTransfer_Click" Padding="8,0" Margin="8,0,0,0"
+                                AutomationProperties.Name="取消文件传输" Visibility="{Binding CanCancelFileOperation, Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock Text="{Binding ActionStatusText}" ToolTip="{Binding ActionStatusText}"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" FontSize="11"
+                                   Foreground="{DynamicResource AccentBrush}" AutomationProperties.LiveSetting="Polite" />
+                    </DockPanel>
                 </Border>
                 <Grid Grid.Row="2" ClipToBounds="True">
                     <ListBox x:Name="ResultsList"

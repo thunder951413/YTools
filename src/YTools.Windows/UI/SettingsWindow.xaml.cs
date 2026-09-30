@@ -5,6 +5,9 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
+using System.Windows.Automation;
+using System.Windows.Threading;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -17,6 +20,8 @@ namespace YTools.UI;
 
 public partial class SettingsWindow : Window
 {
+    private readonly Dictionary<string, FrameworkElement> _settingTargets = [];
+    private Adorner? _targetHighlight;
     private AppPreferences? _preferences;
     private ClipboardHistoryManager? _clipboard;
     private SnippetManager? _snippets;
@@ -28,6 +33,13 @@ public partial class SettingsWindow : Window
     private readonly ObservableCollection<CustomApplicationEntry> _customApplications = [];
     private readonly ObservableCollection<string> _ignoredApps = [];
     private readonly ObservableCollection<SnippetItem> _snippetItems = [];
+    private ListBox? _snippetList;
+    private TextBox? _snippetFilter;
+    private TextBlock? _snippetCount;
+    private Guid? _editingSnippetId;
+    private bool _refreshingSnippets;
+    private bool _loadingSnippetEditor;
+    private Action<SnippetItem?>? _loadSnippetEditor;
     private HotKeyRecorder? _launcherRecorder;
     private HotKeyRecorder? _clipboardRecorder;
     private System.ComponentModel.PropertyChangedEventHandler? _preferenceChanged;
@@ -43,16 +55,19 @@ public partial class SettingsWindow : Window
             if (_preferences is { } preferences && _preferenceChanged is { } handler)
             {
                 preferences.PropertyChanged -= handler;
+                _ = preferences.FlushPendingChangesAsync();
             }
             if (_snippets is { } snippets && _snippetChanged is { } snippetHandler)
             {
                 snippets.PropertyChanged -= snippetHandler;
+                _ = snippets.FlushPendingChangesAsync();
             }
         };
         NavList.SelectionChanged += (_, _) =>
         {
             if (NavList.SelectedItem is NavItem item && _pages.TryGetValue(item, out var page))
             {
+                SettingsSearchBox.Clear();
                 PageHost.Content = page;
             }
         };
@@ -61,7 +76,7 @@ public partial class SettingsWindow : Window
 
     public void Attach(
         AppPreferences preferences,
-        ClipboardHistoryManager clipboard,
+        ClipboardHistoryManager? clipboard,
         SnippetManager snippets,
         RecentDocumentsManager recentDocuments)
     {
@@ -130,16 +145,85 @@ public partial class SettingsWindow : Window
     private void SettingsSearch_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (NavList?.ItemsSource is null) { return; }
-        var view = System.Windows.Data.CollectionViewSource.GetDefaultView(NavList.ItemsSource);
-        view.Filter = item => item is NavItem nav && SettingsSearchCatalog.Matches(nav.SectionId, SettingsSearchBox.Text);
-        var first = view.Cast<NavItem>().FirstOrDefault();
-        if (NavList.SelectedItem is not NavItem selected || !view.Contains(selected))
+        var query = SettingsSearchBox.Text;
+        if (string.IsNullOrWhiteSpace(query))
         {
-            NavList.SelectedItem = first;
-            if (first is null)
-            { PageHost.Content = new TextBlock { Text = "没有匹配设置，请尝试其他关键词。", Style = (Style)FindResource("HintText") }; }
+            if (NavList.SelectedItem is NavItem selected && _pages.TryGetValue(selected, out var page))
+            { PageHost.Content = page; }
+            return;
+        }
+        var targets = SettingsSearchCatalog.SearchTargets(query)
+            .Where(target => _settingTargets.ContainsKey(target.Id)).ToList();
+        var results = new StackPanel();
+        results.Children.Add(Header("搜索设置"));
+        foreach (var target in targets)
+        {
+            var section = _navItems.FirstOrDefault(nav => nav.SectionId == target.WindowsSectionId);
+            var button = Button(target.Title + "  ·  " + section?.Title, () => OpenSetting(target));
+            button.HorizontalAlignment = HorizontalAlignment.Stretch;
+            button.HorizontalContentAlignment = HorizontalAlignment.Left;
+            AutomationProperties.SetName(button, "定位设置：" + target.Title);
+            results.Children.Add(button);
+        }
+        foreach (var section in _navItems.Where(nav => SettingsSearchCatalog.Matches(nav.SectionId, query)
+            && !targets.Any(target => target.WindowsSectionId == nav.SectionId)))
+        {
+            results.Children.Add(Button("打开" + section.Title, () =>
+            {
+                SettingsSearchBox.Clear();
+                NavList.SelectedItem = section;
+                PageHost.Content = _pages[section];
+            }));
+        }
+        if (results.Children.Count == 1)
+        { results.Children.Add(new TextBlock { Text = "没有匹配设置，请尝试其他关键词。", Style = (Style)FindResource("HintText") }); }
+        PageHost.Content = Scroll(results);
+    }
+
+    private void OpenSetting(SettingsSearchTarget target)
+    {
+        SettingsSearchBox.Clear();
+        var section = _navItems.FirstOrDefault(nav => nav.SectionId == target.WindowsSectionId);
+        if (section is null || !_settingTargets.TryGetValue(target.Id, out var control)) { return; }
+        NavList.SelectedItem = section;
+        PageHost.Content = _pages[section];
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            control.BringIntoView();
+            control.Focus();
+            if (_targetHighlight is { } old) { AdornerLayer.GetAdornerLayer(old.AdornedElement)?.Remove(old); }
+            var layer = AdornerLayer.GetAdornerLayer(control);
+            if (layer is null) { return; }
+            _targetHighlight = new SettingTargetAdorner(control, (Brush)FindResource("AccentBrush"));
+            layer.Add(_targetHighlight);
+        }));
+    }
+
+    private T RegisterTarget<T>(string id, T control) where T : FrameworkElement
+    {
+        _settingTargets[id] = control;
+        AutomationProperties.SetAutomationId(control, "setting-" + id);
+        var title = SettingsSearchCatalog.Targets.FirstOrDefault(target => target.Id == id)?.Title;
+        if (title is not null) { AutomationProperties.SetName(control, title); }
+        return control;
+    }
+
+    private sealed class SettingTargetAdorner(UIElement target, Brush brush) : Adorner(target)
+    {
+        protected override void OnRender(DrawingContext drawingContext)
+        {
+            IsHitTestVisible = false;
+            drawingContext.DrawRoundedRectangle(null, new Pen(brush, 2),
+                new Rect(new Point(-3, -3), new Size(AdornedElement.RenderSize.Width + 6, AdornedElement.RenderSize.Height + 6)), 5, 5);
         }
     }
+
+    internal void SelectSnapshotSection(string sectionId)
+    {
+        NavList.SelectedItem = _navItems.First(nav => nav.SectionId == sectionId);
+    }
+    internal void SearchSnapshotSetting(string query) { SettingsSearchBox.Text = query; }
+    internal void OpenSnapshotTarget(string id) { OpenSetting(SettingsSearchCatalog.Targets.First(target => target.Id == id)); }
 
     public void RefreshChrome()
     {
@@ -166,6 +250,7 @@ public partial class SettingsWindow : Window
     {
         _navItems.Clear();
         _pages.Clear();
+        _settingTargets.Clear();
         _navItems.AddRange(
         [
             new NavItem("通用", "\uE713", "general"),
@@ -233,7 +318,7 @@ public partial class SettingsWindow : Window
         {
             var confirmation = MessageBox.Show(
                 this,
-                "将所有设置恢复为默认值？\n\n已保存的剪贴板、片段等数据不会删除；坚果云同步会被停用（凭据保留）。",
+                "将所有设置恢复为默认值？\n\n已保存的剪贴板、片段等数据不会删除；坚果云同步会被停用（凭据保留）。损坏的设置原件会另存为备份。",
                 "恢复默认设置",
                 MessageBoxButton.OKCancel,
                 MessageBoxImage.Question);
@@ -243,6 +328,11 @@ public partial class SettingsWindow : Window
             }
         });
         stack.Children.Add(restore);
+        var storageStatus = new TextBlock { Style = (Style)FindResource("HintText") };
+        storageStatus.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(AppPreferences.StorageStatus)));
+        AutomationProperties.SetLiveSetting(storageStatus, AutomationLiveSetting.Polite);
+        stack.Children.Add(storageStatus);
+        stack.Children.Add(Button("重试保存设置", async () => { if (_preferences is not null) { await _preferences.FlushPendingChangesAsync(); } }));
         page.Content = Scroll(stack);
         return page;
     }
@@ -266,7 +356,7 @@ public partial class SettingsWindow : Window
             panel.Children.Add(box);
         }
 
-        stack.Children.Add(panel);
+        stack.Children.Add(RegisterTarget("EnabledSearchContentTypes", panel));
         stack.Children.Add(CheckBox("默认结果包含文件", "IncludeFilesInDefaultResults", "关闭后仅输入 open/打开 等前缀时返回文件"));
         stack.Children.Add(SubHeader("文件导航"));
         stack.Children.Add(new TextBlock
@@ -299,7 +389,7 @@ public partial class SettingsWindow : Window
             ItemsSource = _scopePaths,
             Height = 120
         };
-        stack.Children.Add(scopeList);
+        stack.Children.Add(RegisterTarget("SearchScopePaths", scopeList));
         var scopeButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
         scopeButtons.Children.Add(Button("添加目录", () =>
         {
@@ -536,7 +626,7 @@ public partial class SettingsWindow : Window
             }
         };
         _launcherRecorder.Bind(_preferences?.LauncherHotKey ?? HotKeyDefinition.LauncherDefault);
-        stack.Children.Add(_launcherRecorder);
+        stack.Children.Add(RegisterTarget("LauncherHotKey", _launcherRecorder));
         _clipboardRecorder = new HotKeyRecorder("剪贴板历史快捷键");
         _clipboardRecorder.Changed += definition =>
         {
@@ -546,7 +636,7 @@ public partial class SettingsWindow : Window
             }
         };
         _clipboardRecorder.Bind(_preferences?.ClipboardHotKey ?? HotKeyDefinition.ClipboardDefault);
-        stack.Children.Add(_clipboardRecorder);
+        stack.Children.Add(RegisterTarget("ClipboardHotKey", _clipboardRecorder));
         var hotKeyError = new TextBlock
         {
             Style = (Style)FindResource("HintText")
@@ -582,7 +672,7 @@ public partial class SettingsWindow : Window
             ItemsSource = _ignoredApps,
             Height = 110
         };
-        stack.Children.Add(ignoredList);
+        stack.Children.Add(RegisterTarget("ClipboardIgnoredApplications", ignoredList));
         var ignoredRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
         var ignoredText = new TextBox
         {
@@ -625,7 +715,7 @@ public partial class SettingsWindow : Window
             }
         };
         stack.Children.Add(syncFolder.Label);
-        stack.Children.Add(syncFolder.Box);
+        stack.Children.Add(RegisterTarget("ClipboardCloudSyncFolder", syncFolder.Box));
         stack.Children.Add(SliderRow("后台拉取间隔（分钟）", "ClipboardCloudSyncIntervalMinutes", 15, 240, 15));
         var username = LabeledTextBox("坚果云用户名", 260);
         var appPasswordLabel = new TextBlock { Text = "坚果云应用密码", Style = (Style)FindResource("RowLabel") };
@@ -633,11 +723,11 @@ public partial class SettingsWindow : Window
         var syncPasswordLabel = new TextBlock { Text = "同步口令（至少 12 个字符；所有设备必须相同）", Style = (Style)FindResource("RowLabel") };
         var syncPassword = new PasswordBox { Width = 260, Margin = new Thickness(0, 4, 0, 0) };
         stack.Children.Add(username.Label);
-        stack.Children.Add(username.Box);
+        stack.Children.Add(RegisterTarget("CloudUsername", username.Box));
         stack.Children.Add(appPasswordLabel);
-        stack.Children.Add(appPassword);
+        stack.Children.Add(RegisterTarget("CloudAppPassword", appPassword));
         stack.Children.Add(syncPasswordLabel);
-        stack.Children.Add(syncPassword);
+        stack.Children.Add(RegisterTarget("CloudPassphrase", syncPassword));
         var syncStatus = new TextBlock { Style = (Style)FindResource("HintText") };
         syncStatus.SetBinding(
             TextBlock.TextProperty,
@@ -673,82 +763,81 @@ public partial class SettingsWindow : Window
         var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("文本片段"));
-        var storageStatus = new TextBlock { Style = (Style)FindResource("HintText") };
-        storageStatus.SetBinding(
-            TextBlock.TextProperty,
-            new System.Windows.Data.Binding(nameof(SnippetManager.StorageStatus)) { Source = _snippets });
-        stack.Children.Add(storageStatus);
-        var snippetList = new ListBox
+        var status = new TextBlock { Style = (Style)FindResource("HintText") };
+        status.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(SnippetManager.StorageStatus)) { Source = _snippets });
+        System.Windows.Automation.AutomationProperties.SetLiveSetting(status, System.Windows.Automation.AutomationLiveSetting.Polite);
+        stack.Children.Add(status);
+        stack.Children.Add(new TextBlock { Text = "修改自动加密保存；空白草稿不会出现在启动器结果中。", Style = (Style)FindResource("HintText") });
+        _snippetFilter = new TextBox { Margin = new Thickness(0, 8, 0, 8), ToolTip = "搜索标题、关键词、分类或内容" };
+        System.Windows.Automation.AutomationProperties.SetName(_snippetFilter, "筛选文本片段");
+        _snippetFilter.TextChanged += (_, _) => { _editingSnippetId = null; RefreshSnippets(); };
+        stack.Children.Add(_snippetFilter);
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        _snippetList = new ListBox { ItemsSource = _snippetItems, DisplayMemberPath = nameof(SnippetItem.Title), Height = 360 };
+        System.Windows.Automation.AutomationProperties.SetName(_snippetList, "文本片段列表");
+        grid.Children.Add(_snippetList);
+        var editor = new StackPanel { Margin = new Thickness(16, 0, 0, 0) };
+        Grid.SetColumn(editor, 1);
+        var title = LabeledTextBox("标题", double.NaN);
+        var keyword = LabeledTextBox("关键词", double.NaN);
+        var collection = LabeledTextBox("分类", double.NaN);
+        var content = new TextBox { Height = 170, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        System.Windows.Automation.AutomationProperties.SetName(content, "片段内容");
+        foreach (var field in new[] { title, keyword, collection }) { editor.Children.Add(field.Label); editor.Children.Add(field.Box); }
+        editor.Children.Add(new TextBlock { Text = "内容（支持 {date} {time} {clipboard} {cursor}）", Style = (Style)FindResource("HintText") });
+        editor.Children.Add(content);
+        grid.Children.Add(editor);
+        stack.Children.Add(grid);
+        _loadSnippetEditor = item =>
         {
-            ItemsSource = _snippetItems,
-            DisplayMemberPath = nameof(SnippetItem.Title),
-            Height = 180
-        };
-        stack.Children.Add(snippetList);
-        var leftButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-        leftButtons.Children.Add(Button("新建", async () =>
-        {
-            if (_snippets is not null
-                && !await _snippets.SaveAsync("新片段内容", title: "新片段"))
+            _loadingSnippetEditor = true;
+            try
             {
-                MessageBox.Show(this, _snippets.SaveError ?? "加密存储当前不可用。", "无法保存文本片段", MessageBoxButton.OK, MessageBoxImage.Warning);
+                if (title.Box.Text != (item?.Title ?? "")) { title.Box.Text = item?.Title ?? ""; }
+                if (keyword.Box.Text != (item?.Keyword ?? "")) { keyword.Box.Text = item?.Keyword ?? ""; }
+                if (collection.Box.Text != (item?.Collection ?? "")) { collection.Box.Text = item?.Collection ?? ""; }
+                if (content.Text != (item?.Content ?? "")) { content.Text = item?.Content ?? ""; }
+                editor.IsEnabled = item is not null;
             }
+            finally { _loadingSnippetEditor = false; }
+        };
+        void UpdateSelected()
+        {
+            if (_loadingSnippetEditor || _refreshingSnippets || _editingSnippetId is not { } id) { return; }
+            _snippets?.Update(id, title: title.Box.Text, keyword: keyword.Box.Text, content: content.Text, collection: collection.Box.Text);
+        }
+        title.Box.TextChanged += (_, _) => UpdateSelected(); keyword.Box.TextChanged += (_, _) => UpdateSelected();
+        collection.Box.TextChanged += (_, _) => UpdateSelected(); content.TextChanged += (_, _) => UpdateSelected();
+        _snippetList.SelectionChanged += (_, _) =>
+        {
+            if (_refreshingSnippets) { return; }
+            var item = _snippetList.SelectedItem as SnippetItem;
+            _editingSnippetId = item?.Id;
+            _loadSnippetEditor(item);
+            if (_snippets is not null) { _ = _snippets.FlushPendingChangesAsync(); }
+        };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+        buttons.Children.Add(Button("新建", () =>
+        {
+            if (_snippets is null || !_snippets.IsLoaded) { return; }
+            _editingSnippetId = _snippets.CreateDraft();
+            _snippetFilter.Text = "";
             RefreshSnippets();
         }));
-        leftButtons.Children.Add(Button("删除", () =>
+        buttons.Children.Add(Button("删除", () =>
         {
-            if (snippetList.SelectedItem is SnippetItem item)
-            {
-                _snippets?.Delete(item);
-                RefreshSnippets();
-            }
+            var item = _snippets?.Items.FirstOrDefault(item => item.Id == _editingSnippetId);
+            if (item is null || MessageBox.Show(this, "删除此片段？此操作无法撤销。", "删除片段", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) { return; }
+            _snippets?.Delete(item);
         }));
-        stack.Children.Add(leftButtons);
-        stack.Children.Add(SubHeader("编辑"));
-        var title = LabeledTextBox("标题", 200);
-        var keyword = LabeledTextBox("关键词", 200);
-        var collection = LabeledTextBox("分类", 200);
-        var content = new TextBox
-        {
-            Height = 180,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Margin = new Thickness(0, 6, 0, 0)
-        };
-        var contentLabel = new TextBlock { Text = "内容（支持 {date} {time} {clipboard} {cursor}）", Style = (Style)FindResource("RowLabel") };
-        stack.Children.Add(title.Label);
-        stack.Children.Add(title.Box);
-        stack.Children.Add(keyword.Label);
-        stack.Children.Add(keyword.Box);
-        stack.Children.Add(collection.Label);
-        stack.Children.Add(collection.Box);
-        stack.Children.Add(contentLabel);
-        stack.Children.Add(content);
-        stack.Children.Add(Button("保存修改", () =>
-        {
-            if (snippetList.SelectedItem is SnippetItem item)
-            {
-                _snippets?.Update(
-                    item.Id,
-                    title: title.Box.Text,
-                    keyword: keyword.Box.Text,
-                    content: content.Text,
-                    collection: collection.Box.Text);
-                RefreshSnippets();
-            }
-        }, margin: new Thickness(0, 10, 0, 0)));
-        snippetList.SelectionChanged += (_, _) =>
-        {
-            if (snippetList.SelectedItem is SnippetItem item)
-            {
-                title.Box.Text = item.Title;
-                keyword.Box.Text = item.Keyword;
-                collection.Box.Text = item.Collection;
-                content.Text = item.Content;
-            }
-        };
+        buttons.Children.Add(Button("立即保存 / 重试", async () => { if (_snippets is not null) { await _snippets.FlushPendingChangesAsync(); } }));
+        stack.Children.Add(buttons);
+        _snippetCount = new TextBlock { Style = (Style)FindResource("HintText") };
+        stack.Children.Add(_snippetCount);
         page.Content = Scroll(stack);
+        RefreshSnippets();
         return page;
     }
 
@@ -809,6 +898,19 @@ public partial class SettingsWindow : Window
         var page = new UserControl();
         var stack = new StackPanel();
         stack.Children.Add(Header("隐私"));
+        stack.Children.Add(new TextBlock { Text = "本机诊断仅包含版本、能力状态与记录数量，不含路径、查询或凭据。", Style = (Style)FindResource("HintText") });
+        stack.Children.Add(Button("复制本机诊断", () =>
+        {
+            using var backend = EverythingClient.TryCreate();
+            var report = LocalDiagnosticReport.Text(typeof(SettingsWindow).Assembly.GetName().Version?.ToString(3) ?? "",
+                DiagnosticPlatform.Windows, backend?.IsAvailable == true ? DiagnosticFileBackend.Everything : DiagnosticFileBackend.FileNameScan,
+                _clipboard?.Items.Count ?? 0, _clipboard?.Items.Count(item => item.IsPinned) ?? 0, _snippets?.Items.Count ?? 0,
+                _preferences?.StorageError is null, _clipboard?.StorageError is null, _snippets?.StorageError is null,
+                _recentDocuments?.StorageError is null, _preferences?.ClipboardCloudSyncEnabled == true);
+            try { System.Windows.Clipboard.SetText(report); }
+            catch (ExternalException) { MessageBox.Show(this, "剪贴板暂时被占用，请稍后重试。", "本机诊断"); }
+        }));
+
         stack.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("HintText"),
@@ -901,7 +1003,7 @@ public partial class SettingsWindow : Window
                 Mode = System.Windows.Data.BindingMode.TwoWay,
                 UpdateSourceTrigger = System.Windows.Data.UpdateSourceTrigger.PropertyChanged
             });
-        return box;
+        return RegisterTarget(binding, box);
     }
 
     private UIElement SliderRow(
@@ -941,6 +1043,7 @@ public partial class SettingsWindow : Window
                 Mode = System.Windows.Data.BindingMode.TwoWay,
                 UpdateSourceTrigger = System.Windows.Data.UpdateSourceTrigger.PropertyChanged
             });
+        RegisterTarget(binding, slider);
         Grid.SetColumn(slider, 1);
         grid.Children.Add(slider);
         var valueText = new TextBlock
@@ -1006,6 +1109,7 @@ public partial class SettingsWindow : Window
                 Mode = System.Windows.Data.BindingMode.TwoWay,
                 UpdateSourceTrigger = System.Windows.Data.UpdateSourceTrigger.PropertyChanged
             });
+        RegisterTarget(binding, combo);
         Grid.SetColumn(combo, 1);
         grid.Children.Add(combo);
         return grid;
@@ -1021,7 +1125,7 @@ public partial class SettingsWindow : Window
         var box = new TextBox
         {
             Width = width,
-            HorizontalAlignment = HorizontalAlignment.Left,
+            HorizontalAlignment = double.IsNaN(width) ? HorizontalAlignment.Stretch : HorizontalAlignment.Left,
             Margin = new Thickness(0, 2, 0, 4)
         };
         return (labelText, box);
@@ -1050,14 +1154,25 @@ public partial class SettingsWindow : Window
 
     private void RefreshSnippets()
     {
-        _snippetItems.Clear();
-        if (_snippets is not null)
+        if (_refreshingSnippets) { return; }
+        _refreshingSnippets = true;
+        try
         {
-            foreach (var item in _snippets.Items)
-            {
-                _snippetItems.Add(item);
-            }
+            var term = _snippetFilter?.Text.Trim() ?? "";
+            var source = _snippets?.Items ?? [];
+            var matches = source.Where(item => string.IsNullOrEmpty(term) || new[] { item.Title, item.Keyword, item.Collection, item.Content }
+                .Any(value => value.Contains(term, StringComparison.OrdinalIgnoreCase))).ToList();
+            var selected = source.FirstOrDefault(item => item.Id == _editingSnippetId) ?? matches.FirstOrDefault();
+            if (selected is not null && matches.All(item => item.Id != selected.Id)) { matches.Insert(0, selected); }
+            _editingSnippetId = selected?.Id;
+            _snippetItems.Clear();
+            foreach (var item in matches) { _snippetItems.Add(item); }
+            if (_snippetList is not null) { _snippetList.SelectedItem = selected; }
+            // Keep the text controls intact during edits to preserve caret and IME composition.
+            _loadSnippetEditor?.Invoke(selected);
+            if (_snippetCount is not null) { _snippetCount.Text = $"{matches.Count} / {source.Count} 条片段"; }
         }
+        finally { _refreshingSnippets = false; }
     }
 
     private void RefreshCustomApplications()

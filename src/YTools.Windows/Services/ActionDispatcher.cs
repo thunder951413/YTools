@@ -47,6 +47,9 @@ public sealed class ActionDispatcher
     private int _backgroundOperationActive;
     private Task _pendingOperation = Task.CompletedTask;
     private bool _isShuttingDown;
+    private CancellationTokenSource? _transferCancellation;
+    public bool CanCancelOperation => _transferCancellation is not null && IsBusy;
+    public void CancelFileOperation() { _transferCancellation?.Cancel(); }
     public string StatusText { get; private set; } = "";
     public bool IsChoosingDestination { get; private set; }
 
@@ -317,38 +320,32 @@ public sealed class ActionDispatcher
             return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);
         }
 
-        return BeginBackgroundOperation(() =>
+        return StartFileTransfer(move, normalizedSource, destinationDirectory);
+    }
+
+    internal ActionExecutionResult StartFileTransfer(bool move, string source, string directory)
+    {
+        if (IsBusy || _isShuttingDown) { return new(ActionExecutionOutcome.KeepPanel); }
+        var cancellation = new CancellationTokenSource();
+        _transferCancellation = cancellation;
+        var description = $"{(move ? "移动" : "复制")}“{Path.GetFileName(source)}” → {directory}";
+        var progress = new Progress<FileTransferProgress>(value =>
+        {
+            if (!IsBusy || _transferCancellation != cancellation) { return; }
+            StatusText = $"{(move ? "移动" : "复制")}“{Path.GetFileName(source)}” · {value.Detail}";
+            BusyStateChanged?.Invoke(this, EventArgs.Empty);
+        });
+        return BeginBackgroundOperation(async () =>
         {
             try
             {
-                var isDirectory = Directory.Exists(normalizedSource);
-                if (move)
-                {
-                    if (isDirectory)
-                    {
-                        FileSystem.MoveDirectory(normalizedSource, destination, overwrite: false);
-                    }
-                    else
-                    {
-                        File.Move(normalizedSource, destination);
-                    }
-                }
-                else if (isDirectory)
-                {
-                    CopyDirectory(normalizedSource, destination);
-                }
-                else
-                {
-                    File.Copy(normalizedSource, destination);
-                }
-
-                return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);
+                await new FileTransferService().PerformAsync(move, source, directory, progress, cancellation.Token);
+                return new(ActionExecutionOutcome.KeepPanel);
             }
-            catch (Exception exception)
-            {
-                return Failure(move ? "移动失败" : "复制失败", exception);
-            }
-        }, $"{(move ? "移动" : "复制")}“{Path.GetFileName(normalizedSource)}” → {destinationDirectory}");
+            catch (OperationCanceledException)
+            { return new(ActionExecutionOutcome.KeepPanel, ErrorTitle: "传输已取消", ErrorMessage: "临时目标已清理，源文件保留。"); }
+            catch (Exception exception) { return Failure(move ? "移动失败" : "复制失败", exception); }
+        }, description);
     }
 
     private ActionExecutionResult MoveToTrash(string path)
@@ -628,26 +625,6 @@ public sealed class ActionDispatcher
         }
     }
 
-    private static void CopyDirectory(string source, string destination)
-    {
-        var sourceInfo = new DirectoryInfo(source);
-        if (sourceInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
-        {
-            throw new IOException("不复制目录连接或重解析点。");
-        }
-
-        Directory.CreateDirectory(destination);
-        foreach (var file in sourceInfo.GetFiles())
-        {
-            file.CopyTo(Path.Combine(destination, file.Name), overwrite: false);
-        }
-
-        foreach (var child in sourceInfo.GetDirectories())
-        {
-            CopyDirectory(child.FullName, Path.Combine(destination, child.Name));
-        }
-    }
-
     private static bool IsDescendantPath(string candidate, string parent)
     {
         var parentWithSeparator = parent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -753,9 +730,11 @@ public sealed class ActionDispatcher
             void Complete()
             {
                 StatusText = result.ErrorTitle is null ? $"已完成：{description}" : $"{result.ErrorTitle}：{result.ErrorMessage}";
+                _transferCancellation?.Dispose();
+                _transferCancellation = null;
                 Interlocked.Exchange(ref _backgroundOperationActive, 0);
                 BusyStateChanged?.Invoke(this, EventArgs.Empty);
-                if (result.ErrorTitle is not null)
+                if (result.ErrorTitle is not null && result.ErrorTitle != "传输已取消")
                 {
                     ShowAlert(result.ErrorTitle, result.ErrorMessage ?? "未知错误。");
                 }

@@ -3,6 +3,7 @@ import SwiftUI
 import XCTest
 @testable import YTools
 import YToolsModuleKit
+import YToolsCore
 
 @MainActor
 final class NativeViewSnapshotTests: XCTestCase {
@@ -67,6 +68,28 @@ final class NativeViewSnapshotTests: XCTestCase {
                 try writePng(image, to: output.appendingPathComponent("clipboard-\(filter == .all ? "panel" : "pinned")-\(name(for: scheme)).png"))
             }
         }
+        manager.filter = .all
+        manager.togglePreview()
+        let snippets = SnippetManager { SecureCodableStore(fileURL: directory.appendingPathComponent("snippets.enc")) { _ in key } }
+        let recent = RecentDocumentsManager { SecureCodableStore(fileURL: directory.appendingPathComponent("recent.enc")) { _ in key } }
+        await snippets.waitUntilLoaded()
+        _ = await snippets.savePersisted(text: String(repeating: "合成片段正文，用于检查完整编辑内容与滚动。\n", count: 20), title: "验收片段", keyword: "fixture")
+        for scheme in [ColorScheme.light, .dark] {
+            try await renderNative(ClipboardHistoryView(manager: manager, preferences: preferences, onActivate: {}),
+                size: NSSize(width: 720, height: 420), scheme: scheme, to: output.appendingPathComponent("clipboard-preview-" + name(for: scheme) + ".png"))
+            let navigation = SettingsNavigationModel()
+            navigation.selection = .snippets
+            try await renderNative(SettingsRootView(preferences: preferences, clipboardManager: manager, snippets: snippets, recentDocuments: recent, navigation: navigation),
+                size: NSSize(width: 980, height: 700), scheme: scheme, to: output.appendingPathComponent("settings-snippets-" + name(for: scheme) + ".png"))
+            navigation.searchText = "同步口令"
+            try await renderNative(SettingsRootView(preferences: preferences, clipboardManager: manager, snippets: snippets, recentDocuments: recent, navigation: navigation),
+                size: NSSize(width: 980, height: 700), scheme: scheme, to: output.appendingPathComponent("settings-search-" + name(for: scheme) + ".png"))
+            navigation.open(try XCTUnwrap(SettingsSearchCatalog.searchTargets("同步口令").first))
+            try await renderNative(SettingsRootView(preferences: preferences, clipboardManager: manager, snippets: snippets, recentDocuments: recent, navigation: navigation),
+                size: NSSize(width: 980, height: 700), scheme: scheme, to: output.appendingPathComponent("settings-target-" + name(for: scheme) + ".png"))
+        }
+        await snippets.flushPendingChanges()
+        await recent.flushPendingChanges()
         await manager.flushPendingChanges()
     }
 
@@ -88,6 +111,25 @@ final class NativeViewSnapshotTests: XCTestCase {
             XCTAssertGreaterThan(image.size.height, 180)
             try writePng(image, to: outputDirectory.appendingPathComponent("native-components-\(name(for: scheme)).png"))
         }
+    }
+
+    private func renderNative<V: View>(_ root: V, size: NSSize, scheme: ColorScheme, to url: URL) async throws {
+        let frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        defer { window.close() }
+        let view = NSHostingView(rootView: root.frame(width: size.width, height: size.height).colorScheme(scheme))
+        window.contentView = view
+        view.frame = frame
+        view.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        try await Task.sleep(for: .milliseconds(220))
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let image = NSImage(size: size)
+        image.addRepresentation(bitmap)
+        try writePng(image, to: url)
     }
 
     private var fixture: some View {

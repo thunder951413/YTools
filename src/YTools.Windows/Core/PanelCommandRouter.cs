@@ -32,6 +32,7 @@ public enum PanelCommandKind
     NavigateBack,
     DeleteClipboardItem,
     SaveClipboardAsSnippet,
+    ToggleClipboardPreview,
     TogglePreview,
     ShowLargeType,
     RevealSelected,
@@ -55,6 +56,7 @@ public sealed class PanelCommandRouter
     private const int VkEscape = 0x1B;
     private const int VkD = 0x44;
     private const int VkS = 0x53;
+    private const int VkP = 0x50;
     private const int VkY = 0x59;
     private const int VkL = 0x4C;
     private const int VkOemComma = 0xBC;
@@ -91,6 +93,8 @@ public sealed class PanelCommandRouter
                 new PanelCommand(PanelCommandKind.DeleteClipboardItem),
             (VkS, PanelInputMode.Clipboard) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command) =>
                 new PanelCommand(PanelCommandKind.SaveClipboardAsSnippet),
+            (VkP, PanelInputMode.Clipboard) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
+                new PanelCommand(PanelCommandKind.ToggleClipboardPreview),
             (VkY, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command) =>
                 new PanelCommand(PanelCommandKind.TogglePreview),
             (VkL, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command) =>

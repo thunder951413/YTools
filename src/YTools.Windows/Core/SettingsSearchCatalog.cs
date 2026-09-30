@@ -1,7 +1,7 @@
 namespace YTools.Core;
 
 /// <summary>Searches settings categories using labels and discoverable synonyms.</summary>
-public static class SettingsSearchCatalog
+public static partial class SettingsSearchCatalog
 {
     private static readonly IReadOnlyDictionary<string, string[]> Keywords = new Dictionary<string, string[]>
     {

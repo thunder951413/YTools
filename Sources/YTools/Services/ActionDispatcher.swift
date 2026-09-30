@@ -1,5 +1,6 @@
 import AppKit
 import UniformTypeIdentifiers
+import YToolsCore
 
 enum ActionExecutionOutcome {
     case hidePanel
@@ -55,6 +56,8 @@ final class ActionDispatcher {
         isShuttingDown = true
         await fileOperationTask?.value
     }
+
+    func cancelFileOperation() { fileOperationTask?.cancel() }
 
     func clearStatus() {
         guard !isBusy else { return }
@@ -242,8 +245,12 @@ final class ActionDispatcher {
         onStatusChanged?(true, statusText)
         fileOperationTask = Task { [self, fileOperations] in
             do {
-                try await fileOperations.perform(operation, source: source, destinationDirectory: directory)
+                try await fileOperations.perform(operation, source: source, destinationDirectory: directory) { [weak self] progress in
+                    await self?.updateFileProgress(progress, verb: verb, name: source.lastPathComponent)
+                }
                 statusText = "\(verb)完成：\(source.lastPathComponent) → \(directory.path)"
+            } catch is CancellationError {
+                statusText = "\(verb)已取消，临时目标已清理。"
             } catch {
                 statusText = "\(verb)失败：\(error.localizedDescription)"
             }
@@ -251,6 +258,12 @@ final class ActionDispatcher {
             onStatusChanged?(false, statusText)
         }
         return .backgroundStarted
+    }
+
+    private func updateFileProgress(_ progress: FileTransferProgress, verb: String, name: String) {
+        guard isBusy else { return }
+        statusText = "\(verb)“\(name)” · \(progress.detail)"
+        onStatusChanged?(true, statusText)
     }
 
     private func openWithApplication(_ url: URL) -> ActionExecutionOutcome {

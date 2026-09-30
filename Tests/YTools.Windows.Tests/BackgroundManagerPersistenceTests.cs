@@ -1,5 +1,6 @@
 using System.IO;
 using YTools.Models;
+using YTools.ModuleKit;
 using YTools.Services;
 using YTools.Services.Storage;
 
@@ -54,11 +55,42 @@ public class BackgroundManagerPersistenceTests
 
             Assert.False(await manager.SaveAsync("newest", title: "newest"));
             Assert.Contains(manager.Items, item => item.Title == "newest");
+            Assert.True(manager.HasPendingChanges);
+            Assert.NotEqual("已安全保存", manager.StorageStatus);
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task DraftIsDurableButSearchableOnlyAfterContentIsEntered()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var store = new SecureCodableStore(Path.Combine(root, "drafts.enc"), _ => new byte[32]);
+            var manager = new SnippetManager(() => store);
+            await manager.WaitUntilLoadedAsync();
+            var first = manager.CreateDraft();
+            await manager.FlushPendingChangesAsync();
+            Assert.False(manager.HasPendingChanges);
+            Assert.Empty(await manager.SearchModule("", DateTimeOffset.UtcNow).SearchAsync(new ModuleSearchRequest("snip")));
+            manager.Update(first, content: "first edit");
+            Assert.True(manager.HasPendingChanges);
+            var second = manager.CreateDraft();
+            manager.Update(second, title: "Second", content: "second edit");
+            manager.Update(first, content: "latest first edit");
+            await manager.FlushPendingChangesAsync();
+            Assert.False(manager.HasPendingChanges);
+            var loaded = store.Load<List<SnippetItem>>();
+            Assert.Equal(SecureStoreLoadResultKind.Loaded, loaded.Kind);
+            Assert.Equal("latest first edit", loaded.Value!.Single(item => item.Id == first).Content);
+            Assert.Equal("second edit", loaded.Value!.Single(item => item.Id == second).Content);
+            Assert.Equal(2, (await manager.SearchModule("", DateTimeOffset.UtcNow).SearchAsync(new ModuleSearchRequest("snip"))).Count);
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     [Fact]

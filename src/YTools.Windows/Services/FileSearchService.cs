@@ -16,7 +16,7 @@ public enum FileSearchMode
 /// <summary>
 /// Local file search. Uses the Everything engine when installed; otherwise a
 /// pruned, offline filename scan over the configured scopes. Content and tag
-/// searches degrade to filename matching when Everything is unavailable.
+/// queries report capability limits when Everything is unavailable.
 /// </summary>
 public sealed class FileSearchService : IDisposable
 {
@@ -119,6 +119,13 @@ public sealed class FileSearchService : IDisposable
 
         if (!usedEverything)
         {
+            if (effectiveMode is FileSearchMode.Content or FileSearchMode.Tag)
+            {
+                var name = effectiveMode == FileSearchMode.Content ? "内容" : "标签";
+                return [new LauncherResult("file-search-capability:" + effectiveMode, "spotlight",
+                    name + "搜索当前不可用", BackendDescription + "；请确认 Everything 已运行并支持此查询后重试。",
+                    new ResultIcon.System("info.circle"), 900, new ResultAction.None())];
+            }
             var roots = EffectiveRoots(scopePaths);
             paths = GetOrStartIndex(roots).Match(term, maximumResults, cancellationToken);
         }

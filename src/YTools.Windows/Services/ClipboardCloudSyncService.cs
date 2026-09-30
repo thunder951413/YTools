@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using WebDAVClient;
 using YTools.Models;
+using YTools.Core;
 using YTools.Services.Storage;
 
 namespace YTools.Services;
@@ -21,7 +22,7 @@ public sealed class ClipboardCloudSyncService : IDisposable
     private const string Server = "https://dav.jianguoyun.com";
     internal const int MaximumEventBytes = 8 * 1024 * 1024;
     private const int EnvelopeBytes = 49;
-    private const int MaximumPullEvents = 200;
+    private const int MaximumPullEvents = CloudBatchBudget.MaximumPullEvents;
     private const int MaximumHeadBytes = 4 * 1024;
     private readonly AppPreferences _preferences;
     private readonly SecureCodableStore _credentialStore = new("clipboard-cloud-credentials");
@@ -30,6 +31,7 @@ public sealed class ClipboardCloudSyncService : IDisposable
     private readonly object _stateLock = new();
     private ClipboardCloudState _state;
     private System.Threading.Timer? _pullTimer;
+    private bool _hasMoreRemote;
     private string? _createdRemoteRoot;
     private volatile string? _stateError;
     private volatile bool _disposed;
@@ -234,15 +236,15 @@ public sealed class ClipboardCloudSyncService : IDisposable
             await PublishPendingAsync(client, folders, credentials.SyncPassphrase, cancellation.Token);
             if (!pullRemote)
             {
-                Complete(completed, ClipboardCloudSyncResult.Succeeded(null, "剪贴板变更已加密上传。"));
+                Complete(completed, ClipboardCloudSyncResult.Succeeded(null, QueueMessage("剪贴板变更已加密上传。")) with { PendingUploads = PendingUploadCount });
                 return;
             }
 
             if (PendingBatch is null) { _ = await PullChangedEventsAsync(client, folders, credentials.SyncPassphrase, cancellation.Token); }
             List<ClipboardCloudEvent> inbox;
             lock (_stateLock) { inbox = _state.Inbox.ToList(); }
-            Complete(completed, ClipboardCloudSyncResult.Succeeded(null, inbox.Count == 0 ? "坚果云无新的剪贴板变更。" : "正在保存收到的剪贴板变更…")
-                with { Batch = inbox.Count == 0 ? null : new ClipboardCloudBatch(inbox) });
+            Complete(completed, ClipboardCloudSyncResult.Succeeded(null, QueueMessage(inbox.Count == 0 ? "坚果云无新的剪贴板变更。" : "正在保存收到的剪贴板变更…"))
+                with { Batch = inbox.Count == 0 ? null : new ClipboardCloudBatch(inbox), PendingUploads = PendingUploadCount, HasMoreRemote = _hasMoreRemote });
         }
         catch (Exception exception)
         {
@@ -334,6 +336,11 @@ public sealed class ClipboardCloudSyncService : IDisposable
         }
     }
 
+    private int PendingUploadCount { get { lock (_stateLock) { return _state.Pending.Count; } } }
+    private string QueueMessage(string message) => message
+        + (PendingUploadCount == 0 ? "" : $" 待上传 {PendingUploadCount} 条，分批继续。")
+        + (_hasMoreRemote ? " 远端仍有变更，保存本批后继续追赶。" : "");
+
     private async Task PublishPendingAsync(IClient client, RemoteFolders folders, string syncPassphrase, CancellationToken cancellationToken)
     {
         // Snapshot the pending batch up front. Events enqueued while this batch
@@ -347,9 +354,11 @@ public sealed class ClipboardCloudSyncService : IDisposable
                 return;
             }
 
-            batch = _state.Pending.OrderBy(item => item.Sequence).ToList();
+            batch = _state.Pending.OrderBy(item => item.Sequence).Take(CloudBatchBudget.MaximumUploadEvents).ToList();
         }
 
+        var published = new List<ClipboardCloudEvent>();
+        var uploadedBytes = 0;
         foreach (var entry in batch)
         {
             var clear = JsonSerializer.SerializeToUtf8Bytes(entry);
@@ -358,18 +367,21 @@ public sealed class ClipboardCloudSyncService : IDisposable
                 throw new InvalidDataException("单条剪贴板同步记录超过 8 MB 上限。");
             }
 
+            if (!CloudBatchBudget.CanInclude(published.Count, uploadedBytes, clear.Length + EnvelopeBytes)) { break; }
             var encrypted = ClipboardCloudCryptography.Seal(clear, syncPassphrase);
             using var stream = new MemoryStream(encrypted, writable: false);
             await client.Upload(folders.DeviceEvents, stream, EventName(entry.Sequence), cancellationToken: cancellationToken);
+            published.Add(entry);
+            uploadedBytes += encrypted.Length;
         }
 
-        var latest = batch.Max(item => item.Sequence);
+        var latest = published.Max(item => item.Sequence);
         var head = JsonSerializer.SerializeToUtf8Bytes(new ClipboardCloudHead(2, _state.DeviceId, latest, DateTimeOffset.UtcNow));
         using var streamHead = new MemoryStream(head, writable: false);
         await client.Upload(folders.Heads, streamHead, HeadName(_state.DeviceId), cancellationToken: cancellationToken);
         lock (_stateLock)
         {
-            var uploaded = batch.Select(item => item.Sequence).ToHashSet();
+            var uploaded = published.Select(item => item.Sequence).ToHashSet();
             _state.Pending.RemoveAll(item => uploaded.Contains(item.Sequence));
             _state.KnownSequences[_state.DeviceId] = Math.Max(
                 _state.KnownSequences.TryGetValue(_state.DeviceId, out var known) ? known : 0,
@@ -384,6 +396,7 @@ public sealed class ClipboardCloudSyncService : IDisposable
         string syncPassphrase,
         CancellationToken cancellationToken)
     {
+        _hasMoreRemote = false;
         var events = new List<ClipboardCloudEvent>();
         var advances = new Dictionary<Guid, long>();
         var receivedBytes = 0;
@@ -412,6 +425,7 @@ public sealed class ClipboardCloudSyncService : IDisposable
             var eventFolder = folders.Events + "/" + head.DeviceId.ToString("N");
             for (var next = known + 1; next <= head.LastSequence && events.Count < MaximumPullEvents; next += 1)
             {
+                if (!CloudBatchBudget.CanInclude(events.Count, receivedBytes, MaximumEventBytes, MaximumPullEvents)) { _hasMoreRemote = true; break; }
                 using var stream = await client.Download(eventFolder + "/" + EventName(next), cancellationToken);
                 var encrypted = await ReadBoundedAsync(stream, MaximumEventBytes, cancellationToken);
                 receivedBytes += encrypted.Length;
@@ -429,7 +443,7 @@ public sealed class ClipboardCloudSyncService : IDisposable
                 if (receivedBytes >= 16 * 1024 * 1024 || next == head.LastSequence) { break; }
             }
 
-            if (events.Count >= MaximumPullEvents || receivedBytes >= 16 * 1024 * 1024) { break; }
+            if (_hasMoreRemote || events.Count >= MaximumPullEvents || receivedBytes >= CloudBatchBudget.MaximumBytes) { _hasMoreRemote = true; break; }
         }
 
         if (events.Count > 0)
@@ -709,6 +723,8 @@ internal sealed record ClipboardCloudBatch(IReadOnlyList<ClipboardCloudSyncServi
 
 public sealed record ClipboardCloudSyncResult(bool Success, bool WasSkipped, IReadOnlyList<ClipboardHistoryItem>? Items, string? Message)
 {
+    public int PendingUploads { get; init; }
+    public bool HasMoreRemote { get; init; }
     internal ClipboardCloudBatch? Batch { get; init; }
 
     public static ClipboardCloudSyncResult Succeeded(IReadOnlyList<ClipboardHistoryItem>? items, string message) => new(true, false, items, message);

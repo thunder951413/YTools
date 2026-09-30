@@ -10,6 +10,7 @@ struct GeneralSettingsView: View {
         VStack(spacing: 14) {
             SettingsCard(title: "启动器", icon: "magnifyingglass") {
                 Toggle("登录时启动 YTools", isOn: $preferences.launchAtLogin)
+                    .settingsTarget("LaunchAtLogin")
                 if let error = preferences.launchAtLoginError {
                     Text(error).font(.caption).foregroundStyle(.orange)
                 }
@@ -102,7 +103,7 @@ struct SearchSettingsView: View {
                         }
                     }
                 }
-            }
+            }.settingsTarget("EnabledSearchContentTypes")
 
             SettingsCard(title: "默认结果", icon: "list.bullet") {
                 SettingsRow(title: "输入停止后搜索", detail: searchDelayDescription) {
@@ -111,6 +112,7 @@ struct SearchSettingsView: View {
                 }
                 Divider()
                 Toggle("在默认结果中显示本地文件", isOn: $preferences.includeFilesInDefaultResults)
+                    .settingsTarget("IncludeFilesInDefaultResults")
                     .disabled(!preferences.isSearchContentEnabled(.files))
                 Divider()
                 Toggle("自动显示单词释义", isOn: $preferences.includeAutomaticDictionary)
@@ -154,10 +156,11 @@ struct SearchSettingsView: View {
                         Button("恢复主目录") { preferences.searchScopePaths = [] }
                     }
                 }
-            }
+            }.settingsTarget("SearchScopePaths")
 
             SettingsCard(title: "文件导航", icon: "folder") {
                 Toggle("显示隐藏文件", isOn: $preferences.fileNavigationShowsHiddenFiles)
+                    .settingsTarget("FileNavigationShowsHiddenFiles")
                 Divider()
                 SettingsRow(title: "排序依据", detail: "名称、创建时间或修改时间") {
                     Picker("", selection: $preferences.fileNavigationSort) {
@@ -168,8 +171,10 @@ struct SearchSettingsView: View {
                 }
                 Divider()
                 Toggle("升序排列", isOn: $preferences.fileNavigationSortAscending)
+                    .settingsTarget("FileNavigationSortAscending")
                 Divider()
                 Toggle("文件夹优先", isOn: $preferences.fileNavigationFoldersFirst)
+                    .settingsTarget("FileNavigationFoldersFirst")
                 Divider()
                 Text("输入 / 或 ~ 浏览；文件名可使用 * 通配符。")
                     .font(.caption)
@@ -222,7 +227,7 @@ struct AppearanceSettingsView: View {
                 Text(preferences.launcherAppearanceStyle.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
+            }.settingsTarget("LauncherAppearanceStyle")
             SettingsCard(title: "窗口与结果", icon: "paintbrush") {
                 SettingsRow(title: "颜色模式", detail: "应用于启动器、剪贴板和设置") {
                     Picker("", selection: $preferences.theme) {
@@ -241,10 +246,13 @@ struct AppearanceSettingsView: View {
                 }
                 Divider()
                 Toggle("使用紧凑结果间距", isOn: $preferences.compactResults)
+                    .settingsTarget("CompactResults")
                 Divider()
                 Toggle("显示结果副标题和路径", isOn: $preferences.showSubtitles)
+                    .settingsTarget("ShowSubtitles")
                 Divider()
                 Toggle("显示 Command + 1…9 快速执行提示", isOn: $preferences.showNumberShortcuts)
+                    .settingsTarget("ShowNumberShortcuts")
                 Divider()
                 SettingsRow(
                     title: "预览切换停留时间",

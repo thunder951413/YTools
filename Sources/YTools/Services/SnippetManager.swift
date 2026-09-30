@@ -10,6 +10,7 @@ final class SnippetManager: ObservableObject, SnippetSaving {
     @Published private(set) var storageError: String?
     @Published private(set) var isLoaded = false
     @Published private(set) var isSaving = false
+    @Published private(set) var hasPendingChanges = false
     private let writer: OrderedSecureStoreWriter
     private let saveDebouncer = DebouncedAction()
     private var pendingMutations: [PendingMutation] = []
@@ -35,7 +36,8 @@ final class SnippetManager: ObservableObject, SnippetSaving {
     var storageStatus: String {
         if !isLoaded { return "正在读取加密片段…" }
         if isSaving { return "正在加密保存…" }
-        return storageError ?? "已安全保存"
+        if let storageError { return storageError }
+        return hasPendingChanges ? "修改待保存…" : "已安全保存"
     }
 
     private func startLoading() {
@@ -107,6 +109,15 @@ final class SnippetManager: ObservableObject, SnippetSaving {
         return revision
     }
 
+    @discardableResult
+    func createDraft() -> UUID {
+        let now = Date()
+        let item = SnippetItem(id: UUID(), title: "新片段", keyword: "", content: "", collection: "默认", createdAt: now, updatedAt: now)
+        apply(.insert(item))
+        if isLoaded { _ = queueCurrentSnapshot(failureMessage: "无法保存新片段。") }
+        return item.id
+    }
+
     func delete(_ item: SnippetItem) {
         apply(.delete(item.id))
         if isLoaded { _ = queueCurrentSnapshot(failureMessage: "无法保存删除操作。") }
@@ -130,7 +141,7 @@ final class SnippetManager: ObservableObject, SnippetSaving {
     func flushPendingChanges() async {
         saveDebouncer.cancel()
         await initializationTask?.value
-        if queuedRevision < revision {
+        if queuedRevision < revision || (hasPendingChanges && revision > 0) {
             _ = await queueCurrentSnapshot(failureMessage: "无法保存文本片段修改。").value
         }
         _ = await waitForQueuedWrites()
@@ -143,6 +154,7 @@ final class SnippetManager: ObservableObject, SnippetSaving {
         mutation.apply(to: &items)
         if !isLoaded { pendingMutations.append(mutation) }
         revision &+= 1
+        hasPendingChanges = true
     }
 
     private func queueCurrentSnapshot(failureMessage: String) -> Task<Bool, Never> {
@@ -158,6 +170,7 @@ final class SnippetManager: ObservableObject, SnippetSaving {
             if saveRevision == revision {
                 isSaving = false
                 storageError = success ? nil : failureMessage
+                hasPendingChanges = !success
             }
             return success
         }
@@ -212,11 +225,11 @@ struct SnippetSearchModule: YToolsModule {
     func search(_ request: ModuleSearchRequest) async throws -> [LauncherResult] {
         guard let term = searchTerm(request.query) else { return [] }
         return items.filter { item in
-            term.isEmpty
+            !item.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (term.isEmpty
                 || item.title.localizedCaseInsensitiveContains(term)
                 || item.keyword.localizedCaseInsensitiveContains(term)
                 || item.content.localizedCaseInsensitiveContains(term)
-                || item.collection.localizedCaseInsensitiveContains(term)
+                || item.collection.localizedCaseInsensitiveContains(term))
         }
         .prefix(30)
         .map { item in

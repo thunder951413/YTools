@@ -3,7 +3,15 @@ import SwiftUI
 struct ClipboardHistoryView: View {
     @ObservedObject var manager: ClipboardHistoryManager
     @ObservedObject var preferences: AppPreferences
+    @ObservedObject private var preview: ClipboardPreviewController
     let onActivate: () -> Void
+
+    init(manager: ClipboardHistoryManager, preferences: AppPreferences, onActivate: @escaping () -> Void) {
+        self.manager = manager
+        self.preferences = preferences
+        self.onActivate = onActivate
+        self.preview = manager.preview
+    }
 
     @FocusState private var searchFocused: Bool
 
@@ -28,6 +36,11 @@ struct ClipboardHistoryView: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(width: 260)
+                Button { manager.togglePreview() } label: {
+                    Image(systemName: preview.isVisible ? "sidebar.right" : "doc.text.magnifyingglass")
+                }
+                .buttonStyle(.plain).help("内容预览（⌘P）")
+                .accessibilityLabel(preview.isVisible ? "关闭内容预览" : "显示内容预览")
                 Button {
                     Task { await manager.syncCloudNow() }
                 } label: {
@@ -75,6 +88,8 @@ struct ClipboardHistoryView: View {
                 statusMessage(manager.cloudSyncStatus, symbol: "arrow.triangle.2.circlepath", tint: .secondary)
             }
 
+            HStack(spacing: 0) {
+            Group {
             if manager.filteredItems.isEmpty {
                 ContentUnavailableView(
                     manager.items.isEmpty ? "暂无剪贴板历史" : "没有匹配内容",
@@ -104,6 +119,7 @@ struct ClipboardHistoryView: View {
                                 Button("复制") {
                                     Task { if await manager.copy(item) { onActivate() } }
                                 }
+                                Button("预览") { manager.selectedIndex = index; preview.show(item) }
                                 Button("删除", role: .destructive) {
                                     manager.delete(item)
                                 }
@@ -124,6 +140,13 @@ struct ClipboardHistoryView: View {
                 }
             }
 
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if preview.isVisible {
+                Divider()
+                ClipboardPreviewView(preview: preview).frame(width: 280)
+            }
+            }
             Divider()
             HStack(spacing: 12) {
                 Text("已显示 \(manager.filteredItems.count) / 匹配 \(manager.totalMatches) 条")
