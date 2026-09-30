@@ -109,7 +109,7 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                        <TextBox x:Name="SearchBox"
+                        <TextBox x:Name="SearchBox" Tag="搜索剪贴板历史…"
                              Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
                              FontSize="16"
                              Foreground="{DynamicResource TextPrimaryBrush}"

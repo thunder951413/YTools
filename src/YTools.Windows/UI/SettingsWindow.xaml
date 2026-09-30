@@ -66,7 +66,7 @@
             </Grid>
         </DataTemplate>
     </Window.Resources>
-    <Grid>
+    <Grid Background="{DynamicResource WindowBackgroundBrush}">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="216" />
             <ColumnDefinition Width="*" />
@@ -85,7 +85,7 @@
                                FontSize="11.5"
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,3,0,0" />
-                    <TextBox x:Name="SettingsSearchBox" Margin="0,12,0,0" Padding="8,6"
+                    <TextBox x:Name="SettingsSearchBox" Tag="搜索设置…" Margin="0,12,0,0" Padding="8,6"
                              TextChanged="SettingsSearch_TextChanged"
                              AutomationProperties.Name="搜索具体设置"
                              ToolTip="搜索设置，例如：坚果云、快捷键、主题" />

@@ -34,7 +34,7 @@ final class ClipboardPreviewTests: XCTestCase {
 
     func testOriginalImageDecoderReportsDimensionsAndRejectsOversizeData() async throws {
         let decoder = ClipboardPreviewDecoder()
-        let data = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII="))
+        let data = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII="))
         let image = await decoder.decode(data)
         XCTAssertEqual(image?.width, 1)
         XCTAssertEqual(image?.height, 1)

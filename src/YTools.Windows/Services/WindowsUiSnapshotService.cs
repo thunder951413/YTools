@@ -64,6 +64,7 @@ internal static class WindowsUiSnapshotService
         await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         window.UpdateLayout();
         var view = (FrameworkElement)window.Content;
+        if (view is System.Windows.Controls.Panel panel && panel.Background is null) { panel.Background = window.Background; }
         var bitmap = new RenderTargetBitmap((int)Math.Ceiling(view.ActualWidth * scale), (int)Math.Ceiling(view.ActualHeight * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
         bitmap.Render(view);
         bitmap.Freeze();

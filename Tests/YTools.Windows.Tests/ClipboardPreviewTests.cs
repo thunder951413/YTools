@@ -39,7 +39,7 @@ public sealed class ClipboardPreviewTests
     [Fact]
     public async Task OriginalImageKeepsDimensionsAndCanCrossThreadBoundary()
     {
-        var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=");
+        var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=");
         var controller = new ClipboardPreviewController(_ => Task.FromResult<byte[]?>(bytes));
         controller.Show(Item(ClipboardItemKind.Image, ["image"]));
         await controller.WaitUntilLoadedAsync();

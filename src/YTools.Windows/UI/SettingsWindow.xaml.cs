@@ -67,9 +67,16 @@ public partial class SettingsWindow : Window
         {
             if (NavList.SelectedItem is NavItem item && _pages.TryGetValue(item, out var page))
             {
+                if (_targetHighlight is { } old) { AdornerLayer.GetAdornerLayer(old.AdornedElement)?.Remove(old); _targetHighlight = null; }
                 SettingsSearchBox.Clear();
                 PageHost.Content = page;
             }
+        };
+        PreviewKeyDown += (_, args) =>
+        {
+            if (args.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control
+                && _launcherRecorder?.IsKeyboardFocusWithin != true && _clipboardRecorder?.IsKeyboardFocusWithin != true)
+            { SettingsSearchBox.Focus(); SettingsSearchBox.SelectAll(); args.Handled = true; }
         };
         SourceInitialized += (_, _) => ApplyDarkTitleBar();
     }
@@ -768,7 +775,7 @@ public partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetLiveSetting(status, System.Windows.Automation.AutomationLiveSetting.Polite);
         stack.Children.Add(status);
         stack.Children.Add(new TextBlock { Text = "修改自动加密保存；空白草稿不会出现在启动器结果中。", Style = (Style)FindResource("HintText") });
-        _snippetFilter = new TextBox { Margin = new Thickness(0, 8, 0, 8), ToolTip = "搜索标题、关键词、分类或内容" };
+        _snippetFilter = new TextBox { Tag = "搜索标题、关键词、分类或内容", Margin = new Thickness(0, 8, 0, 8), ToolTip = "搜索标题、关键词、分类或内容" };
         System.Windows.Automation.AutomationProperties.SetName(_snippetFilter, "筛选文本片段");
         _snippetFilter.TextChanged += (_, _) => { _editingSnippetId = null; RefreshSnippets(); };
         stack.Children.Add(_snippetFilter);
@@ -833,7 +840,7 @@ public partial class SettingsWindow : Window
             _snippets?.Delete(item);
         }));
         buttons.Children.Add(Button("立即保存 / 重试", async () => { if (_snippets is not null) { await _snippets.FlushPendingChangesAsync(); } }));
-        stack.Children.Add(buttons);
+        stack.Children.Insert(3, buttons);
         _snippetCount = new TextBlock { Style = (Style)FindResource("HintText") };
         stack.Children.Add(_snippetCount);
         page.Content = Scroll(stack);
