@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 enum ActionExecutionOutcome {
     case hidePanel
     case keepPanel
+    case backgroundStarted
     case navigate(String)
     case preview(URL)
     case clearFileBufferAndHide
@@ -43,6 +44,23 @@ final class ActionDispatcher {
     private let snippets: any SnippetSaving
     private let recentDocuments: any RecentDocumentsRecording
     private let fileOperations = FileOperationService()
+    private var fileOperationTask: Task<Void, Never>?
+    private var isShuttingDown = false
+    private(set) var isBusy = false
+    private(set) var isChoosingDestination = false
+    private(set) var statusText = ""
+    var onStatusChanged: ((Bool, String) -> Void)?
+
+    func flushPendingOperations() async {
+        isShuttingDown = true
+        await fileOperationTask?.value
+    }
+
+    func clearStatus() {
+        guard !isBusy else { return }
+        statusText = ""
+        onStatusChanged?(false, "")
+    }
     private let onOpenSettings: () -> Void
     private let onShowLargeType: (String) -> Void
 
@@ -59,6 +77,8 @@ final class ActionDispatcher {
     }
 
     func execute(_ action: ResultAction) -> ActionExecutionOutcome {
+        guard !isBusy, !isShuttingDown else { return .keepPanel }
+        clearStatus()
         switch action {
         case let .copy(text):
             copyText(text)
@@ -105,6 +125,8 @@ final class ActionDispatcher {
     }
 
     func execute(_ kind: LauncherActionKind) -> ActionExecutionOutcome {
+        guard !isBusy, !isShuttingDown else { return .keepPanel }
+        clearStatus()
         switch kind {
         case let .perform(action):
             return execute(action)
@@ -204,19 +226,31 @@ final class ActionDispatcher {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = operation == .move ? "移动到这里" : "复制到这里"
+        isChoosingDestination = true
+        defer { isChoosingDestination = false }
         guard panel.runModal() == .OK, let directory = panel.url else { return .keepPanel }
 
-        Task { [weak self, fileOperations] in
+        return startFileOperation(operation, source: source, directory: directory)
+    }
+
+    /// Also used by isolated regression tests without opening a native picker.
+    func startFileOperation(_ operation: FileOperationService.Operation, source: URL, directory: URL) -> ActionExecutionOutcome {
+        guard !isBusy, !isShuttingDown else { return .keepPanel }
+        isBusy = true
+        let verb = operation == .move ? "移动" : "复制"
+        statusText = "正在\(verb)“\(source.lastPathComponent)” → \(directory.path)"
+        onStatusChanged?(true, statusText)
+        fileOperationTask = Task { [self, fileOperations] in
             do {
                 try await fileOperations.perform(operation, source: source, destinationDirectory: directory)
+                statusText = "\(verb)完成：\(source.lastPathComponent) → \(directory.path)"
             } catch {
-                self?.showAlert(
-                    title: operation == .move ? "移动失败" : "复制失败",
-                    message: error.localizedDescription
-                )
+                statusText = "\(verb)失败：\(error.localizedDescription)"
             }
+            isBusy = false
+            onStatusChanged?(false, statusText)
         }
-        return .hidePanel
+        return .backgroundStarted
     }
 
     private func openWithApplication(_ url: URL) -> ActionExecutionOutcome {

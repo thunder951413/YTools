@@ -122,6 +122,7 @@ public sealed class MainController
         _launcherWindow?.HidePanel();
         _clipboardWindow?.HidePanel();
         _settingsWindow?.Close();
+        if (_launcher is not null) { await _launcher.FlushPendingActionsAsync(); }
         if (_clipboard is not null) { await _clipboard.FlushPendingChangesAsync(); }
         Application.Current.Shutdown();
     }

@@ -108,6 +108,8 @@ public partial class LauncherWindow : Window
     {
         switch (e.PropertyName)
         {
+            case nameof(LauncherModel.HasActionStatus):
+            case nameof(LauncherModel.LayoutRowCount):
             case nameof(LauncherModel.Results):
             case nameof(LauncherModel.IsSearchPending):
             case nameof(LauncherModel.Actions):
@@ -312,6 +314,7 @@ public partial class LauncherWindow : Window
 
     private void OnDeactivated(object sender, EventArgs e)
     {
+        if (_model?.IsChoosingActionDestination == true) { return; }
         if (!IsVisible)
         {
             return;
@@ -401,14 +404,7 @@ public partial class LauncherWindow : Window
         ResultRowHeight = rowHeight;
 
         double contentHeight;
-        if (_model.IsSearchPending)
-        {
-            // Match macOS: while the idle timer/search is pending, keep only the
-            // input row visible. The result body is published and expanded once
-            // for the final query instead of flashing stale intermediate results.
-            contentHeight = headerHeight;
-        }
-        else if (string.IsNullOrWhiteSpace(_model.Query)
+        if (string.IsNullOrWhiteSpace(_model.Query)
                  && DesignTokens.CollapsesWhenIdle(style)
                  && !_model.IsShowingActions)
         {
@@ -416,7 +412,7 @@ public partial class LauncherWindow : Window
         }
         else
         {
-            var count = _model.VisibleItemCount;
+            var count = _model.LayoutRowCount;
             var bodyHeight = count == 0
                 ? DesignTokens.EmptyBodyHeightFor(style)
                 : Math.Min(count, 6) * rowHeight;
@@ -425,6 +421,8 @@ public partial class LauncherWindow : Window
                 DesignTokens.PanelMaximumHeight,
                 Math.Max(headerHeight + bodyHeight + footerHeight, DesignTokens.PanelMinimumHeight));
         }
+
+        if (_model.HasActionStatus) { contentHeight += 32; }
 
         var width = _preferences.PanelWidth + (_model.ShowsPreview && _model.SelectedFilePath is not null ? PreviewWidth : 0);
         var cornerRadius = _preferences.PanelCornerRadius;
@@ -482,6 +480,8 @@ public partial class LauncherWindow : Window
             return;
         }
 
+        SearchingState.Visibility = _model.IsSearchPending && _model.Results.Count == 0 && !_model.IsShowingActions
+            ? Visibility.Visible : Visibility.Collapsed;
         EmptyState.Visibility = !_model.IsSearchPending
             && _model.Results.Count == 0
             && !_model.IsShowingActions

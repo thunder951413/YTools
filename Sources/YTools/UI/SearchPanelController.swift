@@ -108,6 +108,8 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
+    func flushPendingActions() async { await launcher.flushPendingActions() }
+
     func shutdown() {
         shiftPreviewTimer?.invalidate()
         shiftPreviewTimer = nil
@@ -175,6 +177,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        guard !launcher.isChoosingActionDestination else { return }
         hide()
     }
 
@@ -239,13 +242,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         let count: Int
         switch state.mode {
         case .launcher:
-            // A pending debounced query keeps only the input row visible. The
-            // panel expands once, when the final query publishes its results.
-            if launcher.isSearchPending {
-                setPanelContentHeight(style.headerHeight, window: window, animated: animated)
-                return
-            }
-            count = launcher.visibleItemCount
+            count = launcher.layoutRowCount
         case .clipboard:
             count = clipboard.filteredItems.count
         }
@@ -256,7 +253,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
            style.collapsesWhenIdle,
            launcher.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !launcher.isShowingActions {
-            setPanelContentHeight(style.headerHeight, window: window, animated: animated)
+            setPanelContentHeight(style.headerHeight + (launcher.actionStatusText.isEmpty ? 0 : 32), window: window, animated: animated)
             return
         }
         let bodyHeight = count == 0
@@ -269,7 +266,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         let contentHeight = min(
             DesignTokens.panelMaximumHeight,
             max(
-                headerHeight + bodyHeight + footerHeight,
+                headerHeight + bodyHeight + footerHeight + (state.mode == .clipboard || !launcher.actionStatusText.isEmpty ? 32 : 0),
                 headerHeight
             )
         )

@@ -45,6 +45,23 @@ public sealed class ActionDispatcher
     private readonly Action<string> _onShowLargeType;
     private readonly Func<Window?> _ownerProvider;
     private int _backgroundOperationActive;
+    private Task _pendingOperation = Task.CompletedTask;
+    private bool _isShuttingDown;
+    public string StatusText { get; private set; } = "";
+    public bool IsChoosingDestination { get; private set; }
+
+    public async Task FlushPendingOperationsAsync()
+    {
+        _isShuttingDown = true;
+        await _pendingOperation;
+    }
+
+    public void ClearStatus()
+    {
+        if (IsBusy) { return; }
+        StatusText = "";
+        BusyStateChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     public event EventHandler<ActionExecutionResult>? BackgroundOperationCompleted;
 
@@ -68,6 +85,8 @@ public sealed class ActionDispatcher
 
     public ActionExecutionResult Execute(ResultAction action)
     {
+        if (_isShuttingDown || IsBusy) { return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel); }
+        ClearStatus();
         switch (action)
         {
             case ResultAction.Copy copy:
@@ -129,6 +148,8 @@ public sealed class ActionDispatcher
 
     public ActionExecutionResult Execute(LauncherAction action)
     {
+        if (_isShuttingDown || IsBusy) { return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel); }
+        ClearStatus();
         switch (action.Kind)
         {
             case LauncherActionKind.Perform when action.Payload is ResultAction resultAction:
@@ -266,7 +287,11 @@ public sealed class ActionDispatcher
             Multiselect = false
         };
         var owner = _ownerProvider();
-        if (dialog.ShowDialog(owner) != true || string.IsNullOrEmpty(dialog.FolderName))
+        bool? accepted;
+        IsChoosingDestination = true;
+        try { accepted = dialog.ShowDialog(owner); }
+        finally { IsChoosingDestination = false; }
+        if (accepted != true || string.IsNullOrEmpty(dialog.FolderName))
         {
             return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);
         }
@@ -317,13 +342,13 @@ public sealed class ActionDispatcher
                     File.Copy(normalizedSource, destination);
                 }
 
-                return new ActionExecutionResult(ActionExecutionOutcome.HidePanel);
+                return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);
             }
             catch (Exception exception)
             {
                 return Failure(move ? "移动失败" : "复制失败", exception);
             }
-        });
+        }, $"{(move ? "移动" : "复制")}“{Path.GetFileName(normalizedSource)}” → {destinationDirectory}");
     }
 
     private ActionExecutionResult MoveToTrash(string path)
@@ -692,12 +717,12 @@ public sealed class ActionDispatcher
         return completion.Task;
     }
 
-    private ActionExecutionResult BeginBackgroundOperation(Func<ActionExecutionResult> operation)
+    private ActionExecutionResult BeginBackgroundOperation(Func<ActionExecutionResult> operation, string description = "文件操作")
     {
-        return BeginBackgroundOperation(() => Task.Run(operation));
+        return BeginBackgroundOperation(() => Task.Run(operation), description);
     }
 
-    private ActionExecutionResult BeginBackgroundOperation(Func<Task<ActionExecutionResult>> operation)
+    private ActionExecutionResult BeginBackgroundOperation(Func<Task<ActionExecutionResult>> operation, string description = "文件操作")
     {
         if (Interlocked.CompareExchange(ref _backgroundOperationActive, 1, 0) != 0)
         {
@@ -705,6 +730,9 @@ public sealed class ActionDispatcher
             return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);
         }
 
+        StatusText = $"正在{description}";
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingOperation = completion.Task;
         BusyStateChanged?.Invoke(this, EventArgs.Empty);
         var dispatcher = _ownerProvider()?.Dispatcher ?? Application.Current?.Dispatcher;
         Task<ActionExecutionResult> operationTask;
@@ -724,6 +752,7 @@ public sealed class ActionDispatcher
                 : Failure("文件操作失败", task.Exception?.GetBaseException() ?? new IOException("未知错误。"));
             void Complete()
             {
+                StatusText = result.ErrorTitle is null ? $"已完成：{description}" : $"{result.ErrorTitle}：{result.ErrorMessage}";
                 Interlocked.Exchange(ref _backgroundOperationActive, 0);
                 BusyStateChanged?.Invoke(this, EventArgs.Empty);
                 if (result.ErrorTitle is not null)
@@ -732,6 +761,7 @@ public sealed class ActionDispatcher
                 }
 
                 BackgroundOperationCompleted?.Invoke(this, result);
+                completion.TrySetResult();
             }
 
             if (dispatcher is not null && !dispatcher.CheckAccess())

@@ -40,6 +40,11 @@ public sealed class LauncherModel : ObservableObject
     private string? _displayedPreviewPath;
     private string? _pinnedPreviewPath;
     private bool _momentaryPreviewActive;
+    private readonly SearchPresentationState _presentation = new();
+    private bool _applyingResults;
+    private bool _backgroundPending;
+    private bool _filePending;
+    public int LayoutRowCount => IsShowingActions ? Actions.Count : _presentation.ReservedRows;
 
     public LauncherModel(
         AppPreferences preferences,
@@ -61,7 +66,12 @@ public sealed class LauncherModel : ObservableObject
             onOpenSettings,
             onShowLargeType,
             ownerProvider);
-        _actionDispatcher.BusyStateChanged += (_, _) => RaisePropertyChanged(nameof(IsActionBusy));
+        _actionDispatcher.BusyStateChanged += (_, _) =>
+        {
+            RaisePropertyChanged(nameof(IsActionBusy));
+            RaisePropertyChanged(nameof(ActionStatusText));
+            RaisePropertyChanged(nameof(HasActionStatus));
+        };
         _actionDispatcher.BackgroundOperationCompleted += (_, result) => _ = Apply(result);
         _fileSearch.FallbackIndexRefreshed += (_, _) => RefreshFileResultsAfterIndexBuild();
         preferences.PropertyChanged += (_, args) =>
@@ -124,6 +134,11 @@ public sealed class LauncherModel : ObservableObject
         private set => SetField(ref _isSearchPending, value);
     }
 
+    public bool IsChoosingActionDestination => _actionDispatcher.IsChoosingDestination;
+    public string ActionStatusText => _actionDispatcher.StatusText;
+    public bool HasActionStatus => !string.IsNullOrEmpty(ActionStatusText);
+    public Task FlushPendingActionsAsync() => _actionDispatcher.FlushPendingOperationsAsync();
+
     public bool IsActionBusy => _actionDispatcher.IsBusy;
 
     public int SelectedIndex
@@ -133,6 +148,7 @@ public sealed class LauncherModel : ObservableObject
         {
             if (SetField(ref _selectedIndex, value))
             {
+                if (!_applyingResults && _results.Indices().Contains(value)) { _presentation.UserSelected(); }
                 SchedulePreviewUpdate();
             }
         }
@@ -251,6 +267,7 @@ public sealed class LauncherModel : ObservableObject
             return;
         }
 
+        _presentation.UserSelected();
         SelectedIndex = (_selectedIndex + offset + _results.Count) % _results.Count;
     }
 
@@ -267,6 +284,7 @@ public sealed class LauncherModel : ObservableObject
 
     public void TogglePreview()
     {
+        _presentation.UserSelected();
         if (SelectedFilePath is null)
         {
             ShowsPreview = false;
@@ -288,6 +306,7 @@ public sealed class LauncherModel : ObservableObject
 
     public bool BeginMomentaryPreview()
     {
+        _presentation.UserSelected();
         if (IsShowingActions || SelectedFilePath is null || ShowsPreview)
         {
             return false;
@@ -320,6 +339,7 @@ public sealed class LauncherModel : ObservableObject
 
     public bool ShowActionsForSelected()
     {
+        _presentation.UserSelected();
         if (IsShowingActions || _results.Count <= _selectedIndex || _selectedIndex < 0)
         {
             return false;
@@ -388,6 +408,7 @@ public sealed class LauncherModel : ObservableObject
 
     public bool AddSelectedToBuffer(bool moveToNext)
     {
+        _presentation.UserSelected();
         if (IsShowingActions
             || _results.Count <= _selectedIndex
             || _selectedIndex < 0
@@ -521,6 +542,7 @@ public sealed class LauncherModel : ObservableObject
 
     private void QueryDidChange()
     {
+        _actionDispatcher.ClearStatus();
         if (IsShowingActions)
         {
             DismissActions();
@@ -542,6 +564,8 @@ public sealed class LauncherModel : ObservableObject
         }
         else
         {
+            _presentation.BeginQuery();
+            RaisePropertyChanged(nameof(LayoutRowCount));
             if (!IsSearchPending)
             {
                 IsSearchPending = true;
@@ -602,10 +626,13 @@ public sealed class LauncherModel : ObservableObject
 
         _fileResults = [];
         _backgroundResults = [];
+        _presentation.BeginQuery();
+        _backgroundPending = true;
         _searchCancellation?.Cancel();
         var cancellation = new CancellationTokenSource();
         _searchCancellation = cancellation;
         var generation = Interlocked.Increment(ref _searchGeneration);
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
 
         var request = new BackgroundSearchRequest(
             requestedQuery,
@@ -622,7 +649,12 @@ public sealed class LauncherModel : ObservableObject
             generation);
 
         _ = Task.Run(
-                () => _searchCoordinator.SearchAsync(request),
+                () => _searchCoordinator.SearchAsync(request, updates => dispatcher.InvokeAsync(() =>
+                {
+                    if (!IsCurrentSearch(requestedQuery, generation, cancellation.Token)) { return; }
+                    _backgroundResults = updates.ToList();
+                    RebuildResults();
+                }).Task),
                 cancellation.Token)
             .ContinueWith(task =>
             {
@@ -635,7 +667,8 @@ public sealed class LauncherModel : ObservableObject
                     if (isNewestRequest)
                     {
                         _backgroundResults = [];
-                        IsSearchPending = false;
+                        _backgroundPending = false;
+                        IsSearchPending = _filePending;
                         RebuildResults();
                     }
 
@@ -646,7 +679,8 @@ public sealed class LauncherModel : ObservableObject
                 {
                     if (isNewestRequest)
                     {
-                        IsSearchPending = false;
+                        _backgroundPending = false;
+                        IsSearchPending = _filePending;
                         RebuildResults();
                     }
 
@@ -656,7 +690,8 @@ public sealed class LauncherModel : ObservableObject
                 if (isNewestRequest)
                 {
                     _backgroundResults = task.Result.ToList();
-                    IsSearchPending = false;
+                    _backgroundPending = false;
+                    IsSearchPending = _filePending;
                     RebuildResults();
                 }
             }, TaskScheduler.FromCurrentSynchronizationContext());
@@ -667,6 +702,7 @@ public sealed class LauncherModel : ObservableObject
         var fileQuery = IsFileNavigationActive || !includeFiles
             ? ""
             : requestedQuery;
+        _filePending = !string.IsNullOrEmpty(fileQuery);
         ScheduleFileSearch(fileQuery, requestedQuery, generation, cancellation.Token);
         RebuildResults();
     }
@@ -723,11 +759,15 @@ public sealed class LauncherModel : ObservableObject
                 if (task.IsCompletedSuccessfully && canPublish)
                 {
                     _fileResults = task.Result.ToList();
+                    _filePending = false;
+                    IsSearchPending = _backgroundPending;
                     RebuildResults();
                 }
                 else if (task.IsFaulted && canPublish)
                 {
                     _fileResults = [];
+                    _filePending = false;
+                    IsSearchPending = _backgroundPending;
                     RebuildResults();
                 }
             }, TaskScheduler.FromCurrentSynchronizationContext());
@@ -775,6 +815,10 @@ public sealed class LauncherModel : ObservableObject
 
     private void ResetForEmptyQuery()
     {
+        _presentation.Reset();
+        _backgroundPending = false;
+        _filePending = false;
+        RaisePropertyChanged(nameof(LayoutRowCount));
         _searchDebouncer.Cancel();
         _searchCancellation?.Cancel();
         _fileResults = [];
@@ -802,11 +846,15 @@ public sealed class LauncherModel : ObservableObject
             _backgroundResults,
             _fileResults,
             Query,
-            _results,
-            _selectedIndex);
+            _presentation.PreservesSelection ? _results : [],
+            _presentation.PreservesSelection ? _selectedIndex : 0);
+        _applyingResults = true;
         _results = aggregated.Results.ToList();
-        SelectedIndex = aggregated.SelectedIndex;
         RaisePropertyChanged(nameof(Results));
+        SelectedIndex = aggregated.SelectedIndex;
+        _applyingResults = false;
+        _presentation.IncludeResults(_results.Count);
+        RaisePropertyChanged(nameof(LayoutRowCount));
         RaisePropertyChanged(nameof(VisibleItemCount));
         if (SelectedFilePath is null)
         {
@@ -934,6 +982,7 @@ public sealed class LauncherModel : ObservableObject
                 ClearFileBuffer();
                 return true;
             case ActionExecutionOutcome.BackgroundStarted:
+                DismissActions();
                 return false;
             default:
                 return false;

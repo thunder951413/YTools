@@ -68,13 +68,26 @@ struct LauncherView: View {
                 .frame(height: style.headerHeight)
             }
 
-            if !model.isSearchPending, !isIdle || !style.collapsesWhenIdle {
+            if !model.actionStatusText.isEmpty {
+                HStack(spacing: 8) {
+                    if model.isActionBusy { ProgressView().controlSize(.small) }
+                    Text(model.actionStatusText).lineLimit(1).truncationMode(.middle)
+                        .help(model.actionStatusText)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 22)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: 32)
+                .accessibilityLabel(model.actionStatusText)
+            }
+            if !isIdle || !style.collapsesWhenIdle {
                 Divider()
 
                 resultContent
             }
 
-            if style.showsFooter, !isIdle, !model.isSearchPending {
+            if style.showsFooter, !isIdle {
                 Divider()
                 footer
             }
@@ -107,6 +120,12 @@ struct LauncherView: View {
                         proxy.scrollTo(model.actions[index].id, anchor: .center)
                     }
                 }
+            } else if model.isSearchPending && model.results.isEmpty {
+                VStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("正在搜索，结果会逐步显示…").font(.callout).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.results.isEmpty {
                 emptyResultsView
             } else {

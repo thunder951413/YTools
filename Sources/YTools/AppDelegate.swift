@@ -180,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !terminationFlushStarted else { return .terminateLater }
         terminationFlushStarted = true
         Task { [weak self] in
+            await self?.panelController?.flushPendingActions()
             await self?.clipboard?.flushPendingChanges()
             await self?.snippets?.flushPendingChanges()
             await self?.recentDocuments?.flushPendingChanges()

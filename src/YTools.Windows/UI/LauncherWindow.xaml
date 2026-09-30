@@ -133,6 +133,7 @@
             <Grid Grid.Column="0">
                 <Grid.RowDefinitions>
                     <RowDefinition x:Name="HeaderRow" Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition x:Name="FooterRow" Height="Auto" />
                 </Grid.RowDefinitions>
@@ -231,7 +232,13 @@
                 <!-- A zero-height body can still arrange ListBox children outside its
                      allocated row.  Clip it so an idle/collapsed launcher never paints
                      stale result text underneath the search field. -->
-                <Grid Grid.Row="1" ClipToBounds="True">
+                <Border Grid.Row="1" Height="32" Padding="18,4"
+                        Visibility="{Binding HasActionStatus, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="{Binding ActionStatusText}" ToolTip="{Binding ActionStatusText}"
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource AccentBrush}" AutomationProperties.LiveSetting="Polite" />
+                </Border>
+                <Grid Grid.Row="2" ClipToBounds="True">
                     <ListBox x:Name="ResultsList"
                              ItemsSource="{Binding Results}"
                              SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}"
@@ -283,17 +290,17 @@
                                    Margin="0,4,0,0"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                     </StackPanel>
-                    <StackPanel HorizontalAlignment="Center"
+                    <StackPanel x:Name="SearchingState" HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
                                 IsHitTestVisible="False"
-                                Visibility="{Binding IsSearchPending, Converter={StaticResource BoolToVisibility}}">
-                        <TextBlock Text="正在搜索…"
+                                Visibility="Collapsed">
+                        <TextBlock Text="正在搜索，结果会逐步显示…"
                                    FontSize="13"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                     </StackPanel>
                 </Grid>
                 <Border x:Name="FooterBar"
-                        Grid.Row="2"
+                        Grid.Row="3"
                         Height="34"
                         Background="Transparent"
                         Visibility="Collapsed">
@@ -303,11 +310,6 @@
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    HorizontalAlignment="Left" />
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <TextBlock Text="文件操作进行中…"
-                                       Margin="0,0,12,0"
-                                       FontSize="11"
-                                       Foreground="{DynamicResource AccentBrush}"
-                                       Visibility="{Binding IsActionBusy, Converter={StaticResource BoolToVisibility}}" />
                             <TextBlock x:Name="BackendStatusText"
                                        FontSize="11"
                                        Foreground="{DynamicResource TextSecondaryBrush}"

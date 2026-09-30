@@ -55,7 +55,8 @@ actor SearchCoordinator {
         await applications.prepare()
     }
 
-    func search(_ request: BackgroundSearchRequest) async -> [LauncherResult] {
+    func search(_ request: BackgroundSearchRequest,
+                onUpdate: (@Sendable ([LauncherResult]) async -> Void)? = nil) async -> [LauncherResult] {
         guard !Task.isCancelled else { return [] }
         if request.fileNavigationActive {
             guard request.enabledContentTypes.contains(.files) else { return [] }
@@ -71,28 +72,38 @@ actor SearchCoordinator {
                 ascending: request.fileNavigationSortAscending,
                 foldersFirst: request.fileNavigationFoldersFirst
             )
-            return sanitize(
+            let sanitized = sanitize(
                 results,
                 descriptor: descriptor,
                 policy: ModuleResultPolicy(allowedCapabilities: [.localFileRead])
             )
+            if !Task.isCancelled { await onUpdate?(sanitized) }
+            return sanitized
         }
 
-        async let applicationResults = request.enabledContentTypes.contains(.applications)
-            ? searchApplications(
-                query: request.query,
-                aliases: request.applicationAliases,
-                customApplicationPaths: request.customApplicationPaths
-            )
-            : []
-        async let moduleResults = searchModules(
-            query: request.query,
-            registrations: standardModules + request.requestModules,
-            enabledContentTypes: request.enabledContentTypes,
-            maximumResults: request.maximumResults
-        )
-        let combined = await applicationResults + moduleResults
-        return Task.isCancelled ? [] : combined
+        return await withTaskGroup(of: [LauncherResult].self) { group in
+            if request.enabledContentTypes.contains(.applications) {
+                group.addTask {
+                    await self.searchApplications(query: request.query, aliases: request.applicationAliases,
+                        customApplicationPaths: request.customApplicationPaths)
+                }
+            }
+            for registration in standardModules + request.requestModules {
+                guard request.enabledContentTypes.contains(registration.contentType),
+                      registration.policy.permits(registration.module.descriptor) else { continue }
+                group.addTask {
+                    await Self.search(registration.module, query: request.query,
+                        maximumResults: request.maximumResults, policy: registration.policy)
+                }
+            }
+            var combined: [LauncherResult] = []
+            for await results in group {
+                guard !Task.isCancelled else { group.cancelAll(); return [] }
+                combined.append(contentsOf: results)
+                if !results.isEmpty { await onUpdate?(combined) }
+            }
+            return Task.isCancelled ? [] : combined
+        }
     }
 
     private func searchApplications(
@@ -115,43 +126,6 @@ actor SearchCoordinator {
             descriptor: descriptor,
             policy: ModuleResultPolicy(allowedCapabilities: [.localFileRead])
         )
-    }
-
-    private func searchModules(
-        query: String,
-        registrations: [RegisteredSearchModule],
-        enabledContentTypes: Set<SearchContentType>,
-        maximumResults: Int
-    ) async -> [LauncherResult] {
-        await withTaskGroup(of: [LauncherResult].self, returning: [LauncherResult].self) { group in
-            for registration in registrations {
-                guard !Task.isCancelled else {
-                    group.cancelAll()
-                    break
-                }
-                guard enabledContentTypes.contains(registration.contentType) else { continue }
-                let descriptor = registration.module.descriptor
-                guard registration.policy.permits(descriptor) else { continue }
-                let wasAdded = group.addTaskUnlessCancelled {
-                    await Self.search(
-                        registration.module,
-                        query: query,
-                        maximumResults: maximumResults,
-                        policy: registration.policy
-                    )
-                }
-                if !wasAdded { break }
-            }
-            var combined: [LauncherResult] = []
-            for await results in group {
-                guard !Task.isCancelled else {
-                    group.cancelAll()
-                    return []
-                }
-                combined.append(contentsOf: results)
-            }
-            return combined
-        }
     }
 
     private static func search(

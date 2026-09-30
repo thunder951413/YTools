@@ -18,7 +18,10 @@ final class NativeViewSnapshotTests: XCTestCase {
             ClipboardHistoryItem(id: UUID(), kind: .text,
                 payload: ["用于验证完整剪贴板面板的长文本：复制失败时应显示原因并保留列表，工具栏、固定按钮和底部快捷键都应保持可见。"],
                 createdAt: Date(), sourceApplication: "Synthetic Fixture", isPinned: true)
-        ])
+        ] + (0..<250).map { index in
+            ClipboardHistoryItem(id: UUID(), kind: .text, payload: ["合成记录 \(index + 1)：用于分页与选中态检查"],
+                createdAt: Date().addingTimeInterval(-Double(index + 1)), sourceApplication: "Synthetic Fixture")
+        })
         let suite = "ytools-panel-\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -38,28 +41,31 @@ final class NativeViewSnapshotTests: XCTestCase {
         XCTAssertNotNil(manager.copyError)
         let output = URL(fileURLWithPath: outputValue, isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        for scheme in [ColorScheme.light, .dark] {
-            // ImageRenderer cannot draw AppKit-backed TextField/Picker/List.
-            // Host the real panel in an offscreen native window instead.
-            _ = NSApplication.shared
-            let frame = NSRect(x: 0, y: 0, width: 720, height: 420)
-            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
-            defer { window.close() }
-            let view = NSHostingView(rootView: ClipboardHistoryView(manager: manager, preferences: preferences, onActivate: {})
-                .frame(width: 720, height: 420).colorScheme(scheme))
-            window.contentView = view
-            view.frame = frame
-            view.layoutSubtreeIfNeeded()
-            window.displayIfNeeded()
-            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            let image = NSImage(size: frame.size)
-            image.addRepresentation(bitmap)
-            XCTAssertEqual(image.size.width, 720)
-            XCTAssertEqual(image.size.height, 420)
-            try writePng(image, to: output.appendingPathComponent("clipboard-panel-\(name(for: scheme)).png"))
+        for filter in [ClipboardHistoryManager.Filter.all, .pinned] {
+            manager.filter = filter
+            for scheme in [ColorScheme.light, .dark] {
+                // ImageRenderer cannot draw AppKit-backed TextField/Picker/List.
+                // Host the real panel in an offscreen native window instead.
+                _ = NSApplication.shared
+                let frame = NSRect(x: 0, y: 0, width: 720, height: 420)
+                let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                defer { window.close() }
+                let view = NSHostingView(rootView: ClipboardHistoryView(manager: manager, preferences: preferences, onActivate: {})
+                    .frame(width: 720, height: 420).colorScheme(scheme))
+                window.contentView = view
+                view.frame = frame
+                view.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let image = NSImage(size: frame.size)
+                image.addRepresentation(bitmap)
+                XCTAssertEqual(image.size.width, 720)
+                XCTAssertEqual(image.size.height, 420)
+                try writePng(image, to: output.appendingPathComponent("clipboard-\(filter == .all ? "panel" : "pinned")-\(name(for: scheme)).png"))
+            }
         }
         await manager.flushPendingChanges()
     }

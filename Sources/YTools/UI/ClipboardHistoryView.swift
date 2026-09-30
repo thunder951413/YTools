@@ -27,7 +27,7 @@ struct ClipboardHistoryView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 210)
+                .frame(width: 260)
                 Button {
                     Task { await manager.syncCloudNow() }
                 } label: {
@@ -77,9 +77,9 @@ struct ClipboardHistoryView: View {
 
             if manager.filteredItems.isEmpty {
                 ContentUnavailableView(
-                    manager.query.isEmpty ? "暂无剪贴板历史" : "没有匹配内容",
+                    manager.items.isEmpty ? "暂无剪贴板历史" : "没有匹配内容",
                     systemImage: manager.query.isEmpty ? "clipboard" : "line.3.horizontal.decrease.circle",
-                    description: Text(manager.query.isEmpty
+                    description: Text(manager.items.isEmpty
                         ? (preferences.clipboardCloudSyncEnabled
                             ? "复制文本、文件或图片后会在这里出现；已启用坚果云加密同步"
                             : "复制文本、文件或图片后会在这里出现；历史在本机加密保存")
@@ -125,18 +125,24 @@ struct ClipboardHistoryView: View {
             }
 
             Divider()
+            HStack(spacing: 12) {
+                Text("已显示 \(manager.filteredItems.count) / 匹配 \(manager.totalMatches) 条")
+                Spacer()
+                if manager.hasMore {
+                    Button("加载更多（100 条）") { manager.loadMore() }
+                        .accessibilityLabel("加载更多匹配的剪贴板记录")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 18)
+            .frame(height: 32)
             HStack(spacing: 14) {
                 Text("↑↓ 选择")
                 Text("↩ 复制")
                 Text("⌘D 删除")
-                Text("⌘S 存为片段")
                 Text("Esc 清空/关闭")
                 Spacer()
-                if manager.query.isEmpty, manager.filteredItems.count < manager.items.count {
-                    Text("显示最近 \(manager.filteredItems.count) / 共 \(manager.items.count) 条")
-                } else {
-                    Text("\(manager.items.count) 条")
-                }
                 Text(preferences.clipboardHotKey.displayString)
             }
             .font(.caption)

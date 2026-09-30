@@ -41,6 +41,7 @@ public partial class ClipboardWindow : Window
         }
 
         _manager.PrepareForPresentation();
+        FilterAll.IsChecked = true;
         Show();
         Activate();
         SearchBox.Focus();
@@ -54,9 +55,9 @@ public partial class ClipboardWindow : Window
 
     private void OnManagerPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(ClipboardHistoryManager.FilteredItems))
+        if (e.PropertyName is nameof(ClipboardHistoryManager.FilteredItems) or nameof(ClipboardHistoryManager.SelectedIndex))
         {
-            ClipboardList.ScrollIntoView(_manager?.FilteredItems.FirstOrDefault());
+            ClipboardList.ScrollIntoView(_manager?.FilteredItems.ElementAtOrDefault(_manager.SelectedIndex));
         }
 
         if (e.PropertyName == nameof(ClipboardHistoryManager.CloudSyncStatus))
@@ -64,6 +65,8 @@ public partial class ClipboardWindow : Window
             SyncStatusText.ToolTip = _manager?.CloudSyncStatus;
         }
     }
+
+    private void LoadMore_Click(object sender, RoutedEventArgs e) => _manager?.LoadMore();
 
     private void OnDeactivated(object sender, EventArgs e)
     {

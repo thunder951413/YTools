@@ -9,6 +9,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         case text
         case files
         case image
+        case pinned
 
         var id: String { rawValue }
         var title: String {
@@ -17,6 +18,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
             case .text: "文本"
             case .files: "文件"
             case .image: "图片"
+            case .pinned: "固定"
             }
         }
     }
@@ -24,10 +26,15 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     @Published private(set) var items: [ClipboardHistoryItem] = [] {
         didSet { rebuildFilteredItems() }
     }
+    @Published private(set) var totalMatches = 0
+    var hasMore: Bool { filteredItems.count < totalMatches }
     @Published private(set) var filteredItems: [ClipboardHistoryItem] = []
     @Published var query = "" {
         didSet {
             guard query != oldValue else { return }
+            filterRevision += 1
+            filterTask?.cancel()
+            visibleLimit = pageSize
             if selectedIndex != 0 { selectedIndex = 0 }
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 filterDebouncer.cancel()
@@ -41,6 +48,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     @Published var filter: Filter = .all {
         didSet {
             guard filter != oldValue else { return }
+            visibleLimit = pageSize
             selectedIndex = 0
             filterDebouncer.cancel()
             rebuildFilteredItems()
@@ -75,7 +83,9 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     private var filterRevision = 0
     private var appliedQuery = ""
     private var appliedFilter: Filter = .all
-    private let maximumVisibleItems = 100
+    private let pageSize = 100
+    private var visibleLimit = 100
+    private var appliedLimit = 100
     private var localWorkTail: Task<Void, Never>?
     private var localWorkGeneration = 0
     private var isShuttingDown = false
@@ -169,10 +179,18 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         }
     }
 
+    func loadMore() {
+        guard hasMore else { return }
+        visibleLimit += pageSize
+        rebuildFilteredItems()
+    }
+
     func prepareForPresentation() {
+        visibleLimit = pageSize
         query = ""
         filter = .all
         selectedIndex = 0
+        rebuildFilteredItems()
         pollPasteboard()
     }
 
@@ -426,7 +444,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     }
 
     private func ensureFilterIsCurrent() {
-        guard appliedQuery != query || appliedFilter != filter else { return }
+        guard appliedQuery != query || appliedFilter != filter || appliedLimit != visibleLimit else { return }
         filterDebouncer.cancel()
         filterTask?.cancel()
         filterRevision += 1
@@ -436,7 +454,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
             items,
             term: term,
             filter: filter,
-            limit: maximumVisibleItems
+            limit: visibleLimit
         )
         applyFilteredItems(matches, query: query, filter: filter, revision: revision)
     }
@@ -451,15 +469,12 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         let revision = filterRevision
 
         guard !term.isEmpty else {
-            let matches = requestedFilter == .all
-                ? Array(snapshot.prefix(maximumVisibleItems))
-                : Array(snapshot.lazy.filter { $0.kind.rawValue == requestedFilter.rawValue }
-                    .prefix(maximumVisibleItems))
+            let matches = Self.filterItems(snapshot, term: term, filter: requestedFilter, limit: visibleLimit)
             applyFilteredItems(matches, query: requestedQuery, filter: requestedFilter, revision: revision)
             return
         }
 
-        let limit = maximumVisibleItems
+        let limit = visibleLimit
         filterTask = Task.detached(priority: .userInitiated) { [weak self] in
             let matches = Self.filterItems(
                 snapshot,
@@ -478,7 +493,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     }
 
     private func applyFilteredItems(
-        _ matches: [ClipboardHistoryItem],
+        _ page: HistoryPage<ClipboardHistoryItem>,
         query requestedQuery: String,
         filter requestedFilter: Filter,
         revision: Int
@@ -486,10 +501,15 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         guard revision == filterRevision,
               query == requestedQuery,
               filter == requestedFilter else { return }
-        filteredItems = matches
+        let selectedID = appliedQuery == requestedQuery && appliedFilter == requestedFilter
+            && filteredItems.indices.contains(selectedIndex) ? filteredItems[selectedIndex].id : nil
+        filteredItems = page.items
+        totalMatches = page.totalMatches
+        appliedLimit = visibleLimit
         appliedQuery = requestedQuery
         appliedFilter = requestedFilter
-        selectedIndex = min(selectedIndex, max(matches.count - 1, 0))
+        selectedIndex = selectedID.flatMap { id in page.items.firstIndex { $0.id == id } }
+            ?? min(selectedIndex, max(page.items.count - 1, 0))
     }
 
     nonisolated private static func filterItems(
@@ -497,22 +517,13 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         term: String,
         filter: Filter,
         limit: Int
-    ) -> [ClipboardHistoryItem] {
-        var matches: [ClipboardHistoryItem] = []
-        matches.reserveCapacity(min(limit, items.count))
-        for item in items {
-            guard !Task.isCancelled else { return [] }
-            let matchesType = filter == .all || item.kind.rawValue == filter.rawValue
-            guard matchesType,
-                  term.isEmpty
-                    || item.displayText.localizedCaseInsensitiveContains(term)
-                    || (item.sourceApplication?.localizedCaseInsensitiveContains(term) ?? false) else {
-                continue
-            }
-            matches.append(item)
-            if matches.count == limit { break }
+    ) -> HistoryPage<ClipboardHistoryItem> {
+        HistoryPage.select(items, limit: limit) { item in
+            let matchesType = filter == .all || (filter == .pinned ? item.pinned : item.kind.rawValue == filter.rawValue)
+            return matchesType && (term.isEmpty
+                || item.displayText.localizedCaseInsensitiveContains(term)
+                || (item.sourceApplication?.localizedCaseInsensitiveContains(term) ?? false))
         }
-        return matches
     }
 
     private func prune() {

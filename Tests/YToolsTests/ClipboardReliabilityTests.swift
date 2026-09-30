@@ -110,6 +110,55 @@ final class ClipboardReliabilityTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(items.first?.createdAt), originalDate)
     }
 
+    func testPagingPinnedFilterAndOlderQueriesUseCompleteHistory() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = Data(repeating: 6, count: 32)
+        let now = Date()
+        let entries = (0..<251).map { index in
+            ClipboardHistoryItem(id: UUID(), kind: .text, payload: ["fixture-record-\(index)"],
+                createdAt: now.addingTimeInterval(-Double(index)), sourceApplication: index == 250 ? "Older Fixture App" : nil,
+                isPinned: index == 250)
+        }
+        _ = try ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }).persist(entries)
+        let suite = "ytools-paging-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults, launchAtLoginService: FixtureLoginService())
+        let pasteboard = NSPasteboard(name: .init("ytools-test-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let manager = ClipboardHistoryManager(preferences: preferences,
+            persistence: ClipboardPersistenceService { ClipboardHistoryStore(rootURL: directory, keyProvider: { _ in key }) },
+            cloudSync: ClipboardCloudSyncService(
+                credentialStore: SecureCodableStore(fileURL: directory.appendingPathComponent("credentials.enc")) { _ in key },
+                stateStore: SecureCodableStore(fileURL: directory.appendingPathComponent("state.enc")) { _ in key },
+                transport: PausedCloudTransport()), pasteboard: pasteboard, monitorsClipboard: false)
+        await manager.waitUntilLoaded()
+        XCTAssertEqual(manager.filteredItems.count, 100)
+        XCTAssertEqual(manager.totalMatches, 251)
+        manager.selectedIndex = 70
+        let selectedID = manager.filteredItems[70].id
+        manager.loadMore()
+        XCTAssertEqual(manager.filteredItems.count, 200)
+        XCTAssertEqual(manager.filteredItems[manager.selectedIndex].id, selectedID)
+        manager.loadMore()
+        XCTAssertEqual(manager.filteredItems.count, 251)
+        XCTAssertFalse(manager.hasMore)
+        manager.filter = .pinned
+        XCTAssertEqual(manager.filteredItems.map(\.id), [entries[250].id])
+        manager.filter = .all
+        XCTAssertEqual(manager.filteredItems.count, 100, "Changing filters resets the page")
+        manager.loadMore() // Keep selectedIndex at 0 to catch a page-reset regression.
+        manager.query = "fixture-record-249"
+        XCTAssertEqual(manager.selectedText, "fixture-record-249")
+        XCTAssertEqual(manager.totalMatches, 1)
+        manager.query = "Older Fixture App"
+        XCTAssertEqual(manager.selectedText, "fixture-record-250", "Search includes sources outside the first page")
+        manager.query = ""
+        XCTAssertEqual(manager.filteredItems.count, 100)
+        await manager.flushPendingChanges()
+    }
+
     func testWebDAVHrefsSupportNamespacesWhitespaceAndEscapes() throws {
         for xml in [
             "<multistatus><response><href> /dav/Review/a&amp;b.head </href></response></multistatus>",

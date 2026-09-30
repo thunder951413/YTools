@@ -54,6 +54,16 @@ public static class SelfTest
             Check("clipboard.persistedTombstone", ClipboardCloudSyncService.ApplyEvents([], [oldUpsert],
                 new Dictionary<Guid, DateTimeOffset> { [historyId] = DateTimeOffset.FromUnixTimeSeconds(400) }).Count == 0);
 
+            var presentation = new SearchPresentationState();
+            presentation.BeginQuery();
+            presentation.IncludeResults(6);
+            presentation.UserSelected();
+            presentation.BeginQuery();
+            Check("search.progressivePresentation", presentation.ReservedRows == 6 && !presentation.PreservesSelection);
+            var page = HistoryPage<int>.Select(Enumerable.Range(0, 251).ToArray(), 100, value => value % 2 == 0);
+            Check("clipboard.pagination", page.TotalMatches == 126 && page.HasMore
+                && HistoryPage<int>.Select(Enumerable.Range(0, 251).ToArray(), 100, value => value == 250).Items.SequenceEqual([250]));
+
             var normalizer = new SearchTextNormalizer();
             var forms = normalizer.Forms("微信");
             Check("normalizer.pinyin", forms.Transliteration == "weixin" && forms.TransliterationInitials == "wx");

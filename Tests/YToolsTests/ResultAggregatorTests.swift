@@ -115,6 +115,22 @@ final class ResultAggregatorTests: XCTestCase {
     }
 
     @MainActor
+    func testLateHigherRankedBatchRetainsUserSelectionByIdentity() {
+        let temporaryFile = temporaryRankingFile()
+        let store = UsageRankingStore(fileURL: temporaryFile.fileURL)
+        defer { removeTemporaryRankingFile(temporaryFile, afterFlushing: store) }
+        let early = result(id: "early", moduleID: "fixture", title: "Early")
+        let late = result(id: "late", moduleID: "fixture", title: "Late").withScore(500)
+        let aggregator = ResultAggregator(usage: store)
+        let automatic = aggregator.aggregate(background: [early, late], spotlight: [], query: "q",
+            previousResults: [], selectedIndex: 0)
+        XCTAssertEqual(automatic.results[automatic.selectedIndex].id, late.id)
+        let userSelected = aggregator.aggregate(background: [early, late], spotlight: [], query: "q",
+            previousResults: [early], selectedIndex: 0)
+        XCTAssertEqual(userSelected.results[userSelected.selectedIndex].id, early.id)
+    }
+
+    @MainActor
     private func application(id: String, title: String) -> LauncherResult {
         LauncherResult(
             id: id,

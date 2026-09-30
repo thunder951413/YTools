@@ -55,7 +55,8 @@ public sealed class SearchCoordinator
         return Task.Run(() => _applications.Prepare());
     }
 
-    public async Task<IReadOnlyList<LauncherResult>> SearchAsync(BackgroundSearchRequest request)
+    public async Task<IReadOnlyList<LauncherResult>> SearchAsync(BackgroundSearchRequest request,
+        Func<IReadOnlyList<LauncherResult>, Task>? onUpdate = null)
     {
         var cancellationToken = request.CancellationToken;
         if (request.FileNavigationActive)
@@ -78,11 +79,13 @@ public sealed class SearchCoordinator
                     request.FileNavigationFoldersFirst),
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            return Sanitize(
+            var sanitized = Sanitize(
                 results,
                 descriptor,
                 new ModuleResultPolicy(
                     allowedCapabilities: new HashSet<ModuleCapability> { ModuleCapability.LocalFileRead }));
+            if (onUpdate is not null) { await onUpdate(sanitized); }
+            return sanitized;
         }
 
         var tasks = new List<Task<IReadOnlyList<LauncherResult>>>();
@@ -116,9 +119,18 @@ public sealed class SearchCoordinator
                 cancellationToken));
         }
 
-        var completed = await Task.WhenAll(tasks);
-        cancellationToken.ThrowIfCancellationRequested();
-        return completed.SelectMany(results => results).ToList();
+        var combined = new List<LauncherResult>();
+        while (tasks.Count > 0)
+        {
+            var completed = await Task.WhenAny(tasks).WaitAsync(cancellationToken);
+            tasks.Remove(completed);
+            var results = await completed;
+            cancellationToken.ThrowIfCancellationRequested();
+            combined.AddRange(results);
+            if (results.Count > 0 && onUpdate is not null)
+            { await onUpdate(combined.ToArray()); }
+        }
+        return combined;
     }
 
     private IReadOnlyList<LauncherResult> SearchApplications(

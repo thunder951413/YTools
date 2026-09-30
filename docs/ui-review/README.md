@@ -6,6 +6,8 @@
 
 运行：
 
+v0.2.3 的完整剪贴板快照使用 251 条合成记录，覆盖固定筛选、匹配计数与始终可见的“加载更多”按钮。新增 `clipboard-pinned-light.png` 与 `clipboard-pinned-dark.png`，显示固定筛选只返回固定条目。
+
 ```sh
 YTOOLS_UI_SNAPSHOT_DIR="$PWD/docs/ui-review" swift test --scratch-path /tmp/ytools-ui-snapshots -Xswiftc -warnings-as-errors --filter NativeViewSnapshotTests
 ```

@@ -55,7 +55,13 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     private int _filterRevision;
     private string _appliedQuery = "";
     private ClipboardFilter _appliedFilter = ClipboardFilter.All;
-    private const int MaximumVisibleItems = 100;
+    private const int PageSize = 100;
+    private int _visibleLimit = PageSize;
+    private int _appliedLimit = PageSize;
+    private int _totalMatches;
+    public int TotalMatches => _totalMatches;
+    public bool HasMore => _filteredItems.Count < TotalMatches;
+    public string PageDescription => $"已显示 {_filteredItems.Count} / 匹配 {TotalMatches} 条";
     private readonly HashSet<Task> _localWork = [];
     private bool _isShuttingDown;
     private bool _disposed;
@@ -113,10 +119,9 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         {
             if (SetField(ref _query, value))
             {
-                if (SelectedIndex != 0)
-                {
-                    SelectedIndex = 0;
-                }
+                _filterRevision += 1;
+                _visibleLimit = PageSize;
+                if (SelectedIndex != 0) { SelectedIndex = 0; }
 
                 if (string.IsNullOrWhiteSpace(_query))
                 {
@@ -144,6 +149,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         {
             if (SetField(ref _filter, value))
             {
+                _visibleLimit = PageSize;
                 SelectedIndex = 0;
                 _filterDebouncer.Cancel();
                 RebuildFilteredItems();
@@ -256,8 +262,16 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         finally { _localWork.Remove(work); }
     }
 
+    public void LoadMore()
+    {
+        if (!HasMore) { return; }
+        _visibleLimit += PageSize;
+        RebuildFilteredItems();
+    }
+
     public void PrepareForPresentation()
     {
+        _visibleLimit = PageSize;
         Query = "";
         Filter = ClipboardFilter.All;
         SelectedIndex = 0;
@@ -949,7 +963,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
 
     private void EnsureFilterIsCurrent()
     {
-        if (_appliedQuery == Query && _appliedFilter == Filter)
+        if (_appliedQuery == Query && _appliedFilter == Filter && _appliedLimit == _visibleLimit)
         {
             return;
         }
@@ -958,7 +972,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         _filterRevision += 1;
         var revision = _filterRevision;
         var term = Query.Trim();
-        var matches = FilterItems(_items, term, Filter, MaximumVisibleItems);
+        var matches = FilterItems(_items, term, Filter, _visibleLimit);
         ApplyFilteredItems(matches, Query, Filter, revision);
     }
 
@@ -971,18 +985,15 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         _filterRevision += 1;
         var revision = _filterRevision;
 
+        var limit = _visibleLimit;
         if (string.IsNullOrEmpty(term))
         {
-            var matches = requestedFilter == ClipboardFilter.All
-                ? snapshot.Take(MaximumVisibleItems).ToList()
-                : snapshot.Where(item => item.Kind.ToString() == requestedFilter.ToString())
-                    .Take(MaximumVisibleItems)
-                    .ToList();
+            var matches = FilterItems(snapshot, term, requestedFilter, limit);
             ApplyFilteredItems(matches, requestedQuery, requestedFilter, revision);
             return;
         }
 
-        _ = Task.Run(() => FilterItems(snapshot, term, requestedFilter, MaximumVisibleItems))
+        _ = Task.Run(() => FilterItems(snapshot, term, requestedFilter, limit))
             .ContinueWith(task =>
             {
                 if (task.IsCompletedSuccessfully)
@@ -993,7 +1004,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
     }
 
     private void ApplyFilteredItems(
-        List<ClipboardHistoryItem> matches,
+        HistoryPage<ClipboardHistoryItem> page,
         string requestedQuery,
         ClipboardFilter requestedFilter,
         int revision)
@@ -1003,43 +1014,37 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
             return;
         }
 
-        _filteredItems = matches;
+        var selectedId = _appliedQuery == requestedQuery && _appliedFilter == requestedFilter
+            ? _filteredItems.ElementAtOrDefault(SelectedIndex)?.Id : null;
+        _filteredItems = page.Items.ToList();
+        _totalMatches = page.TotalMatches;
+        _appliedLimit = _visibleLimit;
         _appliedQuery = requestedQuery;
         _appliedFilter = requestedFilter;
-        SelectedIndex = Math.Min(SelectedIndex, Math.Max(matches.Count - 1, 0));
+        var retainedIndex = _filteredItems.FindIndex(item => item.Id == selectedId);
+        var nextSelectedIndex = retainedIndex >= 0 ? retainedIndex : Math.Max(0, Math.Min(SelectedIndex, _filteredItems.Count - 1));
         RaisePropertyChanged(nameof(FilteredItems));
+        // WPF may clear selection synchronously when ItemsSource changes.
+        SelectedIndex = nextSelectedIndex;
+        RaisePropertyChanged(nameof(TotalMatches));
+        RaisePropertyChanged(nameof(HasMore));
+        RaisePropertyChanged(nameof(PageDescription));
     }
 
-    private static List<ClipboardHistoryItem> FilterItems(
+    private static HistoryPage<ClipboardHistoryItem> FilterItems(
         IReadOnlyList<ClipboardHistoryItem> items,
         string term,
         ClipboardFilter filter,
         int limit)
     {
-        var matches = new List<ClipboardHistoryItem>();
-        foreach (var item in items)
+        return HistoryPage<ClipboardHistoryItem>.Select(items, limit, item =>
         {
-            var matchesType = filter == ClipboardFilter.All || item.Kind.ToString() == filter.ToString();
-            if (!matchesType)
-            {
-                continue;
-            }
-
-            if (!string.IsNullOrEmpty(term)
-                && !item.DisplayText.Contains(term, StringComparison.OrdinalIgnoreCase)
-                && !(item.SourceApplication?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false))
-            {
-                continue;
-            }
-
-            matches.Add(item);
-            if (matches.Count == limit)
-            {
-                break;
-            }
-        }
-
-        return matches;
+            var matchesType = filter == ClipboardFilter.All
+                || (filter == ClipboardFilter.Pinned ? item.IsPinned : item.Kind.ToString() == filter.ToString());
+            return matchesType && (string.IsNullOrEmpty(term)
+                || item.DisplayText.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || (item.SourceApplication?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
+        });
     }
 
     private static string? ForegroundProcessName()
@@ -1111,7 +1116,8 @@ public enum ClipboardFilter
     All,
     Text,
     Files,
-    Image
+    Image,
+    Pinned
 }
 
 public static class ClipboardFilterMetadata
@@ -1124,6 +1130,7 @@ public static class ClipboardFilterMetadata
             ClipboardFilter.Text => "文本",
             ClipboardFilter.Files => "文件",
             ClipboardFilter.Image => "图片",
+            ClipboardFilter.Pinned => "固定",
             _ => ""
         };
     }
