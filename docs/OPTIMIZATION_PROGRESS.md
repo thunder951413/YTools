@@ -11,13 +11,15 @@
 | 复制/移动缺少具体反馈 | 保留面板，显示文件、目标与最终成功/失败；目标选择器临时失焦不关闭启动器；正常退出等待文件工作 | 临时文件验证复制/移动、不覆盖、重复操作拒绝、完成/失败状态与退出排空 |
 | macOS 可以将目录复制到其后代 | 源/目标标准化并解析符号链接后拒绝自己和后代目录 | 直接后代、自己、指向后代的符号链接均拒绝，源文件保持不变 |
 
-本地 macOS 完整检查通过：80 项 XCTest（快照未跳过）、CoreChecks、严格编译、安全扫描与扫描负例。Windows 严格交叉编译通过；实际 WPF/xUnit/SelfTest 的运行结果以本批 Windows CI 为准。文件反馈没有字节百分比和中途取消；失败可能留下部分目标目录。快照覆盖完整剪贴板，真实 IME、多屏/DPI 与 Windows 交互尚需实机验收。
+本地 macOS 完整检查通过：80 项 XCTest（快照未跳过）、CoreChecks、严格编译、安全扫描与扫描负例。功能提交 `0302e94` 的 [Windows CI](https://github.com/thunder951413/YTools/actions/runs/36736301156) 通过 124 项 xUnit、36 项 SelfTest、安全扫描及单文件发布；[Swift CI](https://github.com/thunder951413/YTools/actions/runs/36736301367) 通过 80 项测试、CoreChecks、快照上传与 Release 签名校验。文件反馈没有字节百分比和中途取消；失败可能留下部分目标目录。快照覆盖完整剪贴板，真实 IME、多屏/DPI 与 Windows 交互尚需实机验收。
+
+本机 `/Applications/YTools.app` 已替换为 0.2.3，签名与二进制 SHA-256 验证通过，并确认进程启动。替换前的 0.2.2 应用备份已通过 ZIP 完整性校验；应用用户数据不包含在替换或备份范围内。
 
 ## 第一批实现（0.2.2）
 
 | 问题 | 处理 | 验证 |
 |---|---|---|
-| Windows 上轮 CI 两项测试失败 | 同时间冲突按字段和集合内容比较；错误口令接受 `CryptographicException` 的派生认证异常 | xUnit 程序集严格编译；运行结果以本次 Windows CI 为准 |
+| Windows 上轮 CI 两项测试失败 | 同时间冲突按字段和集合内容比较；错误口令接受 `CryptographicException` 的派生认证异常 | Windows CI 通过 119 项 xUnit 与 34 项 SelfTest |
 | macOS 漏读带前缀 WebDAV href | 按 `DAV:` 命名空间和本地名解析，保留无命名空间兼容；损坏 XML 报错 | bare/default/d/server 前缀、转义、空白、其他命名空间、截断响应；假传输拉取采用前缀 XML |
 | 退出可能丢失剪贴板写入/待发送事件 | 停止捕获，排空本机任务；事件先加密入队，上传独立调度；Windows 释放保险库线程时等待已派发工作 | Swift 退出同时排空历史与删除事件；暂停假上传时新变更仍落盘；旧上传完成保留后续事件；Windows 工作线程排空回归 |
 | 清理文字未说明跨设备删除 | 依据当前同步状态显示删除范围；Windows 最近 30 分钟也必须确认；防止重复清理 | 双端界面路径复核；显式清理不可读密文保留恢复入口 |
@@ -28,7 +30,7 @@
 ## 第一批验证范围
 
 - macOS `scripts/check.sh` 通过：71 项 XCTest、CoreChecks、安全扫描和扫描负例；严格编译无警告。设置 `YTOOLS_UI_SNAPSHOT_DIR` 执行组件和剪贴板面板快照。Release 应用包已完成构建和 ad-hoc 签名校验。
-- Windows 在 macOS 交叉编译应用和测试程序集通过（.NET 8.0.425，0 警告、0 错误）；WPF/xUnit/SelfTest 运行结果以 Windows CI 或实机为准，交叉编译不能替代运行。
+- Windows 在 macOS 交叉编译应用和测试程序集通过（.NET 8.0.425，0 警告、0 错误）；第一批 [Windows CI](https://github.com/thunder951413/YTools/actions/runs/36718040768) 实际通过 119 项 xUnit、34 项 SelfTest、安全扫描与单文件发布。交叉编译不能替代运行或实机交互验收。
 - 存储回归使用临时目录、合成内容、注入密钥、独立命名剪贴板和假传输。未连接真实坚果云，也未读取真实历史或钥匙串。
 - 已目视检查 [剪贴板亮色](ui-review/clipboard-panel-light.png) 与 [剪贴板暗色](ui-review/clipboard-panel-dark.png) 离屏快照；它们不代表实际窗口输入、Windows 高 DPI、中文输入法或屏幕阅读器已经验收。Swift CI 现在显式生成和上传快照。
 
