@@ -70,7 +70,9 @@ struct LauncherView: View {
 
             if !model.actionStatusText.isEmpty {
                 HStack(spacing: 8) {
-                    if model.isActionBusy { ProgressView().controlSize(.small) }
+                    if model.isActionBusy {
+                        ProgressView().controlSize(.small).accessibilityLabel("文件传输进度")
+                    }
                     Text(model.actionStatusText).lineLimit(1).truncationMode(.middle)
                         .help(model.actionStatusText)
                     Spacer(minLength: 0)
@@ -81,7 +83,7 @@ struct LauncherView: View {
                 .padding(.horizontal, 22)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 32)
-                .accessibilityLabel(model.actionStatusText)
+                .accessibilityElement(children: .contain)
             }
             if !isIdle || !style.collapsesWhenIdle {
                 Divider()

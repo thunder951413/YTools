@@ -109,8 +109,13 @@ final class LauncherModel: ObservableObject {
             onShowLargeType: onShowLargeType
         )
         actionDispatcher.onStatusChanged = { [weak self] busy, text in
-            self?.isActionBusy = busy
-            self?.actionStatusText = text
+            guard let self else { return }
+            let operationFinished = self.isActionBusy && !busy
+            self.isActionBusy = busy
+            self.actionStatusText = text
+            if operationFinished, self.isFileNavigationActive {
+                self.refreshImmediately()
+            }
         }
         preferences.$enabledSearchContentTypes
             .dropFirst()
