@@ -11,9 +11,10 @@ final class HotKeyManager {
         install()
     }
 
-    isolated deinit {
+    func shutdown() {
         removeAll()
         if let eventHandler { RemoveEventHandler(eventHandler) }
+        eventHandler = nil
     }
 
     func register(

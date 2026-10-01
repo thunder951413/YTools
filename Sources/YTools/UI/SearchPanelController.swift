@@ -66,6 +66,10 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         panel.animationBehavior = .utilityWindow
         super.init(window: panel)
         panel.delegate = self
+        launcher.onActionDestinationPickerClosed = { [weak panel] in
+            NSApp.activate(ignoringOtherApps: true)
+            panel?.makeKeyAndOrderFront(nil)
+        }
         panel.contentViewController = NSHostingController(
             rootView: PanelRootView(
                 state: state,
@@ -87,9 +91,14 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
                 return event
             }
             if self.handleTextEditingShortcut(event) { return nil }
-            if [36, 123, 124, 125, 126].contains(Int(event.keyCode)),
+            if [53, 51, 36, 123, 124, 125, 126].contains(Int(event.keyCode)),
                let textView = self.window?.firstResponder as? NSTextView,
                textView.hasMarkedText() {
+                return event
+            }
+            if [36, 123, 124, 125, 126].contains(Int(event.keyCode)),
+               let editor = self.window?.firstResponder as? NSTextView,
+               let window = self.window, editor !== self.searchTextField(in: window)?.currentEditor() {
                 return event
             }
             self.shiftPreviewTimer?.invalidate()
@@ -108,10 +117,18 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
-    isolated deinit {
+    func flushPendingActions() async { await launcher.flushPendingActions() }
+
+    func shutdown() {
         shiftPreviewTimer?.invalidate()
+        shiftPreviewTimer = nil
         positionSaveDebouncer.cancel()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        cancellables.removeAll()
+        launcher.persistLastQuery()
+        launcher.shutdown()
+        clipboard.shutdown()
     }
 
     func toggleLauncher() {
@@ -154,11 +171,13 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             preferences.keyboardInputSourceError = "所选输入源当前不可用，已保留系统当前输入源。"
         }
         window.makeKeyAndOrderFront(nil)
+        selectAllInSearchField()
     }
 
     func hide() {
         shiftPreviewTimer?.invalidate()
         launcher.endPreviewSession()
+        launcher.persistLastQuery()
         window?.orderOut(nil)
     }
 
@@ -167,6 +186,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        guard window?.isKeyWindow != true, !launcher.isChoosingActionDestination else { return }
         hide()
     }
 
@@ -231,15 +251,9 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         let count: Int
         switch state.mode {
         case .launcher:
-            // A pending debounced query keeps only the input row visible. The
-            // panel expands once, when the final query publishes its results.
-            if launcher.isSearchPending {
-                setPanelContentHeight(style.headerHeight, window: window, animated: animated)
-                return
-            }
-            count = launcher.visibleItemCount
+            count = launcher.layoutRowCount
         case .clipboard:
-            count = clipboard.filteredItems.count
+            count = clipboard.preview.isVisible ? max(clipboard.filteredItems.count, 4) : clipboard.filteredItems.count
         }
         let rowHeight = preferences.compactResults
             ? DesignTokens.compactRowHeight
@@ -248,7 +262,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
            style.collapsesWhenIdle,
            launcher.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !launcher.isShowingActions {
-            setPanelContentHeight(style.headerHeight, window: window, animated: animated)
+            setPanelContentHeight(style.headerHeight + (launcher.actionStatusText.isEmpty ? 0 : 32), window: window, animated: animated)
             return
         }
         let bodyHeight = count == 0
@@ -261,7 +275,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         let contentHeight = min(
             DesignTokens.panelMaximumHeight,
             max(
-                headerHeight + bodyHeight + footerHeight,
+                headerHeight + bodyHeight + footerHeight + (state.mode == .clipboard || !launcher.actionStatusText.isEmpty ? 32 : 0),
                 headerHeight
             )
         )
@@ -337,6 +351,33 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         return true
     }
 
+    /// Selects the launcher search field's text on show so a fresh keystroke
+    /// replaces the previous query while leaving it visible otherwise.
+    /// `NSTextField.selectText` makes the field first responder and selects
+    /// its content in one call, independent of SwiftUI's focus timing. If the
+    /// hosted field has not been laid out yet, retry on the next runloop turn.
+    private func selectAllInSearchField() {
+        guard state.mode == .launcher, let window else { return }
+        if let field = searchTextField(in: window) {
+            field.selectText(nil)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.selectAllInSearchField()
+            }
+        }
+    }
+
+    private func searchTextField(in window: NSWindow) -> NSTextField? {
+        var queue: [NSView] = window.contentView.map { [$0] } ?? []
+        while let view = queue.popLast() {
+            if let field = view as? NSTextField, field.isEditable {
+                return field
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
+    }
+
     private func execute(_ command: PanelCommand) -> Bool {
         switch command {
         case .activateSelected:
@@ -344,7 +385,11 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             case .launcher:
                 guard launcher.activateSelected() else { return false }
             case .clipboard:
-                guard clipboard.copySelected() else { return false }
+                Task { [weak self] in
+                    guard let self, await self.clipboard.copySelected() else { return }
+                    self.hide()
+                }
+                return true
             }
             hide()
         case let .activateResult(index):
@@ -361,6 +406,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         case .escape:
             if state.mode == .launcher, launcher.dismissSecondaryView() { return true }
             if state.mode == .launcher, launcher.clearQuery() { return true }
+            if state.mode == .clipboard, clipboard.preview.isVisible { clipboard.preview.hide(); return true }
             if state.mode == .clipboard, clipboard.clearQuery() { return true }
             hide()
         case let .moveSelection(offset):
@@ -372,8 +418,20 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         case .deleteClipboardItem:
             clipboard.deleteSelected()
         case .saveClipboardAsSnippet:
-            guard let text = clipboard.selectedText, snippets.save(text: text) else { return false }
-            NSSound(named: "Glass")?.play()
+            guard let text = clipboard.selectedText else { return false }
+            Task { [snippets] in
+                guard await snippets.savePersisted(text: text) else {
+                    let alert = NSAlert()
+                    alert.messageText = "无法保存文本片段"
+                    alert.informativeText = snippets.saveError ?? "加密存储当前不可用。"
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                    return
+                }
+                NSSound(named: "Glass")?.play()
+            }
+        case .toggleClipboardPreview:
+            clipboard.togglePreview()
         case .togglePreview:
             launcher.togglePreview()
         case .showLargeType:

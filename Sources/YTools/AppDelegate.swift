@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelController: SearchPanelController?
     private var settingsController: SettingsWindowController?
     private var snippets: SnippetManager?
+    private var recentDocuments: RecentDocumentsManager?
+    private var clipboard: ClipboardHistoryManager?
     private var hotKeyManager: HotKeyManager?
     private var statusItem: NSStatusItem?
     private var pauseClipboardMenuItem: NSMenuItem?
@@ -44,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panelController = panelController
         self.settingsController = settingsController
         self.snippets = snippets
+        self.recentDocuments = recentDocuments
+        self.clipboard = clipboard
         self.hotKeyManager = hotKeyManager
         preferences.hotKeysDidChange = { [weak self] in self?.configureHotKeys() }
         preferences.menuBarVisibilityDidChange = { [weak self] in self?.updateStatusItemVisibility() }
@@ -51,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panelController?.clearUsageLearning()
         }
         configureHotKeys()
+        configureApplicationMenu()
         configureStatusItem()
         updateStatusItemVisibility()
 
@@ -120,6 +125,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return launcherRegistered && clipboardRegistered
     }
 
+    private func configureApplicationMenu() {
+        let menu = NSMenu()
+        let appItem = menu.addItem(withTitle: "YTools", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "YTools")
+        appMenu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "退出 YTools", action: #selector(quit), keyEquivalent: "q").target = self
+        appItem.submenu = appMenu
+        menu.addItem(withTitle: "编辑", action: nil, keyEquivalent: "").submenu = NativeEditingMenu.make()
+        NSApp.mainMenu = menu
+    }
+
     private func configureStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "command.circle", accessibilityDescription: "YTools")
@@ -141,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         pauseClipboardMenuItem = pauseItem
         menu.addItem(.separator())
-        let privacyItem = menu.addItem(withTitle: "本机模式 · 无网络模块", action: nil, keyEquivalent: "")
+        let privacyItem = menu.addItem(withTitle: "默认本机模式 · 坚果云同步默认关闭", action: nil, keyEquivalent: "")
         privacyItem.isEnabled = false
         menu.addItem(.separator())
         menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ",")
@@ -168,8 +185,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func quit() { NSApp.terminate(nil) }
 
+    private var terminationFlushStarted = false
+    private var terminationFlushFinished = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationFlushFinished { return .terminateNow }
+        guard !terminationFlushStarted else { return .terminateLater }
+        terminationFlushStarted = true
+        Task { [weak self] in
+            await self?.panelController?.flushPendingActions()
+            await self?.clipboard?.flushPendingChanges()
+            await self?.snippets?.flushPendingChanges()
+            await self?.recentDocuments?.flushPendingChanges()
+            self?.terminationFlushFinished = true
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        snippets?.flushPendingChanges()
+        panelController?.shutdown()
+        settingsController?.shutdown()
+        hotKeyManager?.shutdown()
+        themeCancellable?.cancel()
     }
 
     private func applyAppearance(_ theme: AppTheme) {

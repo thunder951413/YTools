@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build macOS application
+        env:
+          YTOOLS_VERSION: ${{ github.ref_name }}
+        run: |
+          export YTOOLS_VERSION="${YTOOLS_VERSION#v}"
+          ./scripts/check.sh
+          ./scripts/build-app.sh
+          ditto -c -k --sequesterRsrc --keepParent dist/YTools.app dist/YTools-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTools-macos
+          path: dist/YTools-macos.zip
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Validate Windows build
+        run: ./scripts/check.ps1
+      - name: Build Windows release
+        run: ./scripts/build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTools-windows-x64
+          path: dist/YTools.Windows/YTools.exe
+
+  publish:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/YTools-macos/YTools-macos.zip
+            release-assets/YTools-windows-x64/YTools.exe

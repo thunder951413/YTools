@@ -46,18 +46,52 @@ struct LauncherView: View {
                         .onSubmit {
                             if model.activateSelected() { onActivate() }
                         }
+                    if model.isSearchPending {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("正在搜索")
+                    }
+                    if !model.query.isEmpty {
+                        Button {
+                            _ = model.clearQuery()
+                            searchFocused = true
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("清除搜索（Esc）")
+                        .accessibilityLabel("清除搜索")
+                    }
                 }
                 .padding(.horizontal, 22)
                 .frame(height: style.headerHeight)
             }
 
-            if !model.isSearchPending, !isIdle || !style.collapsesWhenIdle {
+            if !model.actionStatusText.isEmpty {
+                HStack(spacing: 8) {
+                    if model.isActionBusy {
+                        ProgressView().controlSize(.small).accessibilityLabel("文件传输进度")
+                    }
+                    Text(model.actionStatusText).lineLimit(1).truncationMode(.middle)
+                        .help(model.actionStatusText)
+                    Spacer(minLength: 0)
+                    if model.isActionBusy { Button("取消") { model.cancelFileOperation() }.accessibilityLabel("取消文件传输") }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 22)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: 32)
+                .accessibilityElement(children: .contain)
+            }
+            if !isIdle || !style.collapsesWhenIdle {
                 Divider()
 
                 resultContent
             }
 
-            if style.showsFooter, !isIdle, !model.isSearchPending {
+            if style.showsFooter, !isIdle {
                 Divider()
                 footer
             }
@@ -79,6 +113,7 @@ struct LauncherView: View {
                                 model.selectedActionIndex = index
                                 if model.activateSelected() { onActivate() }
                             }
+                            .accessibilityHint("按 Return 执行动作")
                             .id(action.id)
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
@@ -89,6 +124,12 @@ struct LauncherView: View {
                         proxy.scrollTo(model.actions[index].id, anchor: .center)
                     }
                 }
+            } else if model.isSearchPending && model.results.isEmpty {
+                VStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("正在搜索，结果会逐步显示…").font(.callout).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.results.isEmpty {
                 emptyResultsView
             } else {
@@ -109,6 +150,7 @@ struct LauncherView: View {
                                     model.selectedIndex = index
                                     if model.activate(result) { onActivate() }
                                 }
+                                .accessibilityHint("按 Return 打开；按右方向键显示动作")
                                 .contextMenu {
                                     if let url = result.fileURL {
                                         Button("打开") {
@@ -195,7 +237,7 @@ struct LauncherView: View {
     }
 }
 
-private struct ResultRow: View {
+struct ResultRow: View {
     let result: LauncherResult
     let selected: Bool
     let compact: Bool

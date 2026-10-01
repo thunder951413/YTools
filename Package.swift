@@ -40,7 +40,7 @@ let package = Package(
         ),
         .testTarget(
             name: "YToolsTests",
-            dependencies: ["YToolsCore", "YToolsModuleKit"],
+            dependencies: ["YToolsCore", "YToolsModuleKit", "YTools"],
             path: "Tests/YToolsTests"
         )
     ]

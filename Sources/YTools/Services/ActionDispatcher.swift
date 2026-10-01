@@ -1,9 +1,11 @@
 import AppKit
 import UniformTypeIdentifiers
+import YToolsCore
 
 enum ActionExecutionOutcome {
     case hidePanel
     case keepPanel
+    case backgroundStarted
     case navigate(String)
     case preview(URL)
     case clearFileBufferAndHide
@@ -13,11 +15,16 @@ enum ActionExecutionOutcome {
 protocol SnippetSaving: AnyObject {
     var saveError: String? { get }
     func save(text: String, title: String?, keyword: String, collection: String) -> Bool
+    func savePersisted(text: String, title: String?, keyword: String, collection: String) async -> Bool
 }
 
 extension SnippetSaving {
     func save(text: String) -> Bool {
         save(text: text, title: nil, keyword: "", collection: "默认")
+    }
+
+    func savePersisted(text: String) async -> Bool {
+        await savePersisted(text: text, title: nil, keyword: "", collection: "默认")
     }
 }
 
@@ -38,6 +45,27 @@ final class ActionDispatcher {
     private let snippets: any SnippetSaving
     private let recentDocuments: any RecentDocumentsRecording
     private let fileOperations = FileOperationService()
+    private var fileOperationTask: Task<Void, Never>?
+    private var isShuttingDown = false
+    private(set) var isBusy = false
+    private(set) var isChoosingDestination = false
+    private(set) var statusText = ""
+    var onStatusChanged: ((Bool, String) -> Void)?
+    var onDestinationPickerClosed: (() -> Void)?
+    private let chooseFileDestination: (FileOperationService.Operation) -> URL?
+
+    func flushPendingOperations() async {
+        isShuttingDown = true
+        await fileOperationTask?.value
+    }
+
+    func cancelFileOperation() { fileOperationTask?.cancel() }
+
+    func clearStatus() {
+        guard !isBusy else { return }
+        statusText = ""
+        onStatusChanged?(false, "")
+    }
     private let onOpenSettings: () -> Void
     private let onShowLargeType: (String) -> Void
 
@@ -45,15 +73,19 @@ final class ActionDispatcher {
         snippets: any SnippetSaving,
         recentDocuments: any RecentDocumentsRecording,
         onOpenSettings: @escaping () -> Void,
-        onShowLargeType: @escaping (String) -> Void
+        onShowLargeType: @escaping (String) -> Void,
+        chooseFileDestination: ((FileOperationService.Operation) -> URL?)? = nil
     ) {
         self.snippets = snippets
         self.recentDocuments = recentDocuments
         self.onOpenSettings = onOpenSettings
         self.onShowLargeType = onShowLargeType
+        self.chooseFileDestination = chooseFileDestination ?? Self.pickFileDestination
     }
 
     func execute(_ action: ResultAction) -> ActionExecutionOutcome {
+        guard !isBusy, !isShuttingDown else { return .keepPanel }
+        clearStatus()
         switch action {
         case let .copy(text):
             copyText(text)
@@ -100,6 +132,8 @@ final class ActionDispatcher {
     }
 
     func execute(_ kind: LauncherActionKind) -> ActionExecutionOutcome {
+        guard !isBusy, !isShuttingDown else { return .keepPanel }
+        clearStatus()
         switch kind {
         case let .perform(action):
             return execute(action)
@@ -110,11 +144,14 @@ final class ActionDispatcher {
         case let .largeType(text):
             onShowLargeType(text)
         case let .saveSnippet(text):
-            guard snippets.save(text: text) else {
-                showAlert(title: "无法保存文本片段", message: snippets.saveError ?? "加密存储当前不可用。")
-                return .keepPanel
+            Task { [weak self, snippets] in
+                guard await snippets.savePersisted(text: text) else {
+                    self?.showAlert(title: "无法保存文本片段", message: snippets.saveError ?? "加密存储当前不可用。")
+                    return
+                }
+                NSSound(named: "Glass")?.play()
             }
-            NSSound(named: "Glass")?.play()
+            return .hidePanel
         case let .preview(url):
             return .preview(url)
         case let .openWith(url):
@@ -191,24 +228,55 @@ final class ActionDispatcher {
             showAlert(title: "项目已不存在", message: source.path)
             return .keepPanel
         }
+        isChoosingDestination = true
+        defer {
+            // Return focus before releasing the resign-key guard, including
+            // cancellation. The native modal picker does not restore our panel.
+            onDestinationPickerClosed?()
+            isChoosingDestination = false
+        }
+        guard let directory = chooseFileDestination(operation) else { return .keepPanel }
+
+        return startFileOperation(operation, source: source, directory: directory)
+    }
+
+    private static func pickFileDestination(_ operation: FileOperationService.Operation) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = operation == .move ? "移动到这里" : "复制到这里"
-        guard panel.runModal() == .OK, let directory = panel.url else { return .keepPanel }
+        return panel.runModal() == .OK ? panel.url : nil
+    }
 
-        Task { [weak self, fileOperations] in
+    /// Also used by isolated regression tests without opening a native picker.
+    func startFileOperation(_ operation: FileOperationService.Operation, source: URL, directory: URL) -> ActionExecutionOutcome {
+        guard !isBusy, !isShuttingDown else { return .keepPanel }
+        isBusy = true
+        let verb = operation == .move ? "移动" : "复制"
+        statusText = "正在\(verb)“\(source.lastPathComponent)” → \(directory.path)"
+        onStatusChanged?(true, statusText)
+        fileOperationTask = Task { [self, fileOperations] in
             do {
-                try await fileOperations.perform(operation, source: source, destinationDirectory: directory)
+                try await fileOperations.perform(operation, source: source, destinationDirectory: directory) { [weak self] progress in
+                    await self?.updateFileProgress(progress, verb: verb, name: source.lastPathComponent)
+                }
+                statusText = "\(verb)完成：\(source.lastPathComponent) → \(directory.path)"
+            } catch is CancellationError {
+                statusText = "\(verb)已取消，临时目标已清理。"
             } catch {
-                self?.showAlert(
-                    title: operation == .move ? "移动失败" : "复制失败",
-                    message: error.localizedDescription
-                )
+                statusText = "\(verb)失败：\(error.localizedDescription)"
             }
+            isBusy = false
+            onStatusChanged?(false, statusText)
         }
-        return .hidePanel
+        return .backgroundStarted
+    }
+
+    private func updateFileProgress(_ progress: FileTransferProgress, verb: String, name: String) {
+        guard isBusy else { return }
+        statusText = "\(verb)“\(name)” · \(progress.detail)"
+        onStatusChanged?(true, statusText)
     }
 
     private func openWithApplication(_ url: URL) -> ActionExecutionOutcome {

@@ -26,8 +26,8 @@ final class SpotlightSearchService {
         self.preferences = preferences
     }
 
-    isolated deinit {
-        metadataQuery?.stop()
+    func shutdown() {
+        cancel()
         NotificationCenter.default.removeObserver(self)
     }
 

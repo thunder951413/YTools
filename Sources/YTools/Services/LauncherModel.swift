@@ -7,6 +7,7 @@ final class LauncherModel: ObservableObject {
     private struct LayoutState: Equatable {
         let itemCount: Int
         let isPending: Bool
+        let hasActionStatus: Bool
     }
 
     @Published var query = "" {
@@ -17,9 +18,14 @@ final class LauncherModel: ObservableObject {
     }
     @Published private(set) var results: [LauncherResult] = []
     @Published private(set) var isSearchPending = false
+    @Published private(set) var isActionBusy = false
+    @Published private(set) var actionStatusText = ""
+    @Published private var presentation = SearchPresentationState()
+    private var applyingResults = false
     @Published var selectedIndex = 0 {
         didSet {
             guard selectedIndex != oldValue else { return }
+            if !applyingResults, results.indices.contains(selectedIndex) { presentation.userSelected() }
             schedulePreviewUpdate()
         }
     }
@@ -51,7 +57,15 @@ final class LauncherModel: ObservableObject {
     private let spotlightDebouncer = DebouncedAction()
     private var previewTask: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
+    private var searchGeneration = 0
+    private var backgroundPending = false
+    private var spotlightPending = false
 
+    var isChoosingActionDestination: Bool { actionDispatcher.isChoosingDestination }
+    var onActionDestinationPickerClosed: (() -> Void)? {
+        get { actionDispatcher.onDestinationPickerClosed }
+        set { actionDispatcher.onDestinationPickerClosed = newValue }
+    }
     var actions: [LauncherAction] { actionMenu.actions }
     var isShowingActions: Bool { actionMenu.isShowing }
     var selectedActionIndex: Int {
@@ -60,11 +74,14 @@ final class LauncherModel: ObservableObject {
     }
     var fileBuffer: [URL] { fileBufferStore.urls }
     var layoutInvalidations: AnyPublisher<Void, Never> {
-        Publishers.CombineLatest3($results, $actionMenu, $isSearchPending)
-            .map { results, actionMenu, isPending in
-                LayoutState(
-                    itemCount: actionMenu.isShowing ? actionMenu.actions.count : results.count,
-                    isPending: isPending
+        Publishers.CombineLatest3($presentation, $actionMenu, $isSearchPending)
+            .combineLatest($actionStatusText.map { !$0.isEmpty }.removeDuplicates())
+            .map { state, hasActionStatus in
+                let (presentation, actionMenu, isPending) = state
+                return LayoutState(
+                    itemCount: actionMenu.isShowing ? actionMenu.actions.count : presentation.reservedRows,
+                    isPending: isPending,
+                    hasActionStatus: hasActionStatus
                 )
             }
             .removeDuplicates()
@@ -91,6 +108,15 @@ final class LauncherModel: ObservableObject {
             onOpenSettings: onOpenSettings,
             onShowLargeType: onShowLargeType
         )
+        actionDispatcher.onStatusChanged = { [weak self] busy, text in
+            guard let self else { return }
+            let operationFinished = self.isActionBusy && !busy
+            self.isActionBusy = busy
+            self.actionStatusText = text
+            if operationFinished, self.isFileNavigationActive {
+                self.refreshImmediately()
+            }
+        }
         preferences.$enabledSearchContentTypes
             .dropFirst()
             .sink { [weak self] _ in self?.refreshImmediately() }
@@ -99,6 +125,18 @@ final class LauncherModel: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in self?.refreshImmediately() }
             .store(in: &cancellables)
+        preferences.$customApplicationPaths
+            .dropFirst()
+            .sink { [weak self] _ in self?.refreshImmediately() }
+            .store(in: &cancellables)
+        Publishers.CombineLatest3(
+            preferences.$includeFilesInDefaultResults,
+            preferences.$maximumSearchResults,
+            preferences.$searchScopePaths
+        )
+        .dropFirst()
+        .sink { [weak self] _ in self?.refreshImmediately() }
+        .store(in: &cancellables)
         preferences.$searchInputDelay
             .dropFirst()
             .sink { [weak self] _ in self?.scheduleSearch() }
@@ -108,9 +146,19 @@ final class LauncherModel: ObservableObject {
             .sink { [weak self] _ in self?.schedulePreviewUpdate() }
             .store(in: &cancellables)
         Task { [searchCoordinator] in await searchCoordinator.prepare() }
+
+        // Restore the previous session's query so the panel opens with it
+        // pre-selected (the controller selects the field text on show):
+        // typing replaces it and doing nothing re-runs the search.
+        let lastQuery = preferences.lastLauncherQuery
+        if !lastQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            query = lastQuery
+        }
     }
 
     private func queryDidChange() {
+        actionDispatcher.clearStatus()
+        searchGeneration += 1
         if actionMenu.isShowing { actionMenu.dismiss() }
         if showsPreview || pinnedPreviewURL != nil { endPreviewSession() }
         searchTask?.cancel()
@@ -122,6 +170,7 @@ final class LauncherModel: ObservableObject {
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             resetForEmptyQuery()
         } else {
+            presentation.beginQuery()
             if !isSearchPending { isSearchPending = true }
             if !results.isEmpty {
                 results = []
@@ -156,6 +205,10 @@ final class LauncherModel: ObservableObject {
             return
         }
         if !isSearchPending { isSearchPending = true }
+        searchGeneration += 1
+        let generation = searchGeneration
+        presentation.beginQuery()
+        backgroundPending = true
         spotlightResults = []
         backgroundResults = []
         searchTask?.cancel()
@@ -168,23 +221,33 @@ final class LauncherModel: ObservableObject {
             fileNavigationFoldersFirst: preferences.fileNavigationFoldersFirst,
             enabledContentTypes: preferences.enabledSearchContentTypes,
             applicationAliases: preferences.applicationAliases,
+            customApplicationPaths: preferences.customApplicationPaths,
+            maximumResults: preferences.maximumSearchResults,
             requestModules: makeRequestModules(for: requestedQuery)
         )
         searchTask = Task { [weak self, searchCoordinator] in
-            let results = await searchCoordinator.search(request)
-            guard !Task.isCancelled, let self, self.query == requestedQuery else { return }
+            let results = await searchCoordinator.search(request) { [weak self] results in
+                await self?.publishBackground(results, query: requestedQuery, generation: generation)
+            }
+            guard !Task.isCancelled, let self, self.query == requestedQuery,
+                  self.searchGeneration == generation else { return }
             self.backgroundResults = results
-            self.isSearchPending = false
+            self.backgroundPending = false
+            self.isSearchPending = self.spotlightPending
             self.rebuildResults()
         }
         let spotlightQuery = isFileNavigationActive || !preferences.isSearchContentEnabled(.files)
             ? ""
             : requestedQuery
-        scheduleSpotlightSearch(spotlightQuery, requestedQuery: requestedQuery)
+        spotlightPending = !spotlightQuery.isEmpty
+        scheduleSpotlightSearch(spotlightQuery, requestedQuery: requestedQuery, generation: generation)
         rebuildResults()
     }
 
     private func resetForEmptyQuery() {
+        presentation.reset()
+        backgroundPending = false
+        spotlightPending = false
         searchDebouncer.cancel()
         searchTask?.cancel()
         searchTask = nil
@@ -199,7 +262,13 @@ final class LauncherModel: ObservableObject {
         }
     }
 
-    private func scheduleSpotlightSearch(_ spotlightQuery: String, requestedQuery: String) {
+    private func publishBackground(_ results: [LauncherResult], query requestedQuery: String, generation: Int) {
+        guard !Task.isCancelled, query == requestedQuery, searchGeneration == generation else { return }
+        backgroundResults = results
+        rebuildResults()
+    }
+
+    private func scheduleSpotlightSearch(_ spotlightQuery: String, requestedQuery: String, generation: Int) {
         guard !spotlightQuery.isEmpty else {
             spotlight.cancel()
             return
@@ -209,10 +278,12 @@ final class LauncherModel: ObservableObject {
         // and immediately tears down an NSMetadataQuery between keystrokes.
         let additionalDelay = max(0, 0.3 - preferences.searchInputDelay)
         let start = { @MainActor [weak self] in
-            guard let self, self.query == requestedQuery else { return }
+            guard let self, self.query == requestedQuery, self.searchGeneration == generation else { return }
             self.spotlight.search(spotlightQuery) { [weak self] results in
-                guard let self, self.query == requestedQuery else { return }
+                guard let self, self.query == requestedQuery, self.searchGeneration == generation else { return }
                 self.spotlightResults = results
+                self.spotlightPending = false
+                self.isSearchPending = self.backgroundPending
                 self.rebuildResults()
             }
         }
@@ -229,11 +300,14 @@ final class LauncherModel: ObservableObject {
             background: backgroundResults,
             spotlight: spotlightResults,
             query: query,
-            previousResults: results,
-            selectedIndex: selectedIndex
+            previousResults: presentation.preservesSelection ? results : [],
+            selectedIndex: presentation.preservesSelection ? selectedIndex : 0
         )
+        applyingResults = true
         results = aggregated.results
         selectedIndex = aggregated.selectedIndex
+        applyingResults = false
+        presentation.includeResults(count: results.count)
         if selectedFileURL == nil {
             showsPreview = false
         } else if showsPreview {
@@ -266,6 +340,8 @@ final class LauncherModel: ObservableObject {
         ]
     }
 
+    func cancelFileOperation() { actionDispatcher.cancelFileOperation() }
+
     @discardableResult
     func activateSelected() -> Bool {
         if isShowingActions { return activateSelectedAction() }
@@ -285,6 +361,7 @@ final class LauncherModel: ObservableObject {
             return
         }
         guard !results.isEmpty else { return }
+        presentation.userSelected()
         selectedIndex = (selectedIndex + offset + results.count) % results.count
     }
 
@@ -307,6 +384,7 @@ final class LauncherModel: ObservableObject {
     var visibleItemCount: Int {
         isShowingActions ? actions.count : results.count
     }
+    var layoutRowCount: Int { isShowingActions ? actions.count : presentation.reservedRows }
 
     var isFileNavigationActive: Bool {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -314,6 +392,7 @@ final class LauncherModel: ObservableObject {
     }
 
     func togglePreview() {
+        presentation.userSelected()
         guard selectedFileURL != nil else {
             showsPreview = false
             return
@@ -329,6 +408,7 @@ final class LauncherModel: ObservableObject {
 
     @discardableResult
     func beginMomentaryPreview() -> Bool {
+        presentation.userSelected()
         guard !isShowingActions, selectedFileURL != nil, !showsPreview else { return false }
         showsPreview = true
         displayPreviewImmediately()
@@ -382,6 +462,7 @@ final class LauncherModel: ObservableObject {
 
     @discardableResult
     func showActionsForSelected() -> Bool {
+        presentation.userSelected()
         guard !isShowingActions, results.indices.contains(selectedIndex) else { return false }
         guard actionMenu.show(for: results[selectedIndex]) else { return false }
         showsPreview = false
@@ -428,6 +509,7 @@ final class LauncherModel: ObservableObject {
 
     @discardableResult
     func addSelectedToBuffer(moveToNext: Bool) -> Bool {
+        presentation.userSelected()
         guard !isShowingActions,
               results.indices.contains(selectedIndex),
               let url = results[selectedIndex].resourceURL else { return false }
@@ -486,6 +568,11 @@ final class LauncherModel: ObservableObject {
         return true
     }
 
+    /// Persists the current query so the next launch restores it.
+    func persistLastQuery() {
+        preferences.lastLauncherQuery = String(query.prefix(512))
+    }
+
     var selectedLargeTypeText: String? {
         guard !isShowingActions, results.indices.contains(selectedIndex) else { return nil }
         let result = results[selectedIndex]
@@ -498,6 +585,9 @@ final class LauncherModel: ObservableObject {
         case .hidePanel:
             return true
         case .keepPanel:
+            return false
+        case .backgroundStarted:
+            actionMenu.dismiss()
             return false
         case let .navigate(path):
             query = path
@@ -513,5 +603,19 @@ final class LauncherModel: ObservableObject {
             fileBufferStore.clear()
             return true
         }
+    }
+
+    func flushPendingActions() async { await actionDispatcher.flushPendingOperations() }
+
+    func shutdown() {
+        searchGeneration += 1
+        searchDebouncer.cancel()
+        spotlightDebouncer.cancel()
+        searchTask?.cancel()
+        searchTask = nil
+        previewTask?.cancel()
+        previewTask = nil
+        spotlight.shutdown()
+        cancellables.removeAll()
     }
 }

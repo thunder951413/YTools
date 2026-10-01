@@ -3,7 +3,7 @@ import Security
 
 /// Shared primitive for retrieving or creating a device-bound symmetric key.
 /// Encryption formats remain owned by their stores; keychain policy lives here.
-struct KeychainKeyAccessor {
+struct KeychainKeyAccessor: Sendable {
     enum AccessError: Error, LocalizedError {
         case missing(String)
         case keychain(OSStatus)

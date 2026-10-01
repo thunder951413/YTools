@@ -19,6 +19,23 @@ struct YToolsCoreChecks {
         try checkPanelCommandRouter()
         try checkSearchNormalization()
         try checkClipboardPolicy()
+        var presentation = SearchPresentationState()
+        presentation.beginQuery()
+        presentation.includeResults(count: 6)
+        presentation.userSelected()
+        presentation.beginQuery()
+        let page = HistoryPage.select(Array(0..<251), limit: 100) { $0 % 2 == 0 }
+        guard presentation.reservedRows == 6, !presentation.preservesSelection,
+              page.totalMatches == 126, page.hasMore,
+              HistoryPage.select(Array(0..<251), limit: 100, matching: { $0 == 250 }).items == [250] else {
+            throw CheckFailure.message("Progressive search or clipboard pagination regressed")
+        }
+        guard SettingsSearchCatalog.matches(sectionID: "clipboard", query: "WEBDAV 同步口令"),
+              !SettingsSearchCatalog.matches(sectionID: "appearance", query: "坚果云"),
+              SettingsSearchCatalog.searchTargets("WEBDAV 同步口令").map(\.id) == ["CloudPassphrase"],
+              FileTransferProgress(completedBytes: 32, totalBytes: 64, phase: .copying).percentage == 50 else {
+            throw CheckFailure.message("Settings search cannot find encrypted sync settings")
+        }
         try checkRelativePanelPlacement()
         try checkModuleBoundary()
         print("YToolsCore checks passed")

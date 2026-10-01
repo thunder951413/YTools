@@ -39,6 +39,7 @@ public enum PanelCommand: Equatable, Sendable {
     case navigateBack
     case deleteClipboardItem
     case saveClipboardAsSnippet
+    case toggleClipboardPreview
     case togglePreview
     case showLargeType
     case revealSelected
@@ -56,6 +57,7 @@ public struct PanelCommandRouter: Sendable {
         static let escape: UInt16 = 53
         static let d: UInt16 = 2
         static let s: UInt16 = 1
+        static let p: UInt16 = 35
         static let y: UInt16 = 16
         static let l: UInt16 = 37
         static let comma: UInt16 = 43
@@ -97,6 +99,8 @@ public struct PanelCommandRouter: Sendable {
             return .deleteClipboardItem
         case (KeyCode.s, .clipboard) where event.modifiers.contains(.command):
             return .saveClipboardAsSnippet
+        case (KeyCode.p, .clipboard) where event.modifiers == .command:
+            return .toggleClipboardPreview
         case (KeyCode.y, .launcher) where event.modifiers.contains(.command):
             return .togglePreview
         case (KeyCode.l, .launcher) where event.modifiers.contains(.command):

@@ -5,6 +5,11 @@ import Foundation
 actor ClipboardPersistenceService {
     private var store: ClipboardHistoryStore?
     private var latestRevision = 0
+    private let storeFactory: @Sendable () -> ClipboardHistoryStore
+
+    init(storeFactory: @escaping @Sendable () -> ClipboardHistoryStore = { ClipboardHistoryStore() }) {
+        self.storeFactory = storeFactory
+    }
 
     func load() -> ClipboardStoreLoadResult {
         storeInstance().load()
@@ -37,7 +42,7 @@ actor ClipboardPersistenceService {
 
     private func storeInstance() -> ClipboardHistoryStore {
         if let store { return store }
-        let created = ClipboardHistoryStore()
+        let created = storeFactory()
         store = created
         return created
     }

@@ -255,6 +255,7 @@ final class AppPreferences: ObservableObject {
     @Published var resultExpansionDuration: Double {
         didSet { defaults.set(resultExpansionDuration, forKey: Keys.resultExpansionDuration) }
     }
+    @Published var lastLauncherQuery: String { didSet { defaults.set(lastLauncherQuery, forKey: Keys.lastLauncherQuery) } }
     @Published var enabledSearchContentTypes: Set<SearchContentType> {
         didSet {
             defaults.set(
@@ -280,6 +281,9 @@ final class AppPreferences: ObservableObject {
     @Published var includeAutomaticDictionary: Bool { didSet { defaults.set(includeAutomaticDictionary, forKey: Keys.includeAutomaticDictionary) } }
     @Published var maximumSearchResults: Int { didSet { defaults.set(maximumSearchResults, forKey: Keys.maximumSearchResults) } }
     @Published var searchScopePaths: [String] { didSet { defaults.set(searchScopePaths, forKey: Keys.searchScopePaths) } }
+    @Published var customApplicationPaths: [String] {
+        didSet { defaults.set(customApplicationPaths, forKey: Keys.customApplicationPaths) }
+    }
     @Published var applicationAliases: [String: String] {
         didSet { defaults.set(applicationAliases, forKey: Keys.applicationAliases) }
     }
@@ -294,6 +298,9 @@ final class AppPreferences: ObservableObject {
     @Published var clipboardMaximumTextCharacters: Int { didSet { defaults.set(clipboardMaximumTextCharacters, forKey: Keys.clipboardMaximumTextCharacters) } }
     @Published var clipboardStoreImages: Bool { didSet { defaults.set(clipboardStoreImages, forKey: Keys.clipboardStoreImages) } }
     @Published var clipboardIgnoredBundleIDs: [String] { didSet { defaults.set(clipboardIgnoredBundleIDs, forKey: Keys.clipboardIgnoredBundleIDs) } }
+    @Published var clipboardCloudSyncEnabled: Bool { didSet { defaults.set(clipboardCloudSyncEnabled, forKey: Keys.clipboardCloudSyncEnabled) } }
+    @Published var clipboardCloudSyncFolder: String { didSet { defaults.set(clipboardCloudSyncFolder, forKey: Keys.clipboardCloudSyncFolder) } }
+    @Published var clipboardCloudSyncIntervalMinutes: Int { didSet { defaults.set(clipboardCloudSyncIntervalMinutes, forKey: Keys.clipboardCloudSyncIntervalMinutes) } }
     @Published var hotKeyError: String?
     @Published var launchAtLoginError: String?
     @Published var keyboardInputSourceError: String?
@@ -344,6 +351,7 @@ final class AppPreferences: ObservableObject {
             max(defaults.object(forKey: Keys.resultExpansionDuration) as? Double ?? 0.15, 0),
             0.4
         )
+        self.lastLauncherQuery = defaults.string(forKey: Keys.lastLauncherQuery) ?? ""
         if defaults.object(forKey: Keys.enabledSearchContentTypes) == nil {
             self.enabledSearchContentTypes = Set(SearchContentType.allCases)
         } else {
@@ -371,6 +379,10 @@ final class AppPreferences: ObservableObject {
             20
         )
         self.searchScopePaths = Self.validSearchScopes(defaults.stringArray(forKey: Keys.searchScopePaths) ?? [])
+        self.customApplicationPaths = MacApplicationPathPolicy.normalize(
+            paths: defaults.stringArray(forKey: Keys.customApplicationPaths) ?? [],
+            requireExistingBundle: false
+        )
         self.applicationAliases = Self.validApplicationAliases(
             defaults.dictionary(forKey: Keys.applicationAliases) as? [String: String] ?? [:]
         )
@@ -396,6 +408,12 @@ final class AppPreferences: ObservableObject {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
                 .filter { !$0.isEmpty }
         )).sorted()
+        self.clipboardCloudSyncEnabled = defaults.object(forKey: Keys.clipboardCloudSyncEnabled) as? Bool ?? false
+        self.clipboardCloudSyncFolder = defaults.string(forKey: Keys.clipboardCloudSyncFolder) ?? "YTools/clipboard-sync"
+        self.clipboardCloudSyncIntervalMinutes = min(
+            max(defaults.object(forKey: Keys.clipboardCloudSyncIntervalMinutes) as? Int ?? 15, 15),
+            240
+        )
     }
 
     func restoreDefaults() {
@@ -426,6 +444,8 @@ final class AppPreferences: ObservableObject {
         includeAutomaticDictionary = true
         maximumSearchResults = 8
         searchScopePaths = []
+        customApplicationPaths = []
+        applicationAliases = [:]
         fileNavigationShowsHiddenFiles = false
         fileNavigationSort = .name
         fileNavigationSortAscending = true
@@ -437,6 +457,9 @@ final class AppPreferences: ObservableObject {
         clipboardMaximumTextCharacters = 1_000
         clipboardStoreImages = false
         clipboardIgnoredBundleIDs = []
+        clipboardCloudSyncEnabled = false
+        clipboardCloudSyncFolder = "YTools/clipboard-sync"
+        clipboardCloudSyncIntervalMinutes = 15
     }
 
     func savePanelPosition(
@@ -545,9 +568,32 @@ final class AppPreferences: ObservableObject {
         searchScopePaths.removeAll { $0 == path }
     }
 
+    func addCustomApplication(_ url: URL) -> String? {
+        guard let path = MacApplicationPathPolicy.normalize(url: url, requireExistingBundle: true) else {
+            return nil
+        }
+        customApplicationPaths = MacApplicationPathPolicy.normalize(
+            paths: customApplicationPaths + [path],
+            requireExistingBundle: false
+        )
+        return path
+    }
+
+    func removeCustomApplication(_ path: String) {
+        guard let canonicalPath = MacApplicationPathPolicy.normalize(
+            path: path,
+            requireExistingBundle: false
+        ) else { return }
+        let comparisonPath = canonicalPath.lowercased()
+        customApplicationPaths.removeAll { $0.lowercased() == comparisonPath }
+        applicationAliases.keys
+            .filter { $0.lowercased() == comparisonPath }
+            .forEach { applicationAliases.removeValue(forKey: $0) }
+    }
+
     func addApplicationAliasTarget(_ url: URL) {
-        let path = url.standardizedFileURL.path
-        guard url.pathExtension.lowercased() == "app", applicationAliases[path] == nil else { return }
+        guard let path = MacApplicationPathPolicy.normalize(url: url, requireExistingBundle: true),
+              applicationAliases[path] == nil else { return }
         applicationAliases[path] = ""
     }
 
@@ -609,11 +655,16 @@ final class AppPreferences: ObservableObject {
     }
 
     private static func validApplicationAliases(_ aliases: [String: String]) -> [String: String] {
-        Dictionary(uniqueKeysWithValues: aliases.compactMap { path, value in
-            let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
-            guard URL(fileURLWithPath: standardized).pathExtension.lowercased() == "app" else { return nil }
-            return (standardized, value)
-        })
+        var normalized: [String: String] = [:]
+        var seen: Set<String> = []
+        for path in aliases.keys.sorted() {
+            guard let canonicalPath = MacApplicationPathPolicy.normalize(
+                path: path,
+                requireExistingBundle: false
+            ), seen.insert(canonicalPath.lowercased()).inserted else { continue }
+            normalized[canonicalPath] = aliases[path]
+        }
+        return normalized
     }
 
     private static func migrateIfNeeded(_ defaults: UserDefaults) {
@@ -651,7 +702,7 @@ final class AppPreferences: ObservableObject {
         )
     }
 
-    private static let currentSchemaVersion = 7
+    private static let currentSchemaVersion = 8
 
     private enum Keys {
         static let schemaVersion = "preferences.schemaVersion"
@@ -675,6 +726,7 @@ final class AppPreferences: ObservableObject {
         static let searchInputDelay = "preferences.search.inputDelay"
         static let previewSelectionDelay = "preferences.appearance.previewSelectionDelay"
         static let resultExpansionDuration = "preferences.appearance.resultExpansionDuration"
+        static let lastLauncherQuery = "preferences.launcher.lastQuery"
         static let enabledSearchContentTypes = "preferences.search.enabledContentTypes"
         static let enabledSystemCommands = "preferences.systemCommands.enabled"
         static let systemCommandKeywords = "preferences.systemCommands.keywords"
@@ -682,6 +734,7 @@ final class AppPreferences: ObservableObject {
         static let includeAutomaticDictionary = "preferences.search.includeAutomaticDictionary"
         static let maximumSearchResults = "preferences.search.maximumResults"
         static let searchScopePaths = "preferences.search.scopePaths"
+        static let customApplicationPaths = "preferences.search.customApplicationPaths"
         static let applicationAliases = "preferences.search.applicationAliases"
         static let fileNavigationShowsHiddenFiles = "preferences.files.showHidden"
         static let fileNavigationSort = "preferences.files.sort"
@@ -694,5 +747,8 @@ final class AppPreferences: ObservableObject {
         static let clipboardMaximumTextCharacters = "preferences.clipboard.maximumTextCharacters"
         static let clipboardStoreImages = "preferences.clipboard.storeImages"
         static let clipboardIgnoredBundleIDs = "preferences.clipboard.ignoredBundleIDs"
+        static let clipboardCloudSyncEnabled = "preferences.clipboard.cloudSyncEnabled"
+        static let clipboardCloudSyncFolder = "preferences.clipboard.cloudSyncFolder"
+        static let clipboardCloudSyncIntervalMinutes = "preferences.clipboard.cloudSyncIntervalMinutes"
     }
 }

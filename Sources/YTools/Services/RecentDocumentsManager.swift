@@ -8,22 +8,71 @@ import YToolsModuleKit
 final class RecentDocumentsManager: ObservableObject, RecentDocumentsRecording {
     @Published private(set) var items: [RecentDocumentItem]
     @Published private(set) var storageError: String?
+    @Published private(set) var isLoaded = false
+    @Published private(set) var isSaving = false
 
-    private let store = SecureCodableStore(name: "recent-documents")
+    private let writer: OrderedSecureStoreWriter
     private let maximumItems = 200
+    private var pendingMutations: [PendingMutation] = []
+    private var initializationTask: Task<Void, Never>?
+    private var revision: UInt64 = 0
+    private var queuedRevision: UInt64 = 0
+    private var latestSaveTask: Task<Bool, Never>?
 
     init() {
-        switch store.load([RecentDocumentItem].self) {
+        writer = OrderedSecureStoreWriter { SecureCodableStore(name: "recent-documents") }
+        items = []
+        storageError = nil
+        startLoading()
+    }
+
+    init(storeFactory: @escaping @Sendable () -> SecureCodableStore) {
+        writer = OrderedSecureStoreWriter(storeFactory: storeFactory)
+        items = []
+        storageError = nil
+        startLoading()
+    }
+
+    private func startLoading() {
+        initializationTask = Task { [weak self, writer] in
+            let rawResult = await writer.load([RecentDocumentItem].self)
+            let result = await Task.detached {
+                switch rawResult {
+                case let .loaded(items):
+                    let filtered = items.filter { FileManager.default.fileExists(atPath: $0.path) }
+                    return PreparedLoad(result: .loaded(filtered), removedMissingItems: filtered.count != items.count)
+                case .missing: return PreparedLoad(result: .missing, removedMissingItems: false)
+                case let .unavailable(message): return PreparedLoad(result: .unavailable(message), removedMissingItems: false)
+                case let .corrupted(message): return PreparedLoad(result: .corrupted(message), removedMissingItems: false)
+                }
+            }.value
+            guard let self else { return }
+            applyLoad(result)
+        }
+    }
+
+    private func applyLoad(_ prepared: PreparedLoad) {
+        guard !isLoaded else { return }
+        let result = prepared.result
+        var loaded: [RecentDocumentItem]
+        switch result {
         case .missing:
-            items = []
+            loaded = []
             storageError = nil
-        case let .loaded(loaded):
-            items = loaded.filter { FileManager.default.fileExists(atPath: $0.path) }
+        case let .loaded(value):
+            loaded = value
             storageError = nil
-            if items.count != loaded.count { persist() }
         case let .unavailable(message), let .corrupted(message):
-            items = []
+            loaded = []
             storageError = message
+        }
+        pendingMutations.forEach { $0.apply(to: &loaded, maximumItems: maximumItems) }
+        pendingMutations.removeAll()
+        items = loaded
+        isLoaded = true
+        if revision > 0 || prepared.removedMissingItems {
+            revision = max(1, revision)
+            _ = queueCurrentSnapshot()
         }
     }
 
@@ -31,30 +80,72 @@ final class RecentDocumentsManager: ObservableObject, RecentDocumentsRecording {
         guard url.isFileURL,
               url.pathExtension.caseInsensitiveCompare("app") != .orderedSame,
               FileManager.default.fileExists(atPath: url.path) else { return }
-        items.removeAll { $0.path == url.path }
-        items.insert(
-            RecentDocumentItem(id: UUID(), path: url.path, lastOpenedAt: Date()),
-            at: 0
-        )
-        items = Array(items.prefix(maximumItems))
-        persist()
+        apply(.record(RecentDocumentItem(id: UUID(), path: url.path, lastOpenedAt: Date())))
+        if isLoaded { _ = queueCurrentSnapshot() }
     }
 
     func clear() {
-        items.removeAll()
-        persist()
+        apply(.clear)
+        if isLoaded { _ = queueCurrentSnapshot() }
     }
 
     func searchModule() -> RecentDocumentsSearchModule {
         RecentDocumentsSearchModule(items: items)
     }
 
-    private func persist() {
-        if store.save(items) {
-            storageError = nil
-        } else {
-            storageError = "无法写入加密最近文档；现有文件未被明文替代。"
+    func flushPendingChanges() async {
+        await initializationTask?.value
+        if queuedRevision < revision { _ = await queueCurrentSnapshot().value }
+        _ = await latestSaveTask?.value
+    }
+
+    func waitUntilLoaded() async { await initializationTask?.value }
+
+    private func apply(_ mutation: PendingMutation) {
+        mutation.apply(to: &items, maximumItems: maximumItems)
+        if !isLoaded { pendingMutations.append(mutation) }
+        revision &+= 1
+    }
+
+    private func queueCurrentSnapshot() -> Task<Bool, Never> {
+        let snapshot = items
+        let saveRevision = revision
+        queuedRevision = max(queuedRevision, saveRevision)
+        isSaving = true
+        let previous = latestSaveTask
+        let task = Task { [weak self, writer] in
+            _ = await previous?.value
+            let success = await writer.save(snapshot)
+            guard let self else { return success }
+            if saveRevision == revision {
+                isSaving = false
+                storageError = success ? nil : "无法写入加密最近文档；现有文件未被明文替代。"
+            }
+            return success
         }
+        latestSaveTask = task
+        return task
+    }
+
+    private enum PendingMutation {
+        case record(RecentDocumentItem)
+        case clear
+
+        func apply(to items: inout [RecentDocumentItem], maximumItems: Int) {
+            switch self {
+            case let .record(item):
+                items.removeAll { $0.path == item.path }
+                items.insert(item, at: 0)
+                items = Array(items.prefix(maximumItems))
+            case .clear:
+                items.removeAll()
+            }
+        }
+    }
+
+    private struct PreparedLoad: Sendable {
+        let result: BackgroundStoreLoad<[RecentDocumentItem]>
+        let removedMissingItems: Bool
     }
 }
 

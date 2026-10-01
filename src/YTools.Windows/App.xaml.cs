@@ -1,0 +1,129 @@
+using System.IO;
+using System.Threading;
+using System.Windows;
+using System.Windows.Threading;
+using YTools.Infrastructure;
+using YTools.Services;
+
+namespace YTools.Windows;
+
+/// <summary>Application entry: self-test mode, single instance and controller wiring.</summary>
+public partial class App : Application
+{
+    private MainController? _controller;
+    private Mutex? _singleInstanceMutex;
+    private bool _ownsSingleInstanceMutex;
+
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+        if (e.Args.Contains("--ui-snapshot"))
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            _ = CaptureSnapshotsAsync();
+            return;
+        }
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        System.Windows.Forms.Application.ThreadException += (_, args) =>
+        {
+            AppPaths.LogException(args.Exception);
+            MessageBox.Show(
+                $"YTools 遇到未处理的错误：\n{args.Exception.Message}\n\n详细日志已写入 %APPDATA%\\YTools\\error.log。",
+                "YTools",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            AppPaths.LogException(args.ExceptionObject as Exception ?? new Exception("未知错误"));
+        };
+
+        if (e.Args.Contains("--selftest"))
+        {
+            var code = SelfTest.Run();
+            Shutdown(code);
+            return;
+        }
+
+        _singleInstanceMutex = new Mutex(initiallyOwned: true, "YTools.SingleInstance", out var createdNew);
+        _ownsSingleInstanceMutex = createdNew;
+        if (!createdNew)
+        {
+            try
+            {
+                using var signal = new EventWaitHandle(
+                    false,
+                    EventResetMode.AutoReset,
+                    "YTools.ShowLauncher");
+                signal.Set();
+            }
+            catch
+            {
+                // The primary instance may be too old to listen; fall through.
+            }
+
+            Shutdown();
+            return;
+        }
+
+        UI.IconService.InitializeCom();
+        _controller = new MainController();
+        _controller.Start();
+        if (e.Args.Contains("--opensettings"))
+        {
+            _controller.ShowSettings();
+        }
+    }
+
+    private async Task CaptureSnapshotsAsync()
+    {
+        try
+        {
+            var output = Environment.GetEnvironmentVariable("YTOOLS_UI_SNAPSHOT_DIR") ?? throw new InvalidOperationException("Set YTOOLS_UI_SNAPSHOT_DIR.");
+            await WindowsUiSnapshotService.CaptureAsync(output);
+            Shutdown(0);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine(exception);
+            var output = Environment.GetEnvironmentVariable("YTOOLS_UI_SNAPSHOT_DIR");
+            if (output is not null && Directory.Exists(output))
+            {
+                try { File.WriteAllText(Path.Combine(output, "snapshot-error.txt"), exception.ToString()); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            Shutdown(1);
+        }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _controller?.Shutdown();
+        if (_ownsSingleInstanceMutex && _singleInstanceMutex is not null)
+        {
+            try
+            {
+                _singleInstanceMutex.ReleaseMutex();
+            }
+            catch
+            {
+                // The mutex may already be released during a hard shutdown.
+            }
+        }
+
+        _singleInstanceMutex?.Dispose();
+        base.OnExit(e);
+    }
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        AppPaths.LogException(e.Exception);
+        MessageBox.Show(
+            $"YTools 遇到未处理的错误：\n{e.Exception.Message}\n\n详细日志已写入 %APPDATA%\\YTools\\error.log。",
+            "YTools",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+        e.Handled = true;
+    }
+}

@@ -1,0 +1,45 @@
+name: Windows validation
+
+on:
+  push:
+    branches: [main, windows]
+  pull_request:
+    branches: [main, windows]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Strict validation
+        shell: pwsh
+        run: ./scripts/check.ps1
+      - name: Render synthetic native windows
+        shell: pwsh
+        run: |
+          $env:YTOOLS_UI_SNAPSHOT_DIR = Join-Path $env:RUNNER_TEMP 'ytools-ui'
+          $exe = 'src/YTools.Windows/bin/Release/net8.0-windows/YTools.exe'
+          $process = Start-Process -FilePath $exe -ArgumentList '--ui-snapshot' -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            $log = Join-Path $env:YTOOLS_UI_SNAPSHOT_DIR 'snapshot-error.txt'
+            if (Test-Path $log) { Get-Content $log }
+            throw "Native UI snapshots failed: $($process.ExitCode)"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTools-windows-ui-review
+          path: ${{ runner.temp }}/ytools-ui/*.png
+      - name: Publish single-file release
+        run: ./scripts/build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTools-windows-x64
+          path: dist/YTools.Windows/YTools.exe

@@ -4,6 +4,12 @@ import YToolsCore
 final class PanelCommandRouterTests: XCTestCase {
     private let router = PanelCommandRouter()
 
+    func testClipboardPreviewShortcutOnlyMatchesItsExactModifiers() {
+        XCTAssertEqual(router.command(for: PanelKeyEvent(keyCode: 35, modifiers: .command), mode: .clipboard), .toggleClipboardPreview)
+        XCTAssertNil(router.command(for: PanelKeyEvent(keyCode: 35, modifiers: [.command, .shift]), mode: .clipboard))
+        XCTAssertNil(router.command(for: PanelKeyEvent(keyCode: 35, modifiers: .command), mode: .launcher))
+    }
+
     func testMapsNumberShortcutsToZeroBasedResults() {
         XCTAssertEqual(
             router.command(

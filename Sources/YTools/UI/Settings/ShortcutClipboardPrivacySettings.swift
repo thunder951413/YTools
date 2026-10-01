@@ -12,7 +12,7 @@ struct ShortcutSettingsView: View {
             }
             Divider()
             SettingsRow(title: "剪贴板历史", detail: "当前全局组合键；可点击后重新录制") {
-                HotKeyRecorderView(hotKey: $preferences.clipboardHotKey)
+                HotKeyRecorderView(hotKey: $preferences.clipboardHotKey, label: "剪贴板快捷键")
             }
             if let error = preferences.hotKeyError {
                 Divider()
@@ -43,8 +43,10 @@ struct ClipboardSettingsView: View {
                     Divider()
                 }
                 Toggle("记录剪贴板历史", isOn: $preferences.clipboardEnabled)
+                    .settingsTarget("ClipboardEnabled")
                 Divider()
                 Toggle("暂停记录（保留现有历史）", isOn: $preferences.clipboardPaused)
+                    .settingsTarget("ClipboardPaused")
                     .disabled(!preferences.clipboardEnabled)
                 Divider()
                 SettingsRow(title: "保留时间", detail: "过期记录会自动删除") {
@@ -79,6 +81,7 @@ struct ClipboardSettingsView: View {
                 }
                 Divider()
                 Toggle("记录图片（最大 5 MB）", isOn: $preferences.clipboardStoreImages)
+                    .settingsTarget("ClipboardStoreImages")
                 Text("图片与文本一起写入 AES-GCM 加密历史。为减少敏感数据和磁盘占用，此项默认关闭。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -86,6 +89,60 @@ struct ClipboardSettingsView: View {
                 SettingsRow(title: "加密存储占用", detail: "包括清单、记录和图片缩略图") {
                     Text(formattedStorageSize)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            SettingsCard(title: "坚果云加密同步", icon: "arrow.triangle.2.circlepath") {
+                Toggle("启用坚果云同步", isOn: $preferences.clipboardCloudSyncEnabled)
+                    .settingsTarget("ClipboardCloudSyncEnabled")
+                Text("仅在你启用后联网。每条新增或删除记录独立 AES-GCM 加密；相同内容只累计复制次数，不上传。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Divider()
+                SettingsRow(title: "远端目录", detail: "仅允许英文字母、数字、点、下划线与连字符") {
+                    TextField("YTools/clipboard-sync", text: $preferences.clipboardCloudSyncFolder)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                Divider()
+                SettingsRow(title: "拉取间隔", detail: "无变化时只读取每台设备的小型标记文件") {
+                    Stepper(
+                        "每 \(preferences.clipboardCloudSyncIntervalMinutes) 分钟",
+                        value: $preferences.clipboardCloudSyncIntervalMinutes,
+                        in: 15...240,
+                        step: 5
+                    )
+                    .frame(width: 170)
+                }
+                Divider()
+                TextField("坚果云用户名", text: $clipboardManager.cloudUsernameInput)
+                    .settingsTarget("CloudUsername")
+                    .textFieldStyle(.roundedBorder)
+                SecureField("坚果云应用密码", text: $clipboardManager.cloudAppPasswordInput)
+                    .settingsTarget("CloudAppPassword")
+                    .textFieldStyle(.roundedBorder)
+                SecureField("同步口令（至少 12 个字符；所有设备必须一致）", text: $clipboardManager.cloudSyncPassphraseInput)
+                    .settingsTarget("CloudPassphrase")
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("加密保存凭据") {
+                        Task { _ = await clipboardManager.saveCloudSyncCredentials(
+                            username: clipboardManager.cloudUsernameInput,
+                            appPassword: clipboardManager.cloudAppPasswordInput,
+                            syncPassphrase: clipboardManager.cloudSyncPassphraseInput
+                        ) }
+                    }
+                    Button("立即同步") {
+                        Task { await clipboardManager.syncCloudNow() }
+                    }
+                    .disabled(!preferences.clipboardCloudSyncEnabled)
+                    Spacer()
+                    if !clipboardManager.cloudSyncStatus.isEmpty {
+                        Text(clipboardManager.cloudSyncStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
             }
 
@@ -109,7 +166,7 @@ struct ClipboardSettingsView: View {
                 }
                 Divider()
                 Button("选择应用…") { fileImporter.isPresented = true }
-            }
+            }.settingsTarget("ClipboardIgnoredApplications")
         }
         .fileImporter(
             isPresented: $fileImporter.isPresented,
@@ -133,9 +190,20 @@ struct ClipboardSettingsView: View {
 
 struct PrivacySettingsView: View {
     @ObservedObject var recentDocuments: RecentDocumentsManager
+    var diagnosticReport: () -> String = { "YTools 本机诊断" }
+    @State private var diagnosticCopied = false
 
     var body: some View {
         VStack(spacing: 14) {
+            SettingsCard(title: "本机诊断", icon: "stethoscope") {
+                Text("仅包含版本、能力状态与记录数量；复制时不联网，不包含用户内容或凭据。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button(diagnosticCopied ? "诊断已复制" : "复制本机诊断") {
+                    let board = NSPasteboard.general
+                    board.clearContents()
+                    diagnosticCopied = board.setString(diagnosticReport(), forType: .string)
+                }
+            }
             SettingsCard(title: "本机数据", icon: "internaldrive") {
                 PrivacyLine(
                     icon: "lock.fill",
