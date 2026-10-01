@@ -12,7 +12,7 @@ struct ShortcutSettingsView: View {
             }
             Divider()
             SettingsRow(title: "剪贴板历史", detail: "当前全局组合键；可点击后重新录制") {
-                HotKeyRecorderView(hotKey: $preferences.clipboardHotKey)
+                HotKeyRecorderView(hotKey: $preferences.clipboardHotKey, label: "剪贴板快捷键")
             }
             if let error = preferences.hotKeyError {
                 Divider()

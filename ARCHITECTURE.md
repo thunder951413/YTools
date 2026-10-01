@@ -70,6 +70,7 @@ ModuleKit（无 UI 的公共边界）
 - 边界必须明确：模块最多返回 40 条、文件搜索最多 100 条、应用结果最多 12 条。
 - 自定义应用只在路径集合变化时规范化并构建内存条目；普通按键搜索直接复用快照，不扫描自定义目录，也不新增文件监视器。Windows 限定本机 `.exe`/`.lnk`/`.appref-ms`，macOS 限定解析符号链接后仍为有效 bundle 的绝对 `.app`。
 - 两端的使用学习只持久化结果 ID/查询的 SHA-256 哈希、计数和时间；排序依次考虑基础匹配、频率/新近度/查询记忆、应用启动次数同分项和本地化标题。macOS 的排名写盘通过串行后台队列完成，不占用 MainActor 输入/激活路径。
+- macOS 的固定索引根包括系统 Cryptex 的 Applications：Safari 的公开链接被系统标记为隐藏，从真实系统根扫描；普通目录仍跳过隐藏项与 bundle 后代。
 - 应用目录发生变化时，macOS 首次准备会建立完整快照；后续失效或 5 分钟刷新只排队后台扫描，当前搜索继续使用旧快照，并用 generation 防止扫描期间的新变化被误清除。
 
 - Snippets 与最近文档通过有序后台写入器加载/保存；加载期间的修改先合并再提交，旧完成回调不得回滚当前状态，退出时等待这两个存储的已排队写入。Swift 保存任务显式等待前序任务，不依赖 actor 的消息调度顺序。
@@ -78,6 +79,7 @@ ModuleKit（无 UI 的公共边界）
 - Windows 内置文件索引保留旧可用快照；首次构建完成通知当前查询，成功快照超过 2 分钟后在下一次搜索触发后台刷新。单目录枚举失败不终止整个扫描。
 - 双端文件复制/移动由后台传输服务处理，UI 只发布节流的 `FileTransferProgress` 和取消请求。扫描源项目后按 256 KiB 分块写入同目标目录内的独有临时项目；校验源大小/时间及目录项目集合，保留元数据，再以拒绝覆盖的重命名提交。macOS 使用真实路径统一 `/var` 与 `/private/var`，`renamex_np(RENAME_EXCL)` 提交并通过 `COPYFILE_METADATA` 保留扩展属性/资源叉/ACL；Windows 使用 `LocalPathPolicy` 并拒绝 reparse point，保留基本属性与时间。同盘移动直接重命名；跨盘移动先复制提交，再删除源。取消边界在提交前，提交后保留完整目标；源删除失败可能同时留下源和完整目标，应依据错误处理。正常退出等待传输；Windows 回收站 COM 使用专用 STA 线程。
 - `ClipboardPreviewController` 独立管理选择、可见性、取消和发布代次；原图读取与最长边 1024px 解码在后台进行，原尺寸单独展示，不以历史缩略图替代缺失原件。全文与路径预览可选择、换行滚动；Esc 优先关闭预览。
+- macOS 设置搜索栏位于滚动区域之外，窗口内容与原生标题栏分离；分类切换返回内容顶部。`NativeEditingMenu` 使用固定 Cocoa 编辑选择器，撤销/重做交给当前编辑器的 `UndoManager`；录制中的 `RecorderView` 优先接收按键，不被设置快捷键或主菜单抢走，并公开无障碍角色、名称和当前值。
 - Windows 偏好捕获不可变快照，200ms 合并后交给 `PreferencePersistenceService` 串行序列化、flush 和原子替换；关闭设置和正常退出排空。读取失败/较新 schema 锁定写入，显式恢复默认值才备份原件并解锁；保存失败在设置中可见。
 - 同步使用 Core `CloudBatchBudget`：上传 50 条、拉取 200 条、16 MiB 的单批上限；拉取预留单条最大 8 MiB 的预算，避免超过批次字节上限。发布 head 只包含本批已上传连续序号；outbox 保留剩余变更，inbox 持久化后才推进游标，历史提交成功才确认和调度下一批。恢复持久化 inbox 后继续检查远端，错误停止追赶并保留重试状态。
 - `LocalDiagnosticReport` 仅接受固定平台/搜索引擎枚举、计数、健康布尔值与经过验证的版本；不接收查询、路径、应用名、剪贴板内容、异常详情或凭据。Windows `--ui-snapshot` 是固定的离线合成验收入口，不创建监听器，不触及用户存储或系统剪贴板。
@@ -101,7 +103,7 @@ ModuleKit（无 UI 的公共边界）
 
 - 计算器/单位换算/文本统计：无权限。
 - 词典：只读内嵌 CC-CEDICT，索引在启动阶段后台预热；自动词典查询不会阻塞首字符结果，显式 `dict/词典` 查询仍保证完整结果。
-- 应用启动：Windows 自动索引开始菜单、WindowsApps 与 AppsFolder，并允许用户显式加入本机 `.exe`、`.lnk`、`.appref-ms`；macOS 自动索引 `/Applications`、`/System/Applications`、`~/Applications`，并允许显式加入其他位置的有效 `.app` bundle。自定义项拒绝相对路径、URL、其他扩展名和启动参数；macOS 还会解析符号链接并验证 bundle identifier。Windows AppsFolder 使用受类型约束的 `ActivateApplication(AppUserModelId)`，macOS 使用类型化 `.open(URL)`，不机械共享平台激活动作。
+- 应用启动：Windows 自动索引开始菜单、WindowsApps 与 AppsFolder，并允许用户显式加入本机 `.exe`、`.lnk`、`.appref-ms`；macOS 自动索引 `/Applications`、`/System/Applications`、`/System/Cryptexes/App/System/Applications`、`~/Applications`，并允许显式加入其他位置的有效 `.app` bundle。自定义项拒绝相对路径、URL、其他扩展名和启动参数；macOS 还会解析符号链接并验证 bundle identifier。Windows AppsFolder 使用受类型约束的 `ActivateApplication(AppUserModelId)`，macOS 使用类型化 `.open(URL)`，不机械共享平台激活动作。
 - 文件搜索：Everything 使用官方 QUERY2 `WM_COPYDATA` 只读本机 IPC，无需 SDK DLL；它不联网、不读取 Everything 数据库。请求发送与回复等待均有 800ms 上限，支持取消，返回数量、偏移、长度和绝对路径均经校验。若两端完整性级别不同则显示诊断并使用回退扫描器。回退扫描器在后台运行，跳过 AppData、node_modules、系统目录并限制访问条目数。
 - 剪贴板：单一管理器读取系统剪贴板；默认排除密码管理器进程与敏感格式（含 Windows 的 `ExcludeClipboardContentFromMonitorProcessing`），支持自定义忽略进程、暂停、固定和分段清理。在历史面板中再次复制某条内容会把该条更新为最新（排序与保留期随之刷新，并作为加密 Upsert 同步到其他设备）。持久化使用 AES-GCM，本机密钥由 Windows DPAPI 或 macOS 登录钥匙串保护；文本/文件默认记录，图片默认关闭且单项限制 5 MB。两端使用相同的可选坚果云同步协议：固定 HTTPS WebDAV 端点和应用密码；同步口令经 PBKDF2 派生 AES-GCM 密钥。每条新增内容是独立密文文件，重复复制仅增加本机计数。客户端每 15 分钟只读取每设备的 4 KiB 变更标记，标记序号未前进时不下载加密记录；历史面板可手动强制同步。收到的远端事件先写入加密的 durable inbox，只有历史记录成功落盘后才确认消费；删除以 tombstone 合并，密钥缺失或保险库损坏时保持只读而不确认事件。加密保险库操作在专用工作线程上按派发顺序串行执行，清单写入采用临时文件原子替换。
 - 窗口位置：拖动后的左上角换算为显示器工作区中的比例并保存；显示器变化时自动钳制在可见区域。

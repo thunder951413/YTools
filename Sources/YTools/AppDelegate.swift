@@ -55,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panelController?.clearUsageLearning()
         }
         configureHotKeys()
+        configureApplicationMenu()
         configureStatusItem()
         updateStatusItemVisibility()
 
@@ -122,6 +123,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panelController?.toggleClipboard()
         }
         return launcherRegistered && clipboardRegistered
+    }
+
+    private func configureApplicationMenu() {
+        let menu = NSMenu()
+        let appItem = menu.addItem(withTitle: "YTools", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "YTools")
+        appMenu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "退出 YTools", action: #selector(quit), keyEquivalent: "q").target = self
+        appItem.submenu = appMenu
+        menu.addItem(withTitle: "编辑", action: nil, keyEquivalent: "").submenu = NativeEditingMenu.make()
+        NSApp.mainMenu = menu
     }
 
     private func configureStatusItem() {

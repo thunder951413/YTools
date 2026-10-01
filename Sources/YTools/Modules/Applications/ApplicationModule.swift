@@ -33,6 +33,9 @@ actor ApplicationModule {
         roots = [
             URL(fileURLWithPath: "/Applications", isDirectory: true),
             URL(fileURLWithPath: "/System/Applications", isDirectory: true),
+            // Safari's public /Applications link is marked hidden by macOS.
+            // Index the protected system bundle at its actual Cryptex location.
+            URL(fileURLWithPath: "/System/Cryptexes/App/System/Applications", isDirectory: true),
             fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true)
         ]
         scanApplications = Self.scanApplicationURLs

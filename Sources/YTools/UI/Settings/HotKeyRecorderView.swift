@@ -4,29 +4,34 @@ import SwiftUI
 
 struct HotKeyRecorderView: NSViewRepresentable {
     @Binding var hotKey: HotKeyDefinition
+    var label = "启动器快捷键"
 
     func makeNSView(context: Context) -> RecorderView {
-        RecorderView(hotKey: hotKey) { hotKey = $0 }
+        RecorderView(hotKey: hotKey, label: label) { hotKey = $0 }
     }
 
     func updateNSView(_ view: RecorderView, context: Context) {
         view.hotKey = hotKey
+        view.setAccessibilityLabel(label)
         view.onChange = { hotKey = $0 }
         view.needsDisplay = true
     }
 }
 
 final class RecorderView: NSView {
-    var hotKey: HotKeyDefinition
+    var hotKey: HotKeyDefinition { didSet { refreshAccessibilityValue() } }
     var onChange: (HotKeyDefinition) -> Void
-    private var isRecording = false
+    private(set) var isRecording = false
 
-    init(hotKey: HotKeyDefinition, onChange: @escaping (HotKeyDefinition) -> Void) {
+    init(hotKey: HotKeyDefinition, label: String = "录制快捷键", onChange: @escaping (HotKeyDefinition) -> Void) {
         self.hotKey = hotKey
         self.onChange = onChange
         super.init(frame: NSRect(x: 0, y: 0, width: 170, height: 30))
+        setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel("录制快捷键")
+        setAccessibilityLabel(label)
+        setAccessibilityHelp("按 Return 或 Space 开始录制，Esc 取消；组合键须包含 Command、Option 或 Control。")
+        refreshAccessibilityValue()
     }
 
     required init?(coder: NSCoder) {
@@ -37,18 +42,47 @@ final class RecorderView: NSView {
     override var intrinsicContentSize: NSSize { NSSize(width: 170, height: 30) }
 
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
+        _ = beginRecording()
+    }
+
+    override func accessibilityPerformPress() -> Bool { beginRecording() }
+
+    private func beginRecording() -> Bool {
+        guard window?.makeFirstResponder(self) == true else { return false }
         isRecording = true
+        refreshAccessibilityValue()
         needsDisplay = true
+        return true
     }
 
     override func resignFirstResponder() -> Bool {
         isRecording = false
+        refreshAccessibilityValue()
         needsDisplay = true
         return super.resignFirstResponder()
     }
 
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == UInt16(kVK_Escape) {
+            isRecording = false
+            refreshAccessibilityValue()
+            window?.makeFirstResponder(nil)
+            needsDisplay = true
+            return
+        }
+        if event.keyCode == UInt16(kVK_Tab) {
+            isRecording = false
+            refreshAccessibilityValue()
+            needsDisplay = true
+            if event.modifierFlags.contains(.shift) { window?.selectPreviousKeyView(nil) }
+            else { window?.selectNextKeyView(nil) }
+            return
+        }
+        guard isRecording else {
+            if event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_Space) { _ = beginRecording() }
+            else { super.keyDown(with: event) }
+            return
+        }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         var modifiers: UInt32 = 0
         if flags.contains(.control) { modifiers |= UInt32(controlKey) }
@@ -66,8 +100,13 @@ final class RecorderView: NSView {
         hotKey = definition
         onChange(definition)
         isRecording = false
+        refreshAccessibilityValue()
         window?.makeFirstResponder(nil)
         needsDisplay = true
+    }
+
+    private func refreshAccessibilityValue() {
+        setAccessibilityValue(isRecording ? "正在录制，Esc 取消" : hotKey.displayString)
     }
 
     override func draw(_ dirtyRect: NSRect) {

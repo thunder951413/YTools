@@ -26,31 +26,43 @@ struct SettingsRootView: View {
         HStack(spacing: 0) {
             settingsSidebar
             Divider()
-            ScrollViewReader { proxy in
-            ScrollView {
-                HStack(alignment: .top, spacing: 0) {
-                    Spacer(minLength: 0)
-                    VStack(alignment: .leading, spacing: 22) {
-                        settingsHeader
-                        if navigation.searchText.isEmpty {
-                            selectedSection
-                                .id("section:" + navigation.selection.rawValue)
-                                .environment(\.highlightedSetting, navigation.targetID)
-                        } else {
-                            settingsSearchResults
+            VStack(spacing: 0) {
+                settingsHeader
+                    .frame(maxWidth: 860)
+                    .padding(.horizontal, 30).padding(.top, 24).padding(.bottom, 22)
+                ScrollViewReader { proxy in
+                ScrollView {
+                    HStack(alignment: .top, spacing: 0) {
+                        Spacer(minLength: 0)
+                        VStack(alignment: .leading, spacing: 22) {
+                            if navigation.searchText.isEmpty {
+                                selectedSection
+                                    .id("section:" + navigation.selection.rawValue)
+                                    .environment(\.highlightedSetting, navigation.targetID)
+                            } else {
+                                settingsSearchResults
+                            }
                         }
+                        .frame(maxWidth: 860, alignment: .leading)
+                        Spacer(minLength: 0)
                     }
-                    .frame(maxWidth: 860, alignment: .leading)
-                    Spacer(minLength: 0)
+                    .padding(.horizontal, 30).padding(.bottom, 30)
+                    .id("settings-content-top")
                 }
-                .padding(30)
-            }
-            .task(id: navigation.targetRevision) {
-                guard let target = navigation.targetID else { return }
-                try? await Task.sleep(for: .milliseconds(120))
-                guard !Task.isCancelled else { return }
-                proxy.scrollTo(target, anchor: .center)
-            }
+                .onChange(of: navigation.selection) { _, _ in
+                    guard navigation.targetID == nil else { return }
+                    proxy.scrollTo("settings-content-top", anchor: .top)
+                }
+                .onChange(of: navigation.searchText) { _, text in
+                    if !text.isEmpty { proxy.scrollTo("settings-content-top", anchor: .top) }
+                }
+                .task(id: navigation.targetRevision) {
+                    guard let target = navigation.targetID else { return }
+                    try? await Task.sleep(for: .milliseconds(120))
+                    guard !Task.isCancelled else { return }
+                    proxy.scrollTo(target, anchor: .center)
+                }
+                }
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))

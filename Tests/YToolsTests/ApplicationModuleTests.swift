@@ -5,6 +5,26 @@ import XCTest
 import YToolsModuleKit
 
 final class ApplicationModuleTests: XCTestCase {
+    func testFindsBundleInSystemRootWhenItsPublicApplicationLinkIsHidden() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let publicRoot = directory.appendingPathComponent("Applications", isDirectory: true)
+        let systemRoot = directory.appendingPathComponent("Cryptex/System/Applications", isDirectory: true)
+        try FileManager.default.createDirectory(at: publicRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: systemRoot, withIntermediateDirectories: true)
+        let application = try makeApplicationBundle(in: systemRoot, name: "Safari")
+        try FileManager.default.createSymbolicLink(at: publicRoot.appendingPathComponent(".Safari.app"), withDestinationURL: application)
+
+        let publicOnly = ApplicationModule(roots: [publicRoot])
+        let hiddenResults = await publicOnly.results(for: "safari")
+        XCTAssertTrue(hiddenResults.isEmpty)
+        let module = ApplicationModule(roots: [publicRoot, systemRoot])
+        let results = await module.results(for: "safari")
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.title, "Safari")
+        XCTAssertEqual(results.first?.action, .open(URL(fileURLWithPath: canonicalPath(for: application), isDirectory: true)))
+    }
+
     func testFindsCustomApplicationOutsideStandardRootsAndOpensItsExactURL() async throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
