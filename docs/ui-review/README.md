@@ -1,5 +1,9 @@
 # 原生界面视觉审查
 
+## 0.3.2 实际验收后的设置复核（2026-10-01）
+
+当前六张 macOS `settings-search-*`、`settings-target-*`、`settings-snippets-*` 图片已更新为生产代码 `05eced2` 的合成离屏快照，并目视复核标题/搜索栏固定、长页面滚动裁剪、定位高亮和片段详情。它们显示“开发版”，因为测试不使用安装包元数据。真实安装的 0.3.2 另经 Computer Use 验证窗口标题栏、搜索、全选、片段保存、文件选择后的焦点以及传输取消；见 [实际验收记录](../REAL_ACCEPTANCE_2026-10-01.md)。下面的历史章节保留原始交付来源，Windows 图片仍为 `fc4e48d` 的 WPF 渲染。
+
 `native-components-light.png` 与 `native-components-dark.png` 由 `NativeViewSnapshotTests` 生成。它们渲染真实的 `ResultRow`、`ClipboardHistoryRow`、`SettingsCard` 和 `SettingsRow`，使用合成长文本与文件项目；不会创建剪贴板管理器、偏好对象，也不会访问钥匙串或真实剪贴板。
 
 2026-09-30 新增 [剪贴板亮色](clipboard-panel-light.png) 与 [剪贴板暗色](clipboard-panel-dark.png)：用 `NSHostingView` 和离屏 AppKit 窗口渲染完整剪贴板视图，覆盖工具栏、长文本、固定按钮、复制失败提示和底部快捷键。夹具使用独立偏好域、临时保险库、注入密钥与独立命名剪贴板；不读写用户历史、钥匙串或系统通用剪贴板。不能用 `ImageRenderer` 直接绘制这些 AppKit 控件，否则会输出不支持的占位图。
