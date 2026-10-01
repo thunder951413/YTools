@@ -62,6 +62,10 @@ final class LauncherModel: ObservableObject {
     private var spotlightPending = false
 
     var isChoosingActionDestination: Bool { actionDispatcher.isChoosingDestination }
+    var onActionDestinationPickerClosed: (() -> Void)? {
+        get { actionDispatcher.onDestinationPickerClosed }
+        set { actionDispatcher.onDestinationPickerClosed = newValue }
+    }
     var actions: [LauncherAction] { actionMenu.actions }
     var isShowingActions: Bool { actionMenu.isShowing }
     var selectedActionIndex: Int {

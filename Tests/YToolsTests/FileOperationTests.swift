@@ -90,6 +90,48 @@ final class FileOperationTests: XCTestCase {
     }
 
     @MainActor
+    func testDestinationPickerReturnsFocusBeforeReleasingGuardOnCancelAndCopy() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ytools-picker-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("fixture.txt")
+        try Data("synthetic picker fixture".utf8).write(to: source)
+
+        for destination: URL? in [nil, target] {
+            var pickerCalls = 0
+            let dispatcher = ActionDispatcher(
+                snippets: ActionSnippetFixture(), recentDocuments: ActionRecentFixture(),
+                onOpenSettings: {}, onShowLargeType: { _ in },
+                chooseFileDestination: { operation in
+                    XCTAssertEqual(operation, .copy)
+                    pickerCalls += 1
+                    return destination
+                }
+            )
+            var focusReturns = 0
+            dispatcher.onDestinationPickerClosed = { [weak dispatcher] in
+                XCTAssertEqual(dispatcher?.isChoosingDestination, true)
+                focusReturns += 1
+            }
+            let outcome = dispatcher.execute(.copyFile(source))
+            XCTAssertEqual(pickerCalls, 1)
+            XCTAssertEqual(focusReturns, 1)
+            XCTAssertFalse(dispatcher.isChoosingDestination)
+            if destination == nil {
+                guard case .keepPanel = outcome else { return XCTFail("Cancellation must preserve the action panel") }
+                XCTAssertFalse(dispatcher.isBusy)
+                XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
+            } else {
+                guard case .backgroundStarted = outcome else { return XCTFail("Confirmed copy must expose progress") }
+                await dispatcher.flushPendingOperations()
+                XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("fixture.txt")), Data("synthetic picker fixture".utf8))
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+        }
+    }
+
+    @MainActor
     func testDispatcherReportsCompletionAndDrainsBeforeShutdown() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ytools-action-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

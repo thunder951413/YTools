@@ -66,6 +66,10 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         panel.animationBehavior = .utilityWindow
         super.init(window: panel)
         panel.delegate = self
+        launcher.onActionDestinationPickerClosed = { [weak panel] in
+            NSApp.activate(ignoringOtherApps: true)
+            panel?.makeKeyAndOrderFront(nil)
+        }
         panel.contentViewController = NSHostingController(
             rootView: PanelRootView(
                 state: state,
@@ -182,7 +186,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard !launcher.isChoosingActionDestination else { return }
+        guard window?.isKeyWindow != true, !launcher.isChoosingActionDestination else { return }
         hide()
     }
 

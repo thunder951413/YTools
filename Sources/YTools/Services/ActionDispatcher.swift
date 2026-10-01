@@ -51,6 +51,8 @@ final class ActionDispatcher {
     private(set) var isChoosingDestination = false
     private(set) var statusText = ""
     var onStatusChanged: ((Bool, String) -> Void)?
+    var onDestinationPickerClosed: (() -> Void)?
+    private let chooseFileDestination: (FileOperationService.Operation) -> URL?
 
     func flushPendingOperations() async {
         isShuttingDown = true
@@ -71,12 +73,14 @@ final class ActionDispatcher {
         snippets: any SnippetSaving,
         recentDocuments: any RecentDocumentsRecording,
         onOpenSettings: @escaping () -> Void,
-        onShowLargeType: @escaping (String) -> Void
+        onShowLargeType: @escaping (String) -> Void,
+        chooseFileDestination: ((FileOperationService.Operation) -> URL?)? = nil
     ) {
         self.snippets = snippets
         self.recentDocuments = recentDocuments
         self.onOpenSettings = onOpenSettings
         self.onShowLargeType = onShowLargeType
+        self.chooseFileDestination = chooseFileDestination ?? Self.pickFileDestination
     }
 
     func execute(_ action: ResultAction) -> ActionExecutionOutcome {
@@ -224,16 +228,25 @@ final class ActionDispatcher {
             showAlert(title: "项目已不存在", message: source.path)
             return .keepPanel
         }
+        isChoosingDestination = true
+        defer {
+            // Return focus before releasing the resign-key guard, including
+            // cancellation. The native modal picker does not restore our panel.
+            onDestinationPickerClosed?()
+            isChoosingDestination = false
+        }
+        guard let directory = chooseFileDestination(operation) else { return .keepPanel }
+
+        return startFileOperation(operation, source: source, directory: directory)
+    }
+
+    private static func pickFileDestination(_ operation: FileOperationService.Operation) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = operation == .move ? "移动到这里" : "复制到这里"
-        isChoosingDestination = true
-        defer { isChoosingDestination = false }
-        guard panel.runModal() == .OK, let directory = panel.url else { return .keepPanel }
-
-        return startFileOperation(operation, source: source, directory: directory)
+        return panel.runModal() == .OK ? panel.url : nil
     }
 
     /// Also used by isolated regression tests without opening a native picker.

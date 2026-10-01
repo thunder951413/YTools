@@ -1,5 +1,7 @@
 # Alfred 功能对标（Windows + macOS）
 
+0.3.2 实机验收补充：macOS 复制/移动选择目标后，恢复启动器焦点并保留进度/取消入口；取消目标选择也保留原文件动作。文件操作权限、目标拒绝覆盖和后台执行约束不变。
+
 以下为主动维护的 Windows 与 macOS YTools 实现和 Alfred 常用高频能力的一一对应与实现状态。
 
 | Alfred 能力 | YTools Windows 对应 | 状态 |
