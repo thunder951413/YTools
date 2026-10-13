@@ -17,6 +17,7 @@ struct ProcessedClipboardCapture: Sendable {
 actor ClipboardCaptureProcessor {
     private let maximumTextBytes = 1_000_000
     private let maximumImageBytes = 5_000_000
+    private static let maximumImagePixels = 50_000_000
 
     func process(_ capture: ClipboardCapture) -> ProcessedClipboardCapture? {
         switch capture {
@@ -47,6 +48,14 @@ actor ClipboardCaptureProcessor {
             return ProcessedClipboardCapture(item: item, originalImage: nil)
 
         case let .image(data, isPNG, sourceApplication, createdAt):
+            // Reject oversized sources from their header before decoding and
+            // re-encoding a huge TIFF into PNG only to discard it afterwards.
+            // The header check is cheap and catches decompression bombs; PNG
+            // input is not re-encoded, so it keeps the original behaviour.
+            if !isPNG {
+                guard let sourceDimensions = imageDimensions(data),
+                      sourceDimensions.width * sourceDimensions.height <= Self.maximumImagePixels else { return nil }
+            }
             guard let normalized = isPNG ? data : normalizedPNGData(from: data),
                   normalized.count <= maximumImageBytes,
                   let dimensions = imageDimensions(normalized) else { return nil }

@@ -27,7 +27,7 @@ struct CalculatorModule: YToolsModule {
             subtitle: shouldContinue ? "\(expression)  ·  回车回填并继续计算" : "\(expression)  ·  回车复制结果",
             icon: .system("function"),
             score: 1_000,
-            action: shouldContinue ? .navigate(result) : .copy(result)
+            action: shouldContinue ? .editQuery(result) : .copy(result)
         )]
     }
 }

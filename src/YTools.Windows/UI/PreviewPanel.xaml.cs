@@ -154,12 +154,38 @@ public partial class PreviewPanel : UserControl
         // Preview content is displayed in a narrow pane. Decode to its useful
         // display size so a multi-megapixel photograph cannot allocate its full
         // pixel buffer merely because the user moved the selection onto it.
-        bitmap.DecodePixelWidth = 520;
-        bitmap.DecodePixelHeight = 520;
+        // Setting only the longer side keeps the aspect ratio; setting both
+        // stretched every image to a 520x520 square.
+        if (IsPortrait(path))
+        {
+            bitmap.DecodePixelHeight = 520;
+        }
+        else
+        {
+            bitmap.DecodePixelWidth = 520;
+        }
         bitmap.UriSource = new Uri(path, UriKind.Absolute);
         bitmap.EndInit();
         bitmap.Freeze();
         return bitmap;
+    }
+
+    private static bool IsPortrait(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var decoder = BitmapDecoder.Create(
+                stream,
+                BitmapCreateOptions.DelayCreation | BitmapCreateOptions.IgnoreColorProfile,
+                BitmapCacheOption.None);
+            var frame = decoder.Frames[0];
+            return frame.PixelHeight > frame.PixelWidth;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string FormatSize(long bytes)

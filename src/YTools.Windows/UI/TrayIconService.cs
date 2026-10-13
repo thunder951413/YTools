@@ -18,6 +18,7 @@ public sealed class TrayIconService : IDisposable
     private System.Windows.Forms.ToolStripMenuItem? _pauseItem;
     private System.Windows.Forms.ToolStripMenuItem? _launcherItem;
     private System.Windows.Forms.ToolStripMenuItem? _clipboardItem;
+    private System.Windows.Forms.ToolStripMenuItem? _privacyItem;
 
     public TrayIconService(AppPreferences preferences)
     {
@@ -46,10 +47,11 @@ public sealed class TrayIconService : IDisposable
             _preferences.ClipboardPaused ? "继续剪贴板记录" : "暂停剪贴板记录");
         _pauseItem.Click += (_, _) => TogglePauseRequested?.Invoke();
         var separator = new System.Windows.Forms.ToolStripSeparator();
-        var privacy = new System.Windows.Forms.ToolStripMenuItem("本机模式 · 无网络模块")
+        var privacy = new System.Windows.Forms.ToolStripMenuItem(PrivacyTitle())
         {
             Enabled = false
         };
+        _privacyItem = privacy;
         var separator2 = new System.Windows.Forms.ToolStripSeparator();
         var settings = new System.Windows.Forms.ToolStripMenuItem("设置…");
         settings.Click += (_, _) => ShowSettingsRequested?.Invoke();
@@ -79,6 +81,10 @@ public sealed class TrayIconService : IDisposable
             {
                 Application.Current.Dispatcher.Invoke(UpdateVisibility);
             }
+            else if (args.PropertyName == nameof(AppPreferences.ClipboardCloudSyncEnabled))
+            {
+                Application.Current.Dispatcher.Invoke(() => _privacyItem!.Text = PrivacyTitle());
+            }
         };
         _preferences.PropertyChanged += _preferenceChanged;
     }
@@ -92,6 +98,13 @@ public sealed class TrayIconService : IDisposable
     public event Action? ShowSettingsRequested;
 
     public event Action? QuitRequested;
+
+    private string PrivacyTitle()
+    {
+        return _preferences.ClipboardCloudSyncEnabled
+            ? "剪贴板同步已开启 · 仅连接坚果云"
+            : "本机模式 · 无网络连接";
+    }
 
     public void UpdatePauseMenu(bool paused)
     {

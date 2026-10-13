@@ -544,7 +544,11 @@ final class LauncherModel: ObservableObject {
     @discardableResult
     func revealSelected() -> Bool {
         guard let url = selectedFileURL else { return false }
-        resultAggregator.record(results[selectedIndex], query: query)
+        // selectedFileURL can come from a pinned preview or the action menu
+        // while results are empty or shorter; never index out of range.
+        if results.indices.contains(selectedIndex) {
+            resultAggregator.record(results[selectedIndex], query: query)
+        }
         return apply(actionDispatcher.execute(.perform(.reveal(url))))
     }
 

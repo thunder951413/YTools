@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using YTools.Core;
 using YTools.Infrastructure;
 using YTools.Models;
 using YTools.ModuleKit;
@@ -50,7 +51,7 @@ public sealed class RecentDocumentsManager : ObservableObject
             if (result.Kind == SecureStoreLoadResultKind.Loaded)
             {
                 var source = result.Value ?? [];
-                var filtered = source.Where(item => File.Exists(item.Path)).ToList();
+                var filtered = source.Where(item => !LocalPathPolicy.IsDefinitelyMissing(item.Path)).ToList();
                 _loadedItemsRemoved = filtered.Count != source.Count;
                 result = SecureStoreLoadResult<List<RecentDocumentItem>>.Loaded(filtered);
             }

@@ -40,7 +40,7 @@ scripts/
 - 不动态加载 bundle、dylib、脚本、远程模块或 Everything SDK DLL。
 - Everything 集成仅能通过已运行 Everything 的 `WM_COPYDATA` 本机 IPC 做只读查询；不得联网、读取其数据库或加载第三方搜索代码。
 - 新增网络功能必须先得到用户明确同意。现有坚果云剪贴板同步是唯一例外：用户保存凭据并显式启用后，两端仅可使用固定 `https://dav.jianguoyun.com/dav/` WebDAV 端点；其他 `HttpClient`/`WebClient`/Socket/`URLSession` 调用会被统一安全扫描拒绝。
-- 系统命令只允许编译期固定 API（`SHEmptyRecycleBin`、`SendMessage` 固定消息、`ms-settings:` URI、固定 `rundll32 shell32.dll,OpenAs_RunDLL` 参数模板）；不得接受用户输入作为命令、路径或参数。
+- 系统命令只允许编译期固定 API（`SHEmptyRecycleBin`、`PostMessage` 固定消息、`ms-settings:` URI、固定 `rundll32 shell32.dll,OpenAs_RunDLL` 参数模板）；不得接受用户输入作为命令、路径或参数。
 - 加密存储失败不得降级写明文，也不得用空数据覆盖不可读密文。
 - 源码模块不是沙箱或安全边界。它们与宿主同进程、同用户权限运行，必须经过代码审查并重新编译；`ModuleResultPolicy` 只约束模块返回的数据和已注册动作。
 

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 
 namespace YTools.Core;
 
@@ -10,53 +9,44 @@ public enum CalculatorError
 }
 
 /// <summary>
-/// Port of the macOS YToolsCore expression calculator: whitelisted functions,
-/// constants, %, ^ and full parentheses support. Never executes shell input.
+/// Whitelisted arithmetic evaluator implemented as a recursive-descent parser.
+/// Mirrors <c>Sources/YToolsCore/ExpressionCalculator.swift</c> exactly:
+/// <code>
+/// expression := term (('+' | '-') term)*
+/// term       := unary (('*' | '/' | '%') unary)*
+/// unary      := ('+' | '-') unary | power
+/// power      := primary ('^' unary)?          // right-associative
+/// primary    := number | constant | function '(' expression ')' | '(' expression ')'
+/// </code>
+/// Unary minus binds looser than <c>^</c> (<c>-2^2 == -4</c>), the exponent may
+/// carry its own sign (<c>2^-1 == 0.5</c>), and functions/constants are tokens
+/// rather than text substitutions. Input length and nesting depth are bounded.
+/// Never executes shell input.
 /// </summary>
 public static class ExpressionCalculator
 {
-    private readonly record struct Token(TokenKind Kind, double Number = 0, char Operation = '\0');
-
-    private enum TokenKind
-    {
-        Number,
-        Operation,
-        LeftParenthesis,
-        RightParenthesis
-    }
-
-    private static readonly IReadOnlyDictionary<string, Func<double, double>> Functions =
-        new Dictionary<string, Func<double, double>>
-        {
-            ["sqrt"] = Math.Sqrt,
-            ["abs"] = Math.Abs,
-            ["sin"] = Math.Sin,
-            ["cos"] = Math.Cos,
-            ["tan"] = Math.Tan,
-            ["ln"] = Math.Log,
-            ["log"] = Math.Log10,
-            ["floor"] = Math.Floor,
-            ["ceil"] = Math.Ceiling,
-            ["round"] = Math.Round
-        };
+    public const int MaximumLength = 512;
+    public const int MaximumDepth = 64;
 
     public static double Evaluate(string expression)
     {
-        var normalized = ResolveFunctions(expression
+        var normalized = expression
             .Replace("×", "*")
             .Replace("÷", "/")
-            .Replace("**", "^"));
-
-        var tokens = Tokenize(normalized);
-        if (tokens.Count == 0)
+            .Replace("**", "^");
+        if (normalized.Length > MaximumLength)
         {
-            throw new CalculatorException(CalculatorError.InvalidExpression);
+            throw Invalid();
         }
 
-        var postfix = MakePostfix(tokens);
-        return EvaluatePostfix(postfix);
+        return new Parser(normalized).Parse();
     }
 
+    /// <summary>
+    /// Integers that are exactly representable (|x| &lt; 2^53) print without a
+    /// fractional part; everything else uses 12 significant digits with a
+    /// lowercase exponent, matching the macOS <c>%.12g</c> output.
+    /// </summary>
     public static string Format(double value)
     {
         if (double.IsNaN(value) || double.IsInfinity(value))
@@ -64,373 +54,358 @@ public static class ExpressionCalculator
             return "";
         }
 
-        if (Math.Round(value) == value && Math.Abs(value) <= long.MaxValue)
+        if (Math.Round(value) == value && Math.Abs(value) < 9_007_199_254_740_992d)
         {
             return ((long)value).ToString(CultureInfo.InvariantCulture);
         }
 
-        return value.ToString("G12", CultureInfo.InvariantCulture);
+        return value.ToString("G12", CultureInfo.InvariantCulture).Replace('E', 'e');
     }
 
-    private static string ResolveFunctions(string expression)
+    private static CalculatorException Invalid() => new(CalculatorError.InvalidExpression);
+
+    private sealed class Parser
     {
-        var value = expression;
-        value = Regex.Replace(
-            value,
-            @"\bpi\b",
-            Math.PI.ToString("R", CultureInfo.InvariantCulture),
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        value = Regex.Replace(
-            value,
-            @"\be\b",
-            Math.E.ToString("R", CultureInfo.InvariantCulture),
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private readonly string _text;
+        private int _index;
+        private int _depth;
 
-        while (TryNextFunctionCall(value, out var call))
+        public Parser(string text)
         {
-            if (!Functions.TryGetValue(call.Name.ToLowerInvariant(), out var function))
-            {
-                throw new CalculatorException(CalculatorError.InvalidExpression);
-            }
-
-            var argument = value.Substring(call.ArgumentStart, call.ArgumentLength);
-            var argumentValue = Evaluate(argument);
-            var result = function(argumentValue);
-            if (double.IsNaN(result) || double.IsInfinity(result))
-            {
-                throw new CalculatorException(CalculatorError.InvalidExpression);
-            }
-
-            value = value
-                .Remove(call.FullStart, call.FullLength)
-                .Insert(call.FullStart, result.ToString("R", CultureInfo.InvariantCulture));
+            _text = text;
         }
 
-        return value;
-    }
-
-    private static bool TryNextFunctionCall(string expression, out FunctionCall call)
-    {
-        call = default;
-        var index = 0;
-        while (index < expression.Length)
+        public double Parse()
         {
-            if (!char.IsLetter(expression[index]))
+            var value = ParseExpression();
+            SkipWhitespace();
+            if (_index != _text.Length)
             {
-                index += 1;
-                continue;
+                throw Invalid();
             }
 
-            var nameStart = index;
-            while (index < expression.Length && char.IsLetter(expression[index]))
-            {
-                index += 1;
-            }
-
-            var name = expression.Substring(nameStart, index - nameStart);
-            if (index >= expression.Length || expression[index] != '(')
-            {
-                continue;
-            }
-
-            var open = index;
-            var depth = 0;
-            var cursor = open;
-            while (cursor < expression.Length)
-            {
-                if (expression[cursor] == '(')
-                {
-                    depth += 1;
-                }
-
-                if (expression[cursor] == ')')
-                {
-                    depth -= 1;
-                    if (depth == 0)
-                    {
-                        var argumentStart = open + 1;
-                        call = new FunctionCall(
-                            name,
-                            nameStart,
-                            cursor + 1 - nameStart,
-                            argumentStart,
-                            cursor - argumentStart);
-                        return true;
-                    }
-                }
-
-                cursor += 1;
-            }
-
-            return false;
+            return value;
         }
 
-        return false;
-    }
-
-    private static List<Token> Tokenize(string expression)
-    {
-        var tokens = new List<Token>();
-        var index = 0;
-        var expectsValue = true;
-
-        while (index < expression.Length)
+        private void Enter()
         {
-            var character = expression[index];
-            if (char.IsWhiteSpace(character))
+            _depth += 1;
+            if (_depth > MaximumDepth)
             {
-                index += 1;
-                continue;
+                throw Invalid();
             }
+        }
 
-            if (character == '(')
+        private double ParseExpression()
+        {
+            Enter();
+            try
             {
-                tokens.Add(new Token(TokenKind.LeftParenthesis));
-                expectsValue = true;
-                index += 1;
-                continue;
-            }
-
-            if (character == ')')
-            {
-                tokens.Add(new Token(TokenKind.RightParenthesis));
-                expectsValue = false;
-                index += 1;
-                continue;
-            }
-
-            var isSignedNumber = (character == '+' || character == '-')
-                && expectsValue
-                && index + 1 < expression.Length
-                && (char.IsDigit(expression[index + 1]) || expression[index + 1] == '.');
-
-            if (char.IsDigit(character) || character == '.' || isSignedNumber)
-            {
-                var start = index;
-                if (isSignedNumber)
+                var value = ParseTerm();
+                while (true)
                 {
-                    index += 1;
-                }
-
-                var sawDecimalPoint = false;
-                while (index < expression.Length)
-                {
-                    if (expression[index] == '.')
+                    if (Consume('+'))
                     {
-                        if (sawDecimalPoint)
-                        {
-                            throw new CalculatorException(CalculatorError.InvalidExpression);
-                        }
-
-                        sawDecimalPoint = true;
-                        index += 1;
+                        var right = ParseTerm();
+                        value = Checked(value + right);
                     }
-                    else if (char.IsDigit(expression[index]))
+                    else if (Consume('-'))
                     {
-                        index += 1;
+                        var right = ParseTerm();
+                        value = Checked(value - right);
                     }
                     else
                     {
-                        break;
+                        return value;
                     }
                 }
+            }
+            finally
+            {
+                _depth -= 1;
+            }
+        }
 
-                if (!double.TryParse(
-                        expression.Substring(start, index - start),
-                        NumberStyles.Float,
-                        CultureInfo.InvariantCulture,
-                        out var number))
+        private double ParseTerm()
+        {
+            var value = ParseUnary();
+            while (true)
+            {
+                if (Consume('*'))
                 {
-                    throw new CalculatorException(CalculatorError.InvalidExpression);
+                    var right = ParseUnary();
+                    value = Checked(value * right);
                 }
-
-                tokens.Add(new Token(TokenKind.Number, number));
-                expectsValue = false;
-                continue;
-            }
-
-            if ("+-*/%^".Contains(character))
-            {
-                if (expectsValue && character == '-')
+                else if (Consume('/'))
                 {
-                    tokens.Add(new Token(TokenKind.Number, 0));
+                    var right = ParseUnary();
+                    if (right == 0)
+                    {
+                        throw new CalculatorException(CalculatorError.DivisionByZero);
+                    }
+
+                    value = Checked(value / right);
                 }
-                else if (expectsValue)
+                else if (Consume('%'))
                 {
-                    throw new CalculatorException(CalculatorError.InvalidExpression);
+                    var right = ParseUnary();
+                    if (right == 0)
+                    {
+                        throw new CalculatorException(CalculatorError.DivisionByZero);
+                    }
+
+                    value = Checked(value % right);
+                }
+                else
+                {
+                    return value;
+                }
+            }
+        }
+
+        private double ParseUnary()
+        {
+            if (Consume('-'))
+            {
+                Enter();
+                try
+                {
+                    return -ParseUnary();
+                }
+                finally
+                {
+                    _depth -= 1;
+                }
+            }
+
+            if (Consume('+'))
+            {
+                Enter();
+                try
+                {
+                    return ParseUnary();
+                }
+                finally
+                {
+                    _depth -= 1;
+                }
+            }
+
+            return ParsePower();
+        }
+
+        private double ParsePower()
+        {
+            var baseValue = ParsePrimary();
+            if (!Consume('^'))
+            {
+                return baseValue;
+            }
+
+            var exponent = ParseUnary();
+            return Checked(Math.Pow(baseValue, exponent));
+        }
+
+        private double ParsePrimary()
+        {
+            SkipWhitespace();
+            if (_index >= _text.Length)
+            {
+                throw Invalid();
+            }
+
+            var character = _text[_index];
+            if (character == '(')
+            {
+                _index += 1;
+                var value = ParseExpression();
+                if (!Consume(')'))
+                {
+                    throw Invalid();
                 }
 
-                tokens.Add(new Token(TokenKind.Operation, Operation: character));
-                expectsValue = true;
-                index += 1;
-                continue;
+                return value;
             }
 
-            throw new CalculatorException(CalculatorError.InvalidExpression);
-        }
-
-        if (expectsValue && tokens.Count > 0)
-        {
-            throw new CalculatorException(CalculatorError.InvalidExpression);
-        }
-
-        return tokens;
-    }
-
-    private static List<Token> MakePostfix(List<Token> tokens)
-    {
-        var output = new List<Token>();
-        var operators = new Stack<Token>();
-
-        foreach (var token in tokens)
-        {
-            switch (token.Kind)
+            if (IsDigit(character) || character == '.')
             {
-                case TokenKind.Number:
-                    output.Add(token);
-                    break;
-                case TokenKind.Operation:
-                    while (operators.Count > 0
-                           && operators.Peek().Kind == TokenKind.Operation
-                           && (Precedence(operators.Peek().Operation) > Precedence(token.Operation)
-                               || (Precedence(operators.Peek().Operation) == Precedence(token.Operation)
-                                   && token.Operation != '^')))
-                    {
-                        output.Add(operators.Pop());
-                    }
-
-                    operators.Push(token);
-                    break;
-                case TokenKind.LeftParenthesis:
-                    operators.Push(token);
-                    break;
-                case TokenKind.RightParenthesis:
-                    var foundLeftParenthesis = false;
-                    while (operators.Count > 0)
-                    {
-                        var top = operators.Pop();
-                        if (top.Kind == TokenKind.LeftParenthesis)
-                        {
-                            foundLeftParenthesis = true;
-                            break;
-                        }
-
-                        output.Add(top);
-                    }
-
-                    if (!foundLeftParenthesis)
-                    {
-                        throw new CalculatorException(CalculatorError.InvalidExpression);
-                    }
-
-                    break;
+                return ParseNumber();
             }
-        }
 
-        while (operators.Count > 0)
-        {
-            var token = operators.Pop();
-            if (token.Kind == TokenKind.LeftParenthesis)
+            if (IsLetter(character))
             {
-                throw new CalculatorException(CalculatorError.InvalidExpression);
+                var name = ParseIdentifier();
+                var constant = Constant(name);
+                if (constant is { } constantValue)
+                {
+                    return constantValue;
+                }
+
+                if (!Consume('('))
+                {
+                    throw Invalid();
+                }
+
+                var argument = ParseExpression();
+                if (!Consume(')') || Apply(name, argument) is not { } result)
+                {
+                    throw Invalid();
+                }
+
+                return Checked(result);
             }
 
-            output.Add(token);
+            throw Invalid();
         }
 
-        return output;
-    }
-
-    private static double EvaluatePostfix(List<Token> tokens)
-    {
-        var stack = new Stack<double>();
-        foreach (var token in tokens)
+        private double ParseNumber()
         {
-            switch (token.Kind)
+            var builder = new System.Text.StringBuilder();
+            var sawDigit = false;
+            var sawPoint = false;
+            while (_index < _text.Length)
             {
-                case TokenKind.Number:
-                    stack.Push(token.Number);
+                var character = _text[_index];
+                if (IsDigit(character))
+                {
+                    sawDigit = true;
+                    builder.Append(character);
+                }
+                else if (character == '.' && !sawPoint)
+                {
+                    sawPoint = true;
+                    if (!sawDigit)
+                    {
+                        builder.Append('0');
+                    }
+
+                    builder.Append('.');
+                }
+                else
+                {
                     break;
-                case TokenKind.Operation:
-                    if (stack.Count < 2)
+                }
+
+                _index += 1;
+            }
+
+            if (!sawDigit)
+            {
+                throw Invalid();
+            }
+
+            if (builder[^1] == '.')
+            {
+                builder.Append('0');
+            }
+
+            // Optional exponent (1e-5). A bare e not followed by digits is left
+            // for the caller, so "2e" stays invalid.
+            if (_index < _text.Length && (_text[_index] == 'e' || _text[_index] == 'E'))
+            {
+                var lookahead = _index + 1;
+                var sign = "";
+                if (lookahead < _text.Length && (_text[lookahead] == '+' || _text[lookahead] == '-'))
+                {
+                    sign = _text[lookahead].ToString();
+                    lookahead += 1;
+                }
+
+                if (lookahead < _text.Length && IsDigit(_text[lookahead]))
+                {
+                    builder.Append('e').Append(sign);
+                    _index = lookahead;
+                    while (_index < _text.Length && IsDigit(_text[_index]))
                     {
-                        throw new CalculatorException(CalculatorError.InvalidExpression);
+                        builder.Append(_text[_index]);
+                        _index += 1;
                     }
+                }
+            }
 
-                    var right = stack.Pop();
-                    var left = stack.Pop();
-                    double result;
-                    switch (token.Operation)
-                    {
-                        case '+':
-                            result = left + right;
-                            break;
-                        case '-':
-                            result = left - right;
-                            break;
-                        case '*':
-                            result = left * right;
-                            break;
-                        case '/':
-                            if (right == 0)
-                            {
-                                throw new CalculatorException(CalculatorError.DivisionByZero);
-                            }
+            if (!double.TryParse(
+                    builder.ToString(),
+                    NumberStyles.AllowDecimalPoint | NumberStyles.AllowExponent,
+                    CultureInfo.InvariantCulture,
+                    out var number)
+                || double.IsNaN(number)
+                || double.IsInfinity(number))
+            {
+                throw Invalid();
+            }
 
-                            result = left / right;
-                            break;
-                        case '%':
-                            if (right == 0)
-                            {
-                                throw new CalculatorException(CalculatorError.DivisionByZero);
-                            }
+            return number;
+        }
 
-                            result = left % right;
-                            break;
-                        case '^':
-                            result = Math.Pow(left, right);
-                            break;
-                        default:
-                            throw new CalculatorException(CalculatorError.InvalidExpression);
-                    }
+        private string ParseIdentifier()
+        {
+            var start = _index;
+            while (_index < _text.Length && IsLetter(_text[_index]))
+            {
+                _index += 1;
+            }
 
-                    if (double.IsNaN(result) || double.IsInfinity(result))
-                    {
-                        throw new CalculatorException(CalculatorError.InvalidExpression);
-                    }
+            return _text[start.._index].ToLowerInvariant();
+        }
 
-                    stack.Push(result);
-                    break;
-                default:
-                    throw new CalculatorException(CalculatorError.InvalidExpression);
+        private bool Consume(char expected)
+        {
+            SkipWhitespace();
+            if (_index >= _text.Length || _text[_index] != expected)
+            {
+                return false;
+            }
+
+            _index += 1;
+            return true;
+        }
+
+        private void SkipWhitespace()
+        {
+            while (_index < _text.Length && char.IsWhiteSpace(_text[_index]))
+            {
+                _index += 1;
             }
         }
 
-        if (stack.Count != 1)
+        private static double Checked(double value)
         {
-            throw new CalculatorException(CalculatorError.InvalidExpression);
+            if (double.IsNaN(value) || double.IsInfinity(value))
+            {
+                throw Invalid();
+            }
+
+            return value;
         }
 
-        return stack.Pop();
-    }
+        private static bool IsDigit(char character) => character is >= '0' and <= '9';
 
-    private static int Precedence(char operation)
-    {
-        return operation switch
+        private static bool IsLetter(char character) =>
+            character is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z');
+
+        private static double? Constant(string name) => name switch
         {
-            '+' or '-' => 1,
-            '*' or '/' or '%' => 2,
-            '^' => 3,
-            _ => 0
+            "pi" => Math.PI,
+            "e" => Math.E,
+            _ => null
+        };
+
+        /// <summary><c>round</c> rounds half away from zero on both platforms.</summary>
+        private static double? Apply(string name, double value) => name switch
+        {
+            "sqrt" => Math.Sqrt(value),
+            "abs" => Math.Abs(value),
+            "sin" => Math.Sin(value),
+            "cos" => Math.Cos(value),
+            "tan" => Math.Tan(value),
+            "ln" => Math.Log(value),
+            "log" => Math.Log10(value),
+            "floor" => Math.Floor(value),
+            "ceil" => Math.Ceiling(value),
+            "round" => Math.Round(value, MidpointRounding.AwayFromZero),
+            _ => null
         };
     }
-
-    private readonly record struct FunctionCall(
-        string Name,
-        int FullStart,
-        int FullLength,
-        int ArgumentStart,
-        int ArgumentLength);
 }
 
 public sealed class CalculatorException : Exception

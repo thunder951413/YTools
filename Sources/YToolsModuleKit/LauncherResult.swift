@@ -13,6 +13,8 @@ public enum ResultAction: Equatable, Sendable {
     case open(URL)
     case reveal(URL)
     case navigate(String)
+    /// Replaces the launcher query with plain text (no file access implied).
+    case editQuery(String)
     case hideApplication(String)
     case quitApplication(String)
     case showTrash

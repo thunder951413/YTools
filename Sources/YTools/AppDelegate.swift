@@ -197,10 +197,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await self?.clipboard?.flushPendingChanges()
             await self?.snippets?.flushPendingChanges()
             await self?.recentDocuments?.flushPendingChanges()
-            self?.terminationFlushFinished = true
-            NSApp.reply(toApplicationShouldTerminate: true)
+            self?.finishTermination()
+        }
+        // Watchdog: a multi-GB copy or a stuck keychain prompt must not block
+        // quit or logout forever. Staged copies are safe to cancel (the target
+        // only appears on commit), so cancel first, then stop waiting.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard let self, !self.terminationFlushFinished else { return }
+            self.panelController?.cancelFileOperation()
+            try? await Task.sleep(for: .seconds(10))
+            self.finishTermination()
         }
         return .terminateLater
+    }
+
+    private func finishTermination() {
+        guard !terminationFlushFinished else { return }
+        terminationFlushFinished = true
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

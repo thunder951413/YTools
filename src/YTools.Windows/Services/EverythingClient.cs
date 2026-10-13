@@ -38,7 +38,9 @@ public sealed class EverythingClient : IDisposable
     private readonly object _lock = new();
     private bool _disposed;
     private uint _lastError;
-    private EverythingAvailabilityStatus _availabilityStatus = EverythingAvailabilityStatus.NotRunning;
+    private volatile EverythingAvailabilityStatus _availabilityStatus = EverythingAvailabilityStatus.NotRunning;
+    private long _availabilityCheckedAt;
+    private const long CachedStatusMilliseconds = 2_000;
     private uint _everythingProcessId;
 
     private EverythingClient()
@@ -54,6 +56,34 @@ public sealed class EverythingClient : IDisposable
             lock (_lock)
             {
                 return RefreshAvailabilityUnsafe();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Non-blocking status for UI display. <see cref="AvailabilityStatus"/> waits for
+    /// <c>_lock</c>, which a running query holds for up to ~1.6 s; the launcher footer
+    /// reads this several times per keystroke, so it must never wait. Returns the
+    /// last observed status and refreshes it only when the lock is free and the
+    /// snapshot is older than two seconds.
+    /// </summary>
+    public EverythingAvailabilityStatus CachedAvailabilityStatus
+    {
+        get
+        {
+            if (Environment.TickCount64 - Interlocked.Read(ref _availabilityCheckedAt) < CachedStatusMilliseconds
+                || !Monitor.TryEnter(_lock))
+            {
+                return _availabilityStatus;
+            }
+
+            try
+            {
+                return RefreshAvailabilityUnsafe();
+            }
+            finally
+            {
+                Monitor.Exit(_lock);
             }
         }
     }
@@ -401,6 +431,7 @@ public sealed class EverythingClient : IDisposable
 
     private EverythingAvailabilityStatus RefreshAvailabilityUnsafe()
     {
+        Interlocked.Exchange(ref _availabilityCheckedAt, Environment.TickCount64);
         if (_disposed)
         {
             _availabilityStatus = EverythingAvailabilityStatus.Disposed;

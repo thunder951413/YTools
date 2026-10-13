@@ -229,14 +229,30 @@ public sealed class SecureCodableStore
                 var key = _key(!exists);
                 // An existing archive must authenticate before any replacement,
                 // even when the caller did not load it first.
-                if (exists) { _ = AesGcmBox.Open(File.ReadAllBytes(_filePath), key); }
+                if (exists)
+                {
+                    var prior = File.ReadAllBytes(_filePath);
+                    try
+                    {
+                        _ = AesGcmBox.Open(prior, key);
+                    }
+                    catch
+                    {
+                        // Only an archive that does not authenticate locks the store:
+                        // overwriting it could destroy data under another key.
+                        _locked = true;
+                        return false;
+                    }
+                }
+
                 var clear = JsonSerializer.SerializeToUtf8Bytes(value);
                 DpapiKeyAccessor.AtomicWrite(_filePath, AesGcmBox.Seal(clear, key));
                 return true;
             }
             catch
             {
-                _locked = true;
+                // Disk full, a sharing violation from antivirus/backup tools or a
+                // transient DPAPI failure: report it and let the next save retry.
                 return false;
             }
         }

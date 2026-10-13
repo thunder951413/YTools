@@ -17,7 +17,8 @@ public static class LaunchAtLoginService
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath);
             return key?.GetValue(ValueName) is string value
-                && string.Equals(value, ExecutablePath(), StringComparison.OrdinalIgnoreCase);
+                && (string.Equals(value, QuotedExecutablePath(), StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(value, ExecutablePath(), StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -34,7 +35,9 @@ public static class LaunchAtLoginService
         using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath);
         if (enabled)
         {
-            key.SetValue(ValueName, executablePath!, RegistryValueKind.String);
+            // Quote the path: an unquoted Run value containing spaces is resolved
+            // by trying each space-separated prefix as an executable.
+            key.SetValue(ValueName, Quote(executablePath!), RegistryValueKind.String);
         }
         else
         {
@@ -46,4 +49,8 @@ public static class LaunchAtLoginService
     {
         return Environment.ProcessPath ?? "YTools.exe";
     }
+
+    private static string QuotedExecutablePath() => Quote(ExecutablePath());
+
+    private static string Quote(string path) => $"\"{path.Trim('"')}\"";
 }

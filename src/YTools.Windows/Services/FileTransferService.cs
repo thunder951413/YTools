@@ -81,21 +81,54 @@ public sealed class FileTransferService
             token.ThrowIfCancellationRequested();
             Commit(stage, destination, entries[0].Directory);
             // After commit the complete target is retained, even if removing the source fails.
-            if (move) { if (entries[0].Directory) { Directory.Delete(source, recursive: true); } else { File.Delete(source); } }
+            if (move) { DeletePlannedSource(entries); }
             progress?.Report(new(total, total, FileTransferPhase.Completed));
         }
         finally
         {
-            if (Directory.Exists(stage))
+            // Best-effort cleanup must not replace the original exception or cancellation.
+            try
             {
-                foreach (var file in Directory.EnumerateFiles(stage, "*", SearchOption.AllDirectories))
-                { File.SetAttributes(file, File.GetAttributes(file) & ~FileAttributes.ReadOnly); }
-                foreach (var child in Directory.EnumerateDirectories(stage, "*", SearchOption.AllDirectories))
-                { File.SetAttributes(child, File.GetAttributes(child) & ~FileAttributes.ReadOnly); }
-                File.SetAttributes(stage, File.GetAttributes(stage) & ~FileAttributes.ReadOnly);
-                Directory.Delete(stage, recursive: true);
+                if (Directory.Exists(stage))
+                {
+                    foreach (var file in Directory.EnumerateFiles(stage, "*", SearchOption.AllDirectories))
+                    { File.SetAttributes(file, File.GetAttributes(file) & ~FileAttributes.ReadOnly); }
+                    foreach (var child in Directory.EnumerateDirectories(stage, "*", SearchOption.AllDirectories))
+                    { File.SetAttributes(child, File.GetAttributes(child) & ~FileAttributes.ReadOnly); }
+                    File.SetAttributes(stage, File.GetAttributes(stage) & ~FileAttributes.ReadOnly);
+                    Directory.Delete(stage, recursive: true);
+                }
+                else if (File.Exists(stage)) { File.SetAttributes(stage, File.GetAttributes(stage) & ~FileAttributes.ReadOnly); File.Delete(stage); }
             }
-            else if (File.Exists(stage)) { File.SetAttributes(stage, File.GetAttributes(stage) & ~FileAttributes.ReadOnly); File.Delete(stage); }
+            catch (Exception cleanupError) when (cleanupError is IOException or UnauthorizedAccessException)
+            {
+                System.Diagnostics.Debug.WriteLine($"YTools transfer cleanup failed: {cleanupError.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Removes exactly the entries that were copied and verified, deepest first.
+    /// A recursive delete would also remove files created after verification and
+    /// stops half-way on read-only files (e.g. git objects).
+    /// </summary>
+    private static void DeletePlannedSource(List<Entry> entries)
+    {
+        foreach (var entry in entries.Where(entry => !entry.Directory))
+        {
+            File.SetAttributes(entry.Path, File.GetAttributes(entry.Path) & ~FileAttributes.ReadOnly);
+            File.Delete(entry.Path);
+        }
+
+        foreach (var entry in entries.Where(entry => entry.Directory).OrderByDescending(entry => entry.Path.Length))
+        {
+            if (Directory.EnumerateFileSystemEntries(entry.Path).Any())
+            {
+                continue; // Something new appeared after verification; keep it.
+            }
+
+            File.SetAttributes(entry.Path, File.GetAttributes(entry.Path) & ~FileAttributes.ReadOnly);
+            Directory.Delete(entry.Path);
         }
     }
     private static List<Entry> Plan(string source, CancellationToken token)

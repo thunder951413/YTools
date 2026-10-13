@@ -128,10 +128,12 @@ public sealed class ActionDispatcher
             case ResultAction.EmptyTrash:
                 return EmptyTrash();
             case ResultAction.StartScreenSaver:
-                _ = SendMessage(HwndBroadcast, WmSysCommand, ScScreenSave, IntPtr.Zero);
+                // PostMessage: a broadcast SendMessage blocks until every top-level window
+                // answers, so one hung application would freeze YTools.
+                _ = PostMessage(HwndBroadcast, WmSysCommand, new IntPtr(ScScreenSave), IntPtr.Zero);
                 break;
             case ResultAction.SleepDisplays:
-                _ = SendMessage(HwndBroadcast, WmSysCommand, ScMonitorPower, new IntPtr(MonitorPowerOff));
+                _ = PostMessage(HwndBroadcast, WmSysCommand, new IntPtr(ScMonitorPower), new IntPtr(MonitorPowerOff));
                 break;
             case ResultAction.OpenFocusSettings:
                 OpenSettingsUri("ms-settings:focus");
@@ -646,6 +648,14 @@ public sealed class ActionDispatcher
 
     private static void RecycleOnly(string path)
     {
+        // Only fixed local volumes have a Recycle Bin. On removable, network or
+        // virtual drives the shell would destroy the item instead of recycling it.
+        var root = Path.GetPathRoot(Path.GetFullPath(path));
+        if (string.IsNullOrEmpty(root) || new DriveInfo(root).DriveType != DriveType.Fixed)
+        {
+            throw new IOException("该位置没有回收站（可移动、网络或虚拟驱动器）。YTools 不会永久删除项目，已取消。");
+        }
+
         var itemId = typeof(IShellItem).GUID;
         var createResult = SHCreateItemFromParsingName(path, IntPtr.Zero, ref itemId, out var item);
         if (createResult != 0 || item is null)
@@ -658,7 +668,11 @@ public sealed class ActionDispatcher
         try
         {
             operation = (IFileOperation)new FileOperation();
-            operation.SetOperationFlags(0x00080000 | 0x00100000 | 0x0010 | 0x0004 | 0x0400); // RECYCLEONDELETE + EARLYFAILURE + no UI
+            // FOFX_RECYCLEONDELETE | FOFX_EARLYFAILURE | FOF_ALLOWUNDO | FOF_WANTNUKEWARNING
+            // | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI. WANTNUKEWARNING overrides
+            // NOCONFIRMATION when an item cannot be recycled (e.g. too large), so the user
+            // can cancel instead of having it permanently deleted; a cancel sets "aborted".
+            operation.SetOperationFlags(0x00080000 | 0x00100000 | 0x0040 | 0x4000 | 0x0010 | 0x0004 | 0x0400);
             operation.DeleteItem(item!, IntPtr.Zero);
             operation.PerformOperations();
             operation.GetAnyOperationsAborted(out var aborted);
@@ -855,8 +869,9 @@ public sealed class ActionDispatcher
         [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] IntPtr[] itemPidls,
         uint flags);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);

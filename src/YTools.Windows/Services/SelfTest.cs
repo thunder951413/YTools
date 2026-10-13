@@ -39,6 +39,9 @@ public static class SelfTest
             Check("calculator.basic", ExpressionCalculator.Evaluate("2+3*4") == 14);
             Check("calculator.power", ExpressionCalculator.Evaluate("2^3^2") == 512);
             Check("calculator.function", ExpressionCalculator.Evaluate("sqrt(16)") == 4);
+            Check("calculator.unaryMinus", ExpressionCalculator.Evaluate("2*-(3)") == -6 && ExpressionCalculator.Evaluate("2^-1") == 0.5);
+            Check("calculator.exponentResult", ExpressionCalculator.Evaluate("sqrt(1e-10)") > 0);
+            Check("calculator.largeInteger", ExpressionCalculator.Format(ExpressionCalculator.Evaluate("2^63")) == "9.22337203685e+18");
             Check("calculator.divisionByZero", Throws<CalculatorException>(() => ExpressionCalculator.Evaluate("1/0")));
             Check("calculator.format", ExpressionCalculator.Format(3.14159265358979) == "3.14159265359");
 

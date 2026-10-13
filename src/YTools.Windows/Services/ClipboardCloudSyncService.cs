@@ -32,6 +32,7 @@ public sealed class ClipboardCloudSyncService : IDisposable
     private ClipboardCloudState _state;
     private System.Threading.Timer? _pullTimer;
     private bool _hasMoreRemote;
+    private string? _pullIssue;
     private string? _createdRemoteRoot;
     private volatile string? _stateError;
     private volatile bool _disposed;
@@ -236,6 +237,7 @@ public sealed class ClipboardCloudSyncService : IDisposable
             await PublishPendingAsync(client, folders, credentials.SyncPassphrase, cancellation.Token);
             if (!pullRemote)
             {
+                _pullIssue = null; // Pull warnings belong to pull results only.
                 Complete(completed, ClipboardCloudSyncResult.Succeeded(null, QueueMessage("剪贴板变更已加密上传。")) with { PendingUploads = PendingUploadCount });
                 return;
             }
@@ -339,7 +341,8 @@ public sealed class ClipboardCloudSyncService : IDisposable
     private int PendingUploadCount { get { lock (_stateLock) { return _state.Pending.Count; } } }
     private string QueueMessage(string message) => message
         + (PendingUploadCount == 0 ? "" : $" 待上传 {PendingUploadCount} 条，分批继续。")
-        + (_hasMoreRemote ? " 远端仍有变更，保存本批后继续追赶。" : "");
+        + (_hasMoreRemote ? " 远端仍有变更，保存本批后继续追赶。" : "")
+        + (_pullIssue is null ? "" : " " + _pullIssue);
 
     private async Task PublishPendingAsync(IClient client, RemoteFolders folders, string syncPassphrase, CancellationToken cancellationToken)
     {
@@ -397,18 +400,34 @@ public sealed class ClipboardCloudSyncService : IDisposable
         CancellationToken cancellationToken)
     {
         _hasMoreRemote = false;
+        _pullIssue = null;
         var events = new List<ClipboardCloudEvent>();
         var advances = new Dictionary<Guid, long>();
         var receivedBytes = 0;
+        var stateChanged = false;
+        var undecryptableDevices = 0;
+        var blockedDevices = 0;
         var heads = await client.List(folders.Heads, depth: 1, cancellationToken: cancellationToken);
+
+        // Failures are isolated per device: a malformed head, a missing event or
+        // a device using another passphrase must not stop every other device.
         foreach (var file in heads.Where(item => !item.IsCollection && item.Href.EndsWith(".head", StringComparison.OrdinalIgnoreCase)))
         {
             var name = Path.GetFileName(file.Href.TrimEnd('/'));
             if (!Guid.TryParseExact(Path.GetFileNameWithoutExtension(name), "N", out var fileDevice)) { continue; }
-            var head = await DownloadJsonAsync<ClipboardCloudHead>(client, folders.Heads + "/" + name, MaximumHeadBytes, cancellationToken);
-            if (head.Version != 2 || head.DeviceId != fileDevice || head.DeviceId == Guid.Empty || head.LastSequence < 0)
+            ClipboardCloudHead head;
+            try
             {
-                throw new InvalidDataException("坚果云同步标记格式不正确。");
+                head = await DownloadJsonAsync<ClipboardCloudHead>(client, folders.Heads + "/" + name, MaximumHeadBytes, cancellationToken);
+                if (head.Version != 2 || head.DeviceId != fileDevice || head.DeviceId == Guid.Empty || head.LastSequence < 0)
+                {
+                    throw new InvalidDataException("坚果云同步标记格式不正确。");
+                }
+            }
+            catch (Exception exception) when (!IsTransient(exception, cancellationToken))
+            {
+                blockedDevices += 1;
+                continue;
             }
 
             long known;
@@ -426,27 +445,76 @@ public sealed class ClipboardCloudSyncService : IDisposable
             for (var next = known + 1; next <= head.LastSequence && events.Count < MaximumPullEvents; next += 1)
             {
                 if (!CloudBatchBudget.CanInclude(events.Count, receivedBytes, MaximumEventBytes, MaximumPullEvents)) { _hasMoreRemote = true; break; }
-                using var stream = await client.Download(eventFolder + "/" + EventName(next), cancellationToken);
-                var encrypted = await ReadBoundedAsync(stream, MaximumEventBytes, cancellationToken);
-                receivedBytes += encrypted.Length;
-                var clear = ClipboardCloudCryptography.Open(encrypted, syncPassphrase);
-                var entry = JsonSerializer.Deserialize<ClipboardCloudEvent>(clear)
-                    ?? throw new InvalidDataException("远端剪贴板同步记录为空。");
-                if (entry.Sequence != next || entry.DeviceId != head.DeviceId)
+                var receipt = $"{head.DeviceId:N}:{next}";
+                try
                 {
-                    throw new InvalidDataException("远端剪贴板同步记录与标记不一致。");
+                    using var stream = await client.Download(eventFolder + "/" + EventName(next), cancellationToken);
+                    var encrypted = await ReadBoundedAsync(stream, MaximumEventBytes, cancellationToken);
+                    receivedBytes += encrypted.Length;
+                    byte[] clear;
+                    try
+                    {
+                        clear = ClipboardCloudCryptography.Open(encrypted, syncPassphrase);
+                    }
+                    catch (AuthenticationTagMismatchException)
+                    {
+                        // Never skipped automatically: if *this* device has the wrong
+                        // passphrase, skipping would silently discard everything.
+                        undecryptableDevices += 1;
+                        break;
+                    }
+
+                    var entry = JsonSerializer.Deserialize<ClipboardCloudEvent>(clear)
+                        ?? throw new InvalidDataException("远端剪贴板同步记录为空。");
+                    if (entry.Sequence != next || entry.DeviceId != head.DeviceId)
+                    {
+                        throw new InvalidDataException("远端剪贴板同步记录与标记不一致。");
+                    }
+
+                    ValidateEvent(entry);
+                    events.Add(entry);
+                    advances[head.DeviceId] = next;
+                    lock (_stateLock)
+                    {
+                        stateChanged |= _state.FailedEventAttempts.Remove(receipt);
+                    }
+                }
+                catch (Exception exception) when (!IsTransient(exception, cancellationToken))
+                {
+                    stateChanged = true;
+                    bool skip;
+                    lock (_stateLock)
+                    {
+                        var attempts = (_state.FailedEventAttempts.TryGetValue(receipt, out var prior) ? prior : 0) + 1;
+                        skip = attempts >= MaximumEventAttempts;
+                        if (skip)
+                        {
+                            _state.FailedEventAttempts.Remove(receipt);
+                            _state.SkippedEventCount += 1;
+                        }
+                        else
+                        {
+                            _state.FailedEventAttempts[receipt] = attempts;
+                        }
+                    }
+
+                    if (!skip)
+                    {
+                        blockedDevices += 1;
+                        break;
+                    }
+
+                    advances[head.DeviceId] = next;
+                    continue;
                 }
 
-                ValidateEvent(entry);
-                events.Add(entry);
-                advances[head.DeviceId] = next;
                 if (receivedBytes >= 16 * 1024 * 1024 || next == head.LastSequence) { break; }
             }
 
             if (_hasMoreRemote || events.Count >= MaximumPullEvents || receivedBytes >= CloudBatchBudget.MaximumBytes) { _hasMoreRemote = true; break; }
         }
 
-        if (events.Count > 0)
+        if (events.Count > 0 || advances.Count > 0 || stateChanged)
         {
             lock (_stateLock)
             {
@@ -459,7 +527,56 @@ public sealed class ClipboardCloudSyncService : IDisposable
             }
         }
 
+        _pullIssue = undecryptableDevices > 0
+            ? $"有 {undecryptableDevices} 台设备的记录无法解密，请确认各设备使用相同的同步口令。"
+            : blockedDevices > 0
+                ? $"有 {blockedDevices} 台设备的记录暂时无法读取，将自动重试；连续失败的单条记录会被跳过。"
+                : null;
         return events;
+    }
+
+    private const int MaximumEventAttempts = 3;
+
+    /// <summary>
+    /// Network, authorization and server faults abort the round and are retried
+    /// later. Content faults (missing file, malformed or mismatched record) are
+    /// counted per event and eventually quarantined.
+    /// </summary>
+    private static bool IsTransient(Exception exception, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested || exception is OperationCanceledException)
+        {
+            return true;
+        }
+
+        // Malformed envelopes (bad magic, truncated) are content faults; only an
+        // authentication-tag mismatch is treated as a passphrase problem.
+        if (exception is InvalidDataException or JsonException or CryptographicException)
+        {
+            return false;
+        }
+
+        var status = HttpStatusOf(exception);
+        return status is not (404 or 410);
+    }
+
+    private static int? HttpStatusOf(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is System.Net.Http.HttpRequestException { StatusCode: { } statusCode })
+            {
+                return (int)statusCode;
+            }
+
+            // WebDAVClient's exceptions expose the status through GetHttpCode().
+            if (current.GetType().GetMethod("GetHttpCode", Type.EmptyTypes)?.Invoke(current, null) is int code)
+            {
+                return code;
+            }
+        }
+
+        return null;
     }
 
     private static async Task<T> DownloadJsonAsync<T>(IClient client, string path, int maximumBytes, CancellationToken cancellationToken)
@@ -563,6 +680,30 @@ public sealed class ClipboardCloudSyncService : IDisposable
             if (!_state.Tombstones.TryGetValue(id, out var prior) || entry.Timestamp > prior)
             { _state.Tombstones[id] = entry.Timestamp; }
         }
+
+        PruneTombstones(DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>
+    /// Tombstones only need to outlive delayed upserts of the same item. Keep
+    /// 180 days and at most 20 000 entries so the state file stays bounded.
+    /// </summary>
+    private void PruneTombstones(DateTimeOffset now)
+    {
+        var horizon = now.AddDays(-180);
+        foreach (var id in _state.Tombstones.Where(pair => pair.Value < horizon).Select(pair => pair.Key).ToList())
+        {
+            _state.Tombstones.Remove(id);
+        }
+
+        const int limit = 20_000;
+        if (_state.Tombstones.Count > limit)
+        {
+            foreach (var id in _state.Tombstones.OrderByDescending(pair => pair.Value).Skip(limit).Select(pair => pair.Key).ToList())
+            {
+                _state.Tombstones.Remove(id);
+            }
+        }
     }
 
     private ClipboardCloudState LoadState()
@@ -645,6 +786,8 @@ public sealed class ClipboardCloudSyncService : IDisposable
         public List<ClipboardCloudEvent> Pending { get; set; } = [];
         public List<ClipboardCloudEvent> Inbox { get; set; } = [];
         public Dictionary<Guid, DateTimeOffset> Tombstones { get; set; } = [];
+        public Dictionary<string, int> FailedEventAttempts { get; set; } = [];
+        public int SkippedEventCount { get; set; }
     }
 
     private sealed record RemoteFolders(string Root, string Heads, string Events, string DeviceEvents);
@@ -732,29 +875,31 @@ public sealed record ClipboardCloudSyncResult(bool Success, bool WasSkipped, IRe
     public static ClipboardCloudSyncResult Skipped() => new(true, true, null, null);
 }
 
+/// <summary>
+/// Envelope: "YTCE2" ‖ salt(16) ‖ AES-256-GCM(nonce 12 ‖ ciphertext ‖ tag 16),
+/// key = PBKDF2-SHA256(passphrase, salt, 600 000). Unchanged wire format.
+/// PBKDF2 used to run for every event on both seal and open (~0.2 s each), so a
+/// 200-event pull could exceed the 45 s round budget and never finish. Derived
+/// keys are now cached per (passphrase, salt) and sealing reuses one random salt
+/// per process. Every message still gets a fresh random nonce, and older clients
+/// still decrypt because the salt travels with every envelope.
+/// </summary>
 internal static class ClipboardCloudCryptography
 {
     private static readonly byte[] Magic = "YTCE2"u8.ToArray();
     private const int SaltLength = 16;
     private const int Iterations = 600_000;
+    private static readonly DerivedKeyCache KeyCache = new();
 
     public static byte[] Seal(byte[] clear, string passphrase)
     {
-        var salt = RandomNumberGenerator.GetBytes(SaltLength);
-        var key = DeriveKey(passphrase, salt);
-        try
-        {
-            var encrypted = AesGcmBox.Seal(clear, key);
-            var output = new byte[Magic.Length + salt.Length + encrypted.Length];
-            Buffer.BlockCopy(Magic, 0, output, 0, Magic.Length);
-            Buffer.BlockCopy(salt, 0, output, Magic.Length, salt.Length);
-            Buffer.BlockCopy(encrypted, 0, output, Magic.Length + salt.Length, encrypted.Length);
-            return output;
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(key);
-        }
+        var (salt, key) = KeyCache.SealingKey(passphrase, SaltLength, DeriveKey);
+        var encrypted = AesGcmBox.Seal(clear, key);
+        var output = new byte[Magic.Length + salt.Length + encrypted.Length];
+        Buffer.BlockCopy(Magic, 0, output, 0, Magic.Length);
+        Buffer.BlockCopy(salt, 0, output, Magic.Length, salt.Length);
+        Buffer.BlockCopy(encrypted, 0, output, Magic.Length + salt.Length, encrypted.Length);
+        return output;
     }
 
     public static byte[] Open(byte[] encrypted, string passphrase)
@@ -764,17 +909,75 @@ internal static class ClipboardCloudCryptography
             throw new CryptographicException("远端内容不是 YTools 剪贴板同步密文。");
         }
 
-        var key = DeriveKey(passphrase, encrypted.AsSpan(Magic.Length, SaltLength).ToArray());
-        try
-        {
-            return AesGcmBox.Open(encrypted[(Magic.Length + SaltLength)..], key);
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(key);
-        }
+        var key = KeyCache.Key(passphrase, encrypted.AsSpan(Magic.Length, SaltLength).ToArray(), DeriveKey);
+        return AesGcmBox.Open(encrypted[(Magic.Length + SaltLength)..], key);
     }
 
     private static byte[] DeriveKey(string passphrase, byte[] salt) =>
         Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(passphrase), salt, Iterations, HashAlgorithmName.SHA256, 32);
+}
+
+/// <summary>
+/// Thread-safe cache of PBKDF2 outputs keyed by SHA-256(passphrase ‖ salt).
+/// Bounded so a hostile server cannot grow it with unique salts. Returned arrays
+/// are shared and must not be modified by callers.
+/// </summary>
+internal sealed class DerivedKeyCache
+{
+    private readonly object _lock = new();
+    private readonly Dictionary<string, byte[]> _keys = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, byte[]> _sealingSalts = new(StringComparer.Ordinal);
+    private readonly int _capacity;
+
+    public DerivedKeyCache(int capacity = 256)
+    {
+        _capacity = capacity;
+    }
+
+    public byte[] Key(string passphrase, byte[] salt, Func<string, byte[], byte[]> derive)
+    {
+        var identifier = Identifier(passphrase, salt);
+        lock (_lock)
+        {
+            if (_keys.TryGetValue(identifier, out var cached)) { return cached; }
+        }
+
+        var derived = derive(passphrase, salt);
+        lock (_lock)
+        {
+            if (_keys.Count >= _capacity) { _keys.Clear(); }
+            _keys[identifier] = derived;
+        }
+
+        return derived;
+    }
+
+    public (byte[] Salt, byte[] Key) SealingKey(string passphrase, int saltLength, Func<string, byte[], byte[]> derive)
+    {
+        var account = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(passphrase)));
+        byte[] salt;
+        lock (_lock)
+        {
+            if (_sealingSalts.TryGetValue(account, out var existing))
+            {
+                salt = existing;
+            }
+            else
+            {
+                salt = RandomNumberGenerator.GetBytes(saltLength);
+                _sealingSalts[account] = salt;
+            }
+        }
+
+        return (salt, Key(passphrase, salt, derive));
+    }
+
+    private static string Identifier(string passphrase, byte[] salt)
+    {
+        var passphraseBytes = Encoding.UTF8.GetBytes(passphrase);
+        var material = new byte[passphraseBytes.Length + salt.Length];
+        Buffer.BlockCopy(passphraseBytes, 0, material, 0, passphraseBytes.Length);
+        Buffer.BlockCopy(salt, 0, material, passphraseBytes.Length, salt.Length);
+        return Convert.ToHexString(SHA256.HashData(material));
+    }
 }

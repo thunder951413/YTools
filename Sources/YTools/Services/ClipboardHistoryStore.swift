@@ -93,9 +93,10 @@ final class ClipboardHistoryStore {
         case let .loaded(items, _):
             do {
                 let migrated = try persist(items, originalImages: Dictionary(
-                    uniqueKeysWithValues: items.compactMap { item in
+                    items.compactMap { item in
                         item.kind == .image ? item.binaryData.map { (item.id, $0) } : nil
-                    }
+                    },
+                    uniquingKeysWith: { first, _ in first }
                 ))
                 let migratedURL = legacyFileURL.appendingPathExtension("migrated")
                 try? FileManager.default.moveItem(at: legacyFileURL, to: migratedURL)
@@ -122,7 +123,8 @@ final class ClipboardHistoryStore {
         let hasArchive = FileManager.default.fileExists(atPath: manifestURL.path) || FileManager.default.fileExists(atPath: legacyFileURL.path)
         let key = try encryptionKey(createIfMissing: !hasArchive)
         let existing = try currentManifest(key: key)
-        let existingByID = Dictionary(uniqueKeysWithValues: existing.entries.map { ($0.id, $0) })
+        // A damaged manifest with duplicate IDs must not trap; keep the first entry.
+        let existingByID = Dictionary(existing.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var candidateEntries: [Entry] = []
         var normalizedByID: [UUID: ClipboardHistoryItem] = [:]
         var newlyWrittenIDs: Set<UUID> = []
@@ -142,7 +144,24 @@ final class ClipboardHistoryStore {
                         updatedAt: item.updatedAt ?? old.updatedAt,
                         copyCount: item.copyCount
                     ))
-                    normalizedByID[item.id] = item
+                    // A remote upsert of an existing image carries the full
+                    // original; keep only a thumbnail in memory, as for new items.
+                    if item.kind == .image, let data = item.binaryData, data.count > Self.thumbnailByteCeiling {
+                        normalizedByID[item.id] = ClipboardHistoryItem(
+                            id: item.id,
+                            kind: item.kind,
+                            payload: item.payload,
+                            createdAt: item.createdAt,
+                            sourceApplication: item.sourceApplication,
+                            binaryData: makeThumbnail(from: data),
+                            contentHash: item.contentHash,
+                            isPinned: item.pinned,
+                            updatedAt: item.updatedAt,
+                            copyCount: item.copyCount
+                        )
+                    } else {
+                        normalizedByID[item.id] = item
+                    }
                     continue
                 }
 
@@ -404,6 +423,9 @@ final class ClipboardHistoryStore {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try open(Data(contentsOf: url), key: key)
     }
+
+    /// Thumbnails are at most 192 px PNGs; anything larger is an original image.
+    private static let thumbnailByteCeiling = 256 * 1_024
 
     private func makeThumbnail(from data: Data) -> Data? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),

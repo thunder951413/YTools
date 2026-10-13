@@ -62,6 +62,8 @@ public struct ModuleResultPolicy: Sendable {
             return descriptor.capabilities.contains(.localFileRead)
                 && path.count <= 4_096
                 && (path.hasPrefix("/") || path.hasPrefix("~"))
+        case let .editQuery(text):
+            return text.count <= 1_000 && !text.contains(where: \.isNewline)
         case let .hideApplication(bundleID), let .quitApplication(bundleID):
             return allowsPrivilegedActions && !bundleID.isEmpty && bundleID.count <= 255
         case .showTrash, .emptyTrash, .startScreenSaver, .sleepDisplays,

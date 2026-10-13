@@ -88,4 +88,29 @@ final class ModuleResultPolicyTests: XCTestCase {
         )
         XCTAssertNil(ModuleResultPolicy().sanitize(result, from: descriptor))
     }
+
+    func testEditQueryNeedsNoFileCapabilitySoCalculatorContinuationSurvives() {
+        let descriptor = ModuleDescriptor(id: "calculator", name: "计算器")
+        let result = LauncherResult(
+            id: "calculator:2+3",
+            moduleID: descriptor.id,
+            title: "5",
+            subtitle: "",
+            icon: .system("function"),
+            score: 1,
+            action: .editQuery("5")
+        )
+        XCTAssertEqual(ModuleResultPolicy().sanitize(result, from: descriptor)?.action, .editQuery("5"))
+
+        let multiline = LauncherResult(
+            id: "calculator:bad",
+            moduleID: descriptor.id,
+            title: "x",
+            subtitle: "",
+            icon: .system("function"),
+            score: 1,
+            action: .editQuery("a\nb")
+        )
+        XCTAssertNil(ModuleResultPolicy().sanitize(multiline, from: descriptor))
+    }
 }

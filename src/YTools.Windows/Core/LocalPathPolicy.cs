@@ -10,6 +10,29 @@ public static class LocalPathPolicy
         return TryNormalize(path, out _);
     }
 
+    /// <summary>
+    /// True only when the path's volume is mounted and the item is absent. Items
+    /// on an unplugged drive or disconnected share are "unknown", not missing, so
+    /// history and recent documents keep them instead of deleting them for good.
+    /// </summary>
+    public static bool IsDefinitelyMissing(string path)
+    {
+        try
+        {
+            var root = Path.GetPathRoot(path);
+            if (string.IsNullOrEmpty(root) || !Directory.Exists(root))
+            {
+                return false;
+            }
+
+            return !File.Exists(path) && !Directory.Exists(path);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static bool TryNormalize(string? path, out string normalized)
     {
         normalized = "";
@@ -26,7 +49,8 @@ public static class LocalPathPolicy
             || candidate.StartsWith("\\\\", StringComparison.Ordinal)
             || candidate.StartsWith("//", StringComparison.Ordinal)
             || candidate.IndexOf(':', 2) >= 0
-            || candidate.Contains('\0'))
+            || candidate.Contains('\0')
+            || candidate.Contains('"'))
         {
             return false;
         }

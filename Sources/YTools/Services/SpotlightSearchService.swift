@@ -138,6 +138,18 @@ final class SpotlightSearchService {
         completion?(output)
     }
 
+    /// Hides system and app-support files, but not iCloud Drive (which lives in
+    /// ~/Library/Mobile Documents) or a user folder that happens to be named
+    /// "Library" somewhere inside the home directory.
+    nonisolated static func isLibraryNoise(_ path: String) -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let userLibrary = home + "/Library/"
+        if path.hasPrefix(userLibrary) {
+            return !path.hasPrefix(userLibrary + "Mobile Documents/")
+        }
+        return path.hasPrefix("/Library/") || path.hasPrefix("/System/")
+    }
+
     private func results(from query: NSMetadataQuery, request: ParsedRequest) -> [LauncherResult] {
         query.disableUpdates()
         defer { query.enableUpdates() }
@@ -150,7 +162,7 @@ final class SpotlightSearchService {
             guard let item = query.result(at: index) as? NSMetadataItem,
                   let path = item.value(forAttribute: NSMetadataItemPathKey) as? String else { continue }
             let url = URL(fileURLWithPath: path)
-            if url.pathExtension.lowercased() == "app" || path.contains("/Library/") { continue }
+            if url.pathExtension.lowercased() == "app" || Self.isLibraryNoise(path) { continue }
             let name = (item.value(forAttribute: NSMetadataItemDisplayNameKey) as? String)
                 ?? url.lastPathComponent
             let prefixScore = name.lowercased().hasPrefix(request.term.lowercased()) ? 80 : 0

@@ -100,6 +100,8 @@ final class ActionDispatcher {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         case let .navigate(path):
             return .navigate(path)
+        case let .editQuery(text):
+            return .navigate(text)
         case let .hideApplication(bundleID):
             NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).forEach { $0.hide() }
         case let .quitApplication(bundleID):

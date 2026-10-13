@@ -1,5 +1,7 @@
 # Windows / macOS 交付状态
 
+> **历史记录**：本文件记录 2026-09-06 的状态，已被 [docs/COMPLETION_CHECKLIST.md](docs/COMPLETION_CHECKLIST.md) 与 [CHANGELOG.md](CHANGELOG.md) 取代，不再更新。
+
 更新日期：2026-09-06。基于 `windows` 分支当前修复工作树，尚未提交或发布。
 
 ## 本轮已验证

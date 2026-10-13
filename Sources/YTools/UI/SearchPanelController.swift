@@ -118,6 +118,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
     }
 
     func flushPendingActions() async { await launcher.flushPendingActions() }
+    func cancelFileOperation() { launcher.cancelFileOperation() }
 
     func shutdown() {
         shiftPreviewTimer?.invalidate()

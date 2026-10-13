@@ -77,8 +77,16 @@ final class SecureCodableStore: @unchecked Sendable {
             let exists = FileManager.default.fileExists(atPath: fileURL.path)
             let key = try keyProvider(!exists)
             if exists {
-                let prior = try AES.GCM.SealedBox(combined: Data(contentsOf: fileURL))
-                _ = try AES.GCM.open(prior, using: SymmetricKey(data: key))
+                let priorData = try Data(contentsOf: fileURL)
+                do {
+                    let prior = try AES.GCM.SealedBox(combined: priorData)
+                    _ = try AES.GCM.open(prior, using: SymmetricKey(data: key))
+                } catch {
+                    // Only an archive that does not authenticate locks the store:
+                    // overwriting it could destroy data under another key.
+                    locked = true
+                    return false
+                }
             }
             let clear = try JSONEncoder().encode(value)
             guard let combined = try AES.GCM.seal(clear, using: SymmetricKey(data: key)).combined else { return false }
@@ -86,7 +94,8 @@ final class SecureCodableStore: @unchecked Sendable {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
             return true
         } catch {
-            locked = true
+            // Disk full, permissions or a transient keychain failure: report it
+            // and let the next save retry instead of failing for the whole session.
             return false
         }
     }

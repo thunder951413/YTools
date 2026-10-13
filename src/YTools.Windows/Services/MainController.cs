@@ -122,14 +122,35 @@ public sealed class MainController
         _hotKeys?.RemoveAll();
         _launcherWindow?.HidePanel();
         _clipboardWindow?.HidePanel();
-        _settingsWindow?.Close();
-        if (_launcher is not null) { await _launcher.FlushPendingActionsAsync(); }
-        if (_clipboard is not null) { await _clipboard.FlushPendingChangesAsync(); }
-        _launcher?.PersistLastQuery();
-        await _preferences.FlushPendingChangesAsync();
-        if (_snippets is not null) { await _snippets.FlushPendingChangesAsync(); }
-        if (_recentDocuments is not null) { await _recentDocuments.FlushPendingChangesAsync(); }
-        Application.Current.Shutdown();
+        try
+        {
+            _settingsWindow?.Close();
+            // Each flush is isolated: one failing store must neither skip the
+            // others nor leave the app half shut down with hotkeys removed.
+            await FlushQuietly(() => _launcher?.FlushPendingActionsAsync());
+            await FlushQuietly(() => _clipboard?.FlushPendingChangesAsync());
+            _launcher?.PersistLastQuery();
+            await FlushQuietly(() => _preferences.FlushPendingChangesAsync());
+            await FlushQuietly(() => _snippets?.FlushPendingChangesAsync());
+            await FlushQuietly(() => _recentDocuments?.FlushPendingChangesAsync());
+        }
+        finally
+        {
+            Application.Current.Shutdown();
+        }
+    }
+
+    private static async Task FlushQuietly(Func<Task?> flush)
+    {
+        try
+        {
+            var task = flush();
+            if (task is not null) { await task; }
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"YTools shutdown flush failed: {exception}");
+        }
     }
 
     /// <summary>Diagnostic entry: opens the settings window directly.</summary>

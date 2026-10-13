@@ -29,6 +29,7 @@ actor ClipboardCloudSyncService {
     private var state = State(deviceID: UUID())
     private var createdRemoteRoot: String?
     private var hasMoreRemote = false
+    private var pullIssue: String?
 
     init(credentialStore: SecureCodableStore = SecureCodableStore(name: "clipboard-cloud-credentials"),
          stateStore: SecureCodableStore = SecureCodableStore(name: "clipboard-cloud-state"),
@@ -191,6 +192,7 @@ actor ClipboardCloudSyncService {
             let folders = try await ensureFolders(credentials: credentials)
             try await publishPending(folders: folders, credentials: credentials)
             guard pullRemote else {
+                pullIssue = nil // Pull warnings belong to pull results only.
                 return Result(success: true, items: nil, message: queueMessage("剪贴板变更已加密上传。"), pendingUploads: state.pending.count)
             }
             if state.inbox.isEmpty { _ = try await pullChangedEvents(folders: folders, credentials: credentials) }
@@ -255,6 +257,7 @@ actor ClipboardCloudSyncService {
     private func queueMessage(_ message: String) -> String {
         message + (state.pending.isEmpty ? "" : " 待上传 \(state.pending.count) 条，分批继续。")
             + (hasMoreRemote ? " 远端仍有变更，保存本批后继续追赶。" : "")
+            + (pullIssue.map { " " + $0 } ?? "")
     }
 
     private func publishPending(folders: Folders, credentials: Credentials) async throws {
@@ -298,35 +301,104 @@ actor ClipboardCloudSyncService {
         let names = try XMLHrefParser.hrefs(in: listed.data).compactMap { URL(string: $0)?.lastPathComponent ?? URL(fileURLWithPath: $0).lastPathComponent }
             .filter { $0.hasSuffix(".head") }
         hasMoreRemote = false
+        pullIssue = nil
         var events: [Event] = []
         var advances: [UUID: Int64] = [:]
         var receivedBytes = 0
-        for name in Set(names).sorted() {
-            let headData = try await download(path: childPath(folders.heads, name), credentials: credentials, limit: 4 * 1_024)
-            let head = try decoded(Head.self, from: headData)
-            guard head.version == 2, headName(head.deviceID) == name.lowercased(), !isZeroDeviceID(head.deviceID), head.lastSequence >= 0 else { throw CloudError.invalidHead }
-            let known = state.knownSequences[head.deviceID] ?? 0
+        var stateChanged = false
+        var undecryptableDevices = 0
+        var blockedDevices = 0
+
+        // Failures are isolated per device: a malformed head, a missing event or
+        // a device using another passphrase must not stop every other device.
+        devices: for name in Set(names).sorted() {
+            let head: Head
+            do {
+                let headData = try await download(path: childPath(folders.heads, name), credentials: credentials, limit: 4 * 1_024)
+                head = try decoded(Head.self, from: headData)
+                guard head.version == 2, headName(head.deviceID) == name.lowercased(), !isZeroDeviceID(head.deviceID), head.lastSequence >= 0 else { throw CloudError.invalidHead }
+            } catch {
+                // Network faults abort the whole round without saving, as before.
+                if Self.isTransient(error) { throw error }
+                blockedDevices += 1
+                continue
+            }
+            let known = advances[head.deviceID] ?? state.knownSequences[head.deviceID] ?? 0
             guard head.deviceID != state.deviceID, head.lastSequence > known else { continue }
             let eventFolder = childPath(folders.events, deviceDirectoryName(head.deviceID))
-            for sequence in (known + 1)...head.lastSequence {
-                if !CloudBatchBudget.canInclude(count: events.count, bytes: receivedBytes, nextBytes: 8 * 1_024 * 1_024, eventLimit: CloudBatchBudget.maximumPullEvents) { hasMoreRemote = true; break }
-                let encrypted = try await download(path: childPath(eventFolder, eventName(sequence)), credentials: credentials, limit: 8 * 1_024 * 1_024)
-                receivedBytes += encrypted.count
-                let event = try decoded(Event.self, from: CloudCryptography.open(encrypted, passphrase: credentials.syncPassphrase))
-                guard event.sequence == sequence, event.deviceID == head.deviceID else { throw CloudError.invalidEvent }
-                guard event.kind == .delete || event.item?.item != nil else { throw CloudError.invalidEvent }
-                events.append(event)
-                advances[head.deviceID] = sequence
+            var sequence = known + 1
+            while sequence <= head.lastSequence {
+                if !CloudBatchBudget.canInclude(count: events.count, bytes: receivedBytes, nextBytes: 8 * 1_024 * 1_024, eventLimit: CloudBatchBudget.maximumPullEvents) { hasMoreRemote = true; break devices }
+                let receipt = "\(head.deviceID.uuidString.lowercased()):\(sequence)"
+                do {
+                    let encrypted = try await download(path: childPath(eventFolder, eventName(sequence)), credentials: credentials, limit: 8 * 1_024 * 1_024)
+                    receivedBytes += encrypted.count
+                    let clear: Data
+                    do { clear = try CloudCryptography.open(encrypted, passphrase: credentials.syncPassphrase) }
+                    catch CryptoKitError.authenticationFailure { throw PullFailure.undecryptable }
+                    // Malformed envelopes (bad magic, truncated) are content faults
+                    // that get counted and quarantined, not a passphrase problem.
+                    catch { throw CloudError.invalidEvent }
+                    let event = try decoded(Event.self, from: clear)
+                    guard event.sequence == sequence, event.deviceID == head.deviceID else { throw CloudError.invalidEvent }
+                    guard event.kind == .delete || event.item?.item != nil else { throw CloudError.invalidEvent }
+                    events.append(event)
+                    advances[head.deviceID] = sequence
+                    if state.failedEventAttempts.removeValue(forKey: receipt) != nil { stateChanged = true }
+                } catch PullFailure.undecryptable {
+                    // Never skipped automatically: if *this* device has the wrong
+                    // passphrase, skipping would silently discard everything.
+                    undecryptableDevices += 1
+                    continue devices
+                } catch {
+                    if Self.isTransient(error) { throw error }
+                    let attempts = (state.failedEventAttempts[receipt] ?? 0) + 1
+                    stateChanged = true
+                    if attempts >= Self.maximumEventAttempts {
+                        state.failedEventAttempts.removeValue(forKey: receipt)
+                        state.skippedEventCount += 1
+                        advances[head.deviceID] = sequence
+                    } else {
+                        state.failedEventAttempts[receipt] = attempts
+                        blockedDevices += 1
+                        continue devices
+                    }
+                }
+                sequence += 1
             }
-            if !CloudBatchBudget.canInclude(count: events.count, bytes: receivedBytes, nextBytes: 8 * 1_024 * 1_024, eventLimit: CloudBatchBudget.maximumPullEvents) { hasMoreRemote = true; break }
         }
-        if !events.isEmpty {
+
+        if !events.isEmpty || !advances.isEmpty || stateChanged {
             state.inbox.append(contentsOf: events)
             events.forEach { rememberDeletion($0) }
             for (device, sequence) in advances { state.knownSequences[device] = sequence }
             try saveState()
         }
+        if undecryptableDevices > 0 {
+            pullIssue = "有 \(undecryptableDevices) 台设备的记录无法解密，请确认各设备使用相同的同步口令。"
+        } else if blockedDevices > 0 {
+            pullIssue = "有 \(blockedDevices) 台设备的记录暂时无法读取，将自动重试；连续失败的单条记录会被跳过。"
+        }
         return events
+    }
+
+    private static let maximumEventAttempts = 3
+
+    private enum PullFailure: Error { case undecryptable }
+
+    /// Network and server-side faults abort the round and are retried later.
+    /// Content faults (missing file, malformed or mismatched record) are
+    /// counted per event and eventually quarantined.
+    private static func isTransient(_ error: any Error) -> Bool {
+        if let cloud = error as? CloudError {
+            switch cloud {
+            case let .requestFailed(status): return status != 404 && status != 410
+            case .invalidHead, .invalidEvent, .responseTooLarge, .eventTooLarge: return false
+            case .storage, .invalidPath, .invalidResponse: return true
+            }
+        }
+        if error is DecodingError { return false }
+        return true
     }
 
     private func download(path: String, credentials: Credentials, limit: Int) async throws -> Data {
@@ -359,7 +431,7 @@ actor ClipboardCloudSyncService {
     }
 
     nonisolated static func apply(events: [Event], to local: [ClipboardHistoryItem], deleted: [UUID: Date] = [:]) -> [ClipboardHistoryItem] {
-        var items = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
+        var items = Dictionary(local.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var tombstones = deleted
         for event in events.sorted(by: {
             if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
@@ -405,6 +477,19 @@ actor ClipboardCloudSyncService {
     private func rememberDeletion(_ event: Event) {
         if event.kind == .delete {
             for id in event.deletedIDs { state.tombstones[id] = max(state.tombstones[id] ?? .distantPast, event.timestamp) }
+            pruneTombstones()
+        }
+    }
+
+    /// Tombstones only need to outlive delayed upserts of the same item. Keep
+    /// 180 days and at most 20 000 entries so the state file stays bounded.
+    private func pruneTombstones(now: Date = Date()) {
+        let horizon = now.addingTimeInterval(-180 * 24 * 60 * 60)
+        state.tombstones = state.tombstones.filter { $0.value >= horizon }
+        let limit = 20_000
+        if state.tombstones.count > limit {
+            let newest = state.tombstones.sorted { $0.value > $1.value }.prefix(limit)
+            state.tombstones = Dictionary(newest.map { ($0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
         }
     }
 
@@ -463,7 +548,9 @@ actor ClipboardCloudSyncService {
         var pending: [Event] = []
         var inbox: [Event] = []
         var tombstones: [UUID: Date] = [:]
-        enum CodingKeys: String, CodingKey { case deviceID, scope, nextSequence, knownSequences, pending, inbox, tombstones }
+        var failedEventAttempts: [String: Int] = [:]
+        var skippedEventCount = 0
+        enum CodingKeys: String, CodingKey { case deviceID, scope, nextSequence, knownSequences, pending, inbox, tombstones, failedEventAttempts, skippedEventCount }
         init(deviceID: UUID) { self.deviceID = deviceID }
         init(from decoder: any Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -474,6 +561,8 @@ actor ClipboardCloudSyncService {
             pending = try c.decode([Event].self, forKey: .pending)
             inbox = try c.decodeIfPresent([Event].self, forKey: .inbox) ?? []
             tombstones = try c.decodeIfPresent([UUID: Date].self, forKey: .tombstones) ?? [:]
+            failedEventAttempts = try c.decodeIfPresent([String: Int].self, forKey: .failedEventAttempts) ?? [:]
+            skippedEventCount = try c.decodeIfPresent(Int.self, forKey: .skippedEventCount) ?? 0
         }
     }
     private struct Folders { let root: String; let heads: String; let events: String; let deviceEvents: String }
@@ -498,11 +587,21 @@ actor ClipboardCloudSyncService {
     }
 }
 
+/// Envelope: "YTCE2" ‖ salt(16) ‖ AES-256-GCM(nonce 12 ‖ ciphertext ‖ tag 16),
+/// key = PBKDF2-SHA256(passphrase, salt, 600 000). Unchanged wire format.
+///
+/// PBKDF2 used to run for every event on both seal and open (~0.2 s each), so
+/// a 200-event pull spent most of its time deriving keys. Derived keys are now
+/// cached per (passphrase, salt), and sealing reuses one random salt per
+/// process. Every message still uses a fresh random 96-bit nonce, so reusing a
+/// key is safe far beyond any realistic event count, and older clients still
+/// decrypt the result because the salt travels with every envelope.
 enum CloudCryptography {
     private static let magic = Data("YTCE2".utf8)
+    private static let keyCache = DerivedKeyCache()
+
     static func seal(_ clear: Data, passphrase: String) throws -> Data {
-        let salt = randomData(count: 16)
-        let key = try deriveKey(passphrase: passphrase, salt: salt)
+        let (salt, key) = try keyCache.sealingKey(passphrase: passphrase, derive: deriveKey)
         let box = try AES.GCM.seal(clear, using: SymmetricKey(data: key))
         guard let combined = box.combined else { throw CryptoError.invalidEnvelope }
         return magic + salt + combined
@@ -510,7 +609,7 @@ enum CloudCryptography {
     static func open(_ encrypted: Data, passphrase: String) throws -> Data {
         guard encrypted.count >= magic.count + 16 + 28, encrypted.prefix(magic.count) == magic else { throw CryptoError.invalidEnvelope }
         let salt = encrypted.subdata(in: magic.count..<(magic.count + 16))
-        let key = try deriveKey(passphrase: passphrase, salt: salt)
+        let key = try keyCache.key(passphrase: passphrase, salt: salt, derive: deriveKey)
         let box = try AES.GCM.SealedBox(combined: encrypted.dropFirst(magic.count + 16))
         return try AES.GCM.open(box, using: SymmetricKey(data: key))
     }
@@ -523,7 +622,6 @@ enum CloudCryptography {
         guard status == kCCSuccess else { throw CryptoError.keyDerivationFailed }
         return Data(key)
     }
-    private static func randomData(count: Int) -> Data { Data((0..<count).map { _ in UInt8.random(in: .min ... .max) }) }
     private enum CryptoError: LocalizedError { case invalidEnvelope, keyDerivationFailed
         var errorDescription: String? { self == .invalidEnvelope ? "同步密文格式无效。" : "同步密钥派生失败。" }
     }
@@ -594,5 +692,47 @@ private actor ClipboardCloudHTTPTransport: ClipboardCloudTransport {
             data.append(byte)
         }
         return (http.statusCode, data)
+    }
+}
+
+/// Thread-safe cache of PBKDF2 outputs keyed by SHA-256(passphrase ‖ salt).
+/// Bounded so a hostile server cannot grow it with unique salts.
+final class DerivedKeyCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var keys: [Data: Data] = [:]
+    private var sealingSalts: [Data: Data] = [:]
+    private let capacity: Int
+
+    init(capacity: Int = 256) {
+        self.capacity = capacity
+    }
+
+    func key(passphrase: String, salt: Data, derive: (String, Data) throws -> Data) throws -> Data {
+        let identifier = Self.identifier(passphrase: passphrase, salt: salt)
+        if let cached = lock.withLock({ keys[identifier] }) { return cached }
+        let derived = try derive(passphrase, salt)
+        lock.withLock {
+            if keys.count >= capacity { keys.removeAll(keepingCapacity: true) }
+            keys[identifier] = derived
+        }
+        return derived
+    }
+
+    func sealingKey(passphrase: String, derive: (String, Data) throws -> Data) throws -> (salt: Data, key: Data) {
+        let account = Data(SHA256.hash(data: Data(passphrase.utf8)))
+        let salt = lock.withLock { () -> Data in
+            if let existing = sealingSalts[account] { return existing }
+            let fresh = SymmetricKey(size: .bits128).withUnsafeBytes { Data($0) }
+            sealingSalts[account] = fresh
+            return fresh
+        }
+        return (salt, try key(passphrase: passphrase, salt: salt, derive: derive))
+    }
+
+    private static func identifier(passphrase: String, salt: Data) -> Data {
+        var hasher = SHA256()
+        hasher.update(data: Data(passphrase.utf8))
+        hasher.update(data: salt)
+        return Data(hasher.finalize())
     }
 }

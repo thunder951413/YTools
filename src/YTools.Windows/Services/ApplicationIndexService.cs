@@ -646,7 +646,9 @@ internal static class LnkResolver
             persistFile.Load(shortcutPath, 0 /* STGM_READ */);
             var target = new StringBuilder(32_768);
             var description = new StringBuilder(1_024);
-            shellLink.GetPath(target, target.Capacity, IntPtr.Zero, 0x00000001 /* SLGP_UNCPRIORITY */);
+            // 0 = default long path. 0x1 is SLGP_SHORTPATH, which returned 8.3 names
+            // such as PROGRA~1 and broke alias keys and search tokens.
+            shellLink.GetPath(target, target.Capacity, IntPtr.Zero, 0);
             shellLink.GetDescription(description, description.Capacity);
             return new ShortcutMetadata(target.ToString(), description.ToString().Trim());
         }

@@ -31,10 +31,13 @@ actor FileOperationService {
         guard !exists(destination) else { throw CocoaError(.fileWriteFileExists) }
         await progress(FileTransferProgress(completedBytes: 0, totalBytes: 0, phase: .scanning))
         try Task.checkCancellation()
-        let entries = try plan(source)
+        // A same-volume move is a single atomic rename, so the contents are never
+        // read and inner symlinks (common inside .app/.framework bundles) are safe.
+        let isRename = operation == .move && sameVolume(source, directory)
+        let entries = try plan(source, recursive: !isRename)
         let total = entries.reduce(Int64(0)) { $0 + $1.size }
         try Task.checkCancellation()
-        if operation == .move && sameVolume(source, directory) {
+        if isRename {
             await progress(FileTransferProgress(completedBytes: 0, totalBytes: total, phase: .committing))
             try Task.checkCancellation()
             try commit(source, to: destination)
@@ -88,7 +91,7 @@ actor FileOperationService {
         defer { free(path) }
         return URL(fileURLWithPath: String(cString: path))
     }
-    private func plan(_ source: URL) throws -> [Entry] {
+    private func plan(_ source: URL, recursive: Bool = true) throws -> [Entry] {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
         func entry(_ url: URL) throws -> Entry {
             try Task.checkCancellation()
@@ -100,7 +103,7 @@ actor FileOperationService {
                          directory: values.isDirectory == true, size: values.isDirectory == true ? 0 : Int64(values.fileSize ?? 0), modified: values.contentModificationDate)
         }
         var result = [try entry(source)]
-        if result[0].directory {
+        if recursive, result[0].directory {
             var enumerationError: Error?
             guard let enumerator = FileManager.default.enumerator(at: source, includingPropertiesForKeys: Array(keys), errorHandler: { _, error in enumerationError = error; return false }) else { throw CocoaError(.fileReadUnknown) }
             for case let url as URL in enumerator { result.append(try entry(url)) }

@@ -52,7 +52,8 @@ public sealed class FileSearchService : IDisposable
                 return "文件搜索：内置扫描";
             }
 
-            return _everything.AvailabilityStatus switch
+            // Read on the UI thread for the launcher footer: never block on a running query.
+            return _everything.CachedAvailabilityStatus switch
             {
                 EverythingAvailabilityStatus.Available => "文件搜索：Everything",
                 EverythingAvailabilityStatus.IntegrityMismatch => "文件搜索：Everything 权限不匹配",

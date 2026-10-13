@@ -330,19 +330,10 @@ public sealed class ClipboardHistoryStore
 
     private void WriteProtected(byte[] data, string path)
     {
-        // Write to a temp file and atomically replace the target so a crash
-        // mid-write can never truncate an existing manifest or record.
-        var tempPath = path + ".tmp";
-        File.WriteAllBytes(tempPath, data);
-        AppPaths.RestrictFile(tempPath);
-        if (File.Exists(path))
-        {
-            File.Replace(tempPath, path, null);
-        }
-        else
-        {
-            File.Move(tempPath, path);
-        }
+        // Unique temp file flushed to disk, then an atomic rename. Without the
+        // flush a power loss could leave a zero-length manifest, which the vault
+        // would then refuse to open as corrupted.
+        DpapiKeyAccessor.AtomicWrite(path, data);
     }
 
     private string RecordFile(Guid id) => Path.Combine(_recordsDirectory, $"{id:N}.enc");

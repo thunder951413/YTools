@@ -49,7 +49,10 @@ struct YToolsCoreChecks {
             ("2 ^ 3 ^ 2", 512),
             ("-2 × 4 + 10 ÷ 2", -3),
             ("sqrt(16) + abs(-2)", 6),
-            ("round(pi)", 3)
+            ("round(pi)", 3),
+            ("2*-(3)", -6),
+            ("2^-1", 0.5),
+            ("round(2.5)", 3)
         ]
         for (expression, expected) in cases {
             let actual = try calculator.evaluate(expression)

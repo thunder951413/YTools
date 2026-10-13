@@ -80,6 +80,7 @@ Sources/                  # macOS Swift 6/AppKit/SwiftUI 实现（Windows 构建
 
 ## 文档
 
+- [更新日志](CHANGELOG.md)
 - [交付与验证状态](DELIVERY_STATUS.md)
 - [本轮修复和验收记录](docs/REPAIR_VALIDATION.md)
 - [亮暗主题组件预览](docs/ui-review/README.md)
