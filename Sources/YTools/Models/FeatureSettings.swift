@@ -11,6 +11,12 @@ struct ToolSettings: Codable, Equatable, Sendable {
     var timestampUnit: TimestampUnit = .automatic
     var worldClockZones: [String] = DateTimeTools.defaultWorldClockZones
     var emojiSkinTone = 0
+    /// Selecting an emoji pastes it into the previous app (Accessibility) instead of only copying.
+    var emojiPastesDirectly = true
+    /// 0x/0b/0o input also lists decimal, hexadecimal and binary values.
+    var numberBaseConversion = true
+    /// Calculator understands "300 的 20%" and "200+15%".
+    var percentExpressions = true
 
     init() {}
 
@@ -25,6 +31,9 @@ struct ToolSettings: Codable, Equatable, Sendable {
         worldClockZones = (try container.decodeIfPresent([String].self, forKey: .worldClockZones) ?? defaults.worldClockZones)
             .filter { TimeZone(identifier: $0) != nil }
         emojiSkinTone = min(max(try container.decodeIfPresent(Int.self, forKey: .emojiSkinTone) ?? 0, 0), 5)
+        emojiPastesDirectly = try container.decodeIfPresent(Bool.self, forKey: .emojiPastesDirectly) ?? defaults.emojiPastesDirectly
+        numberBaseConversion = try container.decodeIfPresent(Bool.self, forKey: .numberBaseConversion) ?? defaults.numberBaseConversion
+        percentExpressions = try container.decodeIfPresent(Bool.self, forKey: .percentExpressions) ?? defaults.percentExpressions
     }
 }
 

@@ -18,12 +18,29 @@ struct HotKeyRecorderView: NSViewRepresentable {
     }
 }
 
+/// Recorder for an optional shortcut; shows a placeholder until one is recorded.
+struct OptionalHotKeyRecorderView: NSViewRepresentable {
+    @Binding var hotKey: HotKeyDefinition?
+    var label = "录制快捷键"
+
+    func makeNSView(context: Context) -> RecorderView {
+        RecorderView(hotKey: hotKey, label: label) { hotKey = $0 }
+    }
+
+    func updateNSView(_ view: RecorderView, context: Context) {
+        view.hotKey = hotKey
+        view.setAccessibilityLabel(label)
+        view.onChange = { hotKey = $0 }
+        view.needsDisplay = true
+    }
+}
+
 final class RecorderView: NSView {
-    var hotKey: HotKeyDefinition { didSet { refreshAccessibilityValue() } }
+    var hotKey: HotKeyDefinition? { didSet { refreshAccessibilityValue() } }
     var onChange: (HotKeyDefinition) -> Void
     private(set) var isRecording = false
 
-    init(hotKey: HotKeyDefinition, label: String = "录制快捷键", onChange: @escaping (HotKeyDefinition) -> Void) {
+    init(hotKey: HotKeyDefinition?, label: String = "录制快捷键", onChange: @escaping (HotKeyDefinition) -> Void) {
         self.hotKey = hotKey
         self.onChange = onChange
         super.init(frame: NSRect(x: 0, y: 0, width: 170, height: 30))
@@ -106,7 +123,7 @@ final class RecorderView: NSView {
     }
 
     private func refreshAccessibilityValue() {
-        setAccessibilityValue(isRecording ? "正在录制，Esc 取消" : hotKey.displayString)
+        setAccessibilityValue(isRecording ? "正在录制，Esc 取消" : hotKey?.displayString ?? "未设置")
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -118,10 +135,11 @@ final class RecorderView: NSView {
         path.lineWidth = 1
         path.stroke()
 
-        let text = isRecording ? "请按新的组合键…" : hotKey.displayString
+        let text = isRecording ? "请按新的组合键…" : hotKey?.displayString ?? "录制快捷键"
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: isRecording ? NSColor.controlAccentColor : NSColor.labelColor
+            .foregroundColor: isRecording ? NSColor.controlAccentColor
+                : hotKey == nil ? NSColor.secondaryLabelColor : NSColor.labelColor
         ]
         let size = text.size(withAttributes: attributes)
         text.draw(

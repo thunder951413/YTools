@@ -12,7 +12,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         recentDocuments: RecentDocumentsManager
     ) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 700),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -20,11 +20,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.title = "YTools 设置"
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
-        window.contentMinSize = NSSize(width: 720, height: 500)
+        window.contentMinSize = NSSize(width: 760, height: 520)
         // Settings controls become difficult to scan when macOS Zoom stretches
         // rows across an entire display. Keep the window generously resizable,
         // but cap it at a desktop-friendly reading width and height.
-        window.maxSize = NSSize(width: 1_100, height: 900)
+        window.maxSize = NSSize(width: 1_240, height: 1_000)
         window.contentViewController = NSHostingController(
             rootView: SettingsRootView(
                 preferences: preferences,

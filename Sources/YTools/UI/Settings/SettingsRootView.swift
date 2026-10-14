@@ -26,15 +26,12 @@ struct SettingsRootView: View {
         HStack(spacing: 0) {
             settingsSidebar
             Divider()
-            VStack(spacing: 0) {
-                settingsHeader
-                    .frame(maxWidth: 860)
-                    .padding(.horizontal, 30).padding(.top, 24).padding(.bottom, 22)
-                ScrollViewReader { proxy in
+            ScrollViewReader { proxy in
                 ScrollView {
                     HStack(alignment: .top, spacing: 0) {
                         Spacer(minLength: 0)
                         VStack(alignment: .leading, spacing: 22) {
+                            settingsHeader
                             if navigation.searchText.isEmpty {
                                 selectedSection
                                     .id("section:" + navigation.selection.rawValue)
@@ -43,10 +40,10 @@ struct SettingsRootView: View {
                                 settingsSearchResults
                             }
                         }
-                        .frame(maxWidth: 860, alignment: .leading)
+                        .frame(maxWidth: 760, alignment: .leading)
                         Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 30).padding(.bottom, 30)
+                    .padding(.horizontal, 32).padding(.top, 26).padding(.bottom, 32)
                     .id("settings-content-top")
                 }
                 .onChange(of: navigation.selection) { _, _ in
@@ -60,13 +57,13 @@ struct SettingsRootView: View {
                     guard let target = navigation.targetID else { return }
                     try? await Task.sleep(for: .milliseconds(120))
                     guard !Task.isCancelled else { return }
-                    proxy.scrollTo(target, anchor: .center)
-                }
+                    withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(target, anchor: .center) }
                 }
             }
+            .frame(maxWidth: .infinity)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .frame(minWidth: 720, minHeight: 500)
+        .frame(minWidth: 760, minHeight: 520)
         .autocorrectionDisabled(true)
         .tint(preferences.accentColor.color)
         .onReceive(NotificationCenter.default.publisher(for: .focusYToolsSettingsSearch)) { _ in
@@ -74,86 +71,150 @@ struct SettingsRootView: View {
         }
     }
 
-    private var settingsSidebar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 10) {
-                Image(systemName: "command.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(Color.accentColor)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("YTools").font(.headline)
-                    Text("原生效率工具").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 18)
+    // MARK: Sidebar
 
-            ForEach(SettingsSection.allCases) { section in
-                Button {
-                    navigation.selection = section
-                    navigation.targetID = nil
-                    navigation.searchText = ""
-                } label: {
-                    Label(section.title, systemImage: section.icon)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .frame(height: 34)
-                        .background(
-                            navigation.selection == section
-                                ? Color.accentColor.opacity(0.16)
-                                : Color.clear
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
-                        .contentShape(Rectangle())
+    private var settingsSidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                TextField("搜索设置", text: $navigation.searchText)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .accessibilityLabel("搜索设置")
+                if !navigation.searchText.isEmpty {
+                    Button {
+                        navigation.searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清除搜索")
                 }
-                .buttonStyle(.plain)
             }
-            Spacer()
-            Text("\(appVersion) · \(preferences.clipboardCloudSyncEnabled ? "坚果云加密同步已启用" : "本机模式 · 同步已关闭")")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(SettingsSectionGroup.allCases) { group in
+                        Text(group.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 10)
+                            .padding(.top, group == .basics ? 4 : 12)
+                            .padding(.bottom, 3)
+                        ForEach(group.sections) { section in
+                            sidebarButton(section)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+            }
+
+            Divider()
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(preferences.clipboardCloudSyncEnabled ? Color.green : Color.secondary.opacity(0.6))
+                    .frame(width: 6, height: 6)
+                Text(preferences.clipboardCloudSyncEnabled ? "坚果云同步已启用" : "本机模式 · 同步已关闭")
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(appVersion == "开发版" ? appVersion : "YTools " + appVersion)
+                    .lineLimit(1)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .frame(height: 34)
         }
-        .padding(14)
-        .frame(width: 190)
+        .frame(width: 236)
         .background(.ultraThinMaterial)
     }
 
-    private var settingsHeader: some View {
-        HStack {
-            Text(navigation.searchText.isEmpty ? navigation.selection.title : "搜索设置")
-                .font(.system(size: 26, weight: .semibold))
-            Spacer()
-            TextField("搜索设置", text: $navigation.searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 210)
-                .focused($searchFocused)
+    private func sidebarButton(_ section: SettingsSection) -> some View {
+        let selected = navigation.searchText.isEmpty && navigation.selection == section
+        let dimmed = !navigation.searchText.isEmpty && !navigation.matches(section)
+            && !SettingsSearchCatalog.searchTargets(navigation.searchText).contains { $0.sectionID == section.rawValue }
+        return Button {
+            navigation.select(section)
+        } label: {
+            HStack(spacing: 9) {
+                SettingsTile(symbol: section.icon, color: section.tint)
+                Text(section.title)
+                    .foregroundStyle(selected ? Color.white : Color.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 30)
+            .background(selected ? Color.accentColor : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(Rectangle())
+            .opacity(dimmed ? 0.4 : 1)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(section.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    // MARK: Content
+
+    private var settingsHeader: some View {
+        HStack(spacing: 14) {
+            if navigation.searchText.isEmpty {
+                SettingsTile(symbol: navigation.selection.icon, color: navigation.selection.tint, size: 38)
+            } else {
+                SettingsTile(symbol: "magnifyingglass", color: .accentColor, size: 38)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(navigation.searchText.isEmpty ? navigation.selection.title : "搜索设置")
+                    .font(.system(size: 22, weight: .semibold))
+                Text(navigation.searchText.isEmpty
+                     ? navigation.selection.summary
+                     : "“\(navigation.searchText)” 的匹配结果")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.bottom, 2)
     }
 
     @ViewBuilder
     private var selectedSection: some View {
         switch navigation.selection {
         case .general:
-            GeneralSettingsView(preferences: preferences, recentDocuments: recentDocuments)
-        case .search:
-            SearchSettingsView(preferences: preferences)
-        case .customApplications:
-            CustomApplicationsSettingsView(preferences: preferences)
-        case .applicationAliases:
-            ApplicationAliasesSettingsView(preferences: preferences)
-        case .systemCommands:
-            SystemCommandsSettingsView(preferences: preferences)
+            GeneralSettingsView(preferences: preferences)
         case .appearance:
             AppearanceSettingsView(preferences: preferences)
         case .shortcuts:
-            ShortcutSettingsView(preferences: preferences)
+            ShortcutSettingsView(preferences: preferences, snippets: snippets)
+        case .search:
+            SearchSettingsView(preferences: preferences)
+        case .apps:
+            ApplicationsSettingsView(preferences: preferences)
+        case .files:
+            FilesSettingsView(preferences: preferences)
+        case .tools:
+            ToolsSettingsView(preferences: preferences)
+        case .system:
+            SystemCommandsSettingsView(preferences: preferences)
         case .clipboard:
             ClipboardSettingsView(preferences: preferences, clipboardManager: clipboardManager)
+        case .sync:
+            CloudSyncSettingsView(preferences: preferences, clipboardManager: clipboardManager)
         case .snippets:
             SnippetSettingsView(snippets: snippets)
+        case .permissions:
+            PermissionsSettingsView()
         case .privacy:
-            PrivacySettingsView(recentDocuments: recentDocuments) {
+            PrivacySettingsView(preferences: preferences, recentDocuments: recentDocuments) {
                 LocalDiagnosticReport.text(version: appVersion,
                     platform: .macOS, backend: .spotlight, historyCount: clipboardManager.items.count,
                     pinnedCount: clipboardManager.items.filter(\.pinned).count, snippetCount: snippets.items.count,
@@ -165,37 +226,66 @@ struct SettingsRootView: View {
     }
 
     private var settingsSearchResults: some View {
-        VStack(spacing: 10) {
-            let targets = SettingsSearchCatalog.searchTargets(navigation.searchText)
-            let sections = SettingsSection.allCases.filter { section in navigation.matches(section) && !targets.contains(where: { $0.sectionID == section.rawValue }) }
+        let targets = SettingsSearchCatalog.searchTargets(navigation.searchText)
+        let sections = SettingsSection.allCases.filter { section in
+            navigation.matches(section) && !targets.contains(where: { $0.sectionID == section.rawValue })
+        }
+        return VStack(alignment: .leading, spacing: 18) {
             if targets.isEmpty && sections.isEmpty {
                 ContentUnavailableView.search(text: navigation.searchText)
-            } else {
-                ForEach(targets) { target in
-                    Button { navigation.open(target) } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(target.title).font(.headline)
-                                Text(SettingsSection(rawValue: target.sectionID)?.title ?? "设置")
-                                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 260)
+            }
+            if !targets.isEmpty {
+                SettingsGroup(title: "设置项") {
+                    ForEach(Array(targets.enumerated()), id: \.element.id) { index, target in
+                        if index > 0 { SettingsDivider() }
+                        let section = SettingsSection(rawValue: target.sectionID)
+                        Button { navigation.open(target) } label: {
+                            HStack(spacing: 10) {
+                                SettingsTile(symbol: section?.icon ?? "gearshape.fill",
+                                             color: section?.tint ?? .gray)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(target.title)
+                                    Text(section?.title ?? "设置").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
                             }
-                            Spacer()
-                            Image(systemName: "arrow.right")
-                        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }.buttonStyle(.plain).accessibilityLabel("定位设置：" + target.title)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("定位设置：" + target.title)
+                    }
                 }
-                ForEach(sections) { section in
-                    Button("打开" + section.title) {
-                        navigation.selection = section
-                        navigation.searchText = ""
-                        navigation.targetID = "section:" + section.rawValue
-                        navigation.targetRevision += 1
+            }
+            if !sections.isEmpty {
+                SettingsGroup(title: "分类") {
+                    ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                        if index > 0 { SettingsDivider() }
+                        Button {
+                            navigation.selection = section
+                            navigation.searchText = ""
+                            navigation.targetID = "section:" + section.rawValue
+                            navigation.targetRevision += 1
+                        } label: {
+                            HStack(spacing: 10) {
+                                SettingsTile(symbol: section.icon, color: section.tint)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(section.title)
+                                    Text(section.summary).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("打开" + section.title)
                     }
                 }
             }
         }
     }
-
 }

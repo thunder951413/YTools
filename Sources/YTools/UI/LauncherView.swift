@@ -176,8 +176,20 @@ struct LauncherView: View {
 
                     if model.showsPreview, let url = model.displayedPreviewURL {
                         Divider()
-                        FilePreviewView(url: url)
+                        if preferences.fileActions.previewDocuments || !FilePreviewPolicy.isDocument(url) {
+                            FilePreviewView(url: url)
+                                .frame(width: 330)
+                        } else {
+                            VStack(spacing: 10) {
+                                Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                                    .resizable().scaledToFit().frame(width: 64, height: 64)
+                                Text(url.lastPathComponent).font(.callout).lineLimit(2).multilineTextAlignment(.center)
+                                Text("已在设置中关闭文档预览").font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(16)
                             .frame(width: 330)
+                            .frame(maxHeight: .infinity)
+                        }
                     }
                 }
         }

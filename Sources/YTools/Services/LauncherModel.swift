@@ -234,7 +234,8 @@ final class LauncherModel: ObservableObject {
             runningApplicationPaths: preferences.behavior.markRunningApplications
                 && preferences.isSearchContentEnabled(.applications)
                 ? Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
-                : []
+                : [],
+            disabledModuleIDs: disabledToolModuleIDs
         )
         searchTask = Task { [weak self, searchCoordinator] in
             let results = await searchCoordinator.search(request) { [weak self] results in
@@ -326,6 +327,13 @@ final class LauncherModel: ObservableObject {
         }
     }
 
+    private var disabledToolModuleIDs: Set<String> {
+        var identifiers = Set<String>()
+        if !preferences.tools.numberBaseConversion { identifiers.insert("number-base") }
+        if !preferences.tools.percentExpressions { identifiers.insert("percent") }
+        return identifiers
+    }
+
     private func makeRequestModules(for query: String) -> [RegisteredSearchModule] {
         let needsClipboard = SnippetSearchModule.accepts(query) || TextTransformModule.accepts(query)
         let clipboardText = needsClipboard
@@ -336,7 +344,7 @@ final class LauncherModel: ObservableObject {
             RegisteredSearchModule(TextTransformModule(clipboardText: clipboardText), contentType: .textTransforms),
             RegisteredSearchModule(DateTimeModule(settings: tools), contentType: .dateTime),
             RegisteredSearchModule(GeneratorModule(settings: tools), contentType: .generators),
-            RegisteredSearchModule(EmojiModule(skinTone: tools.emojiSkinTone), contentType: .emoji),
+            RegisteredSearchModule(EmojiModule(skinTone: tools.emojiSkinTone, pastesDirectly: tools.emojiPastesDirectly), contentType: .emoji),
             RegisteredSearchModule(
                 RunningApplicationsModule(applications: RunningApplicationsModule.command(for: query) == nil ? [] : runningApplications()),
                 contentType: .runningApplications,
@@ -344,7 +352,8 @@ final class LauncherModel: ObservableObject {
                 allowsPrivilegedActions: true
             ),
             RegisteredSearchModule(
-                snippets.searchModule(clipboardText: clipboardText),
+                snippets.searchModule(clipboardText: clipboardText,
+                    pastes: preferences.clipboardBehavior.pasteToFrontApplication),
                 contentType: .snippets
             ),
             RegisteredSearchModule(

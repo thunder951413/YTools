@@ -150,6 +150,7 @@ struct GeneratorModule: YToolsModule {
 struct EmojiModule: YToolsModule {
     let descriptor = ModuleDescriptor(id: "emoji", name: "Emoji 与符号")
     let skinTone: Int
+    var pastesDirectly = true
 
     func search(_ request: ModuleSearchRequest) async throws -> [LauncherResult] {
         guard let text = EmojiCatalog.searchText(from: request.query) else { return [] }
@@ -158,8 +159,9 @@ struct EmojiModule: YToolsModule {
             return LauncherResult(
                 id: "emoji:\(entry.glyph)", moduleID: descriptor.id,
                 title: entry.name,
-                subtitle: "\(glyph)  " + entry.keywords.prefix(4).joined(separator: " · ") + " · 回车复制",
-                icon: .glyph(glyph), score: 1_040 - index, action: .paste(glyph)
+                subtitle: "\(glyph)  " + entry.keywords.prefix(4).joined(separator: " · ")
+                    + (pastesDirectly ? " · 回车粘贴" : " · 回车复制"),
+                icon: .glyph(glyph), score: 1_040 - index, action: pastesDirectly ? .paste(glyph) : .copy(glyph)
             )
         }
     }

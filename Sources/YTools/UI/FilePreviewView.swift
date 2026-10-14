@@ -34,3 +34,15 @@ struct FilePreviewView: NSViewRepresentable {
         coordinator.displayedURL = nil
     }
 }
+
+/// PDF and Office documents can be slow to render; users may turn their
+/// Quick Look preview off in settings.
+enum FilePreviewPolicy {
+    static let documentExtensions: Set<String> = [
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key", "rtf", "odt", "ods", "odp"
+    ]
+
+    static func isDocument(_ url: URL) -> Bool {
+        documentExtensions.contains(url.pathExtension.lowercased())
+    }
+}

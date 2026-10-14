@@ -30,7 +30,7 @@ struct YToolsCoreChecks {
               HistoryPage.select(Array(0..<251), limit: 100, matching: { $0 == 250 }).items == [250] else {
             throw CheckFailure.message("Progressive search or clipboard pagination regressed")
         }
-        guard SettingsSearchCatalog.matches(sectionID: "clipboard", query: "WEBDAV 同步口令"),
+        guard SettingsSearchCatalog.matches(sectionID: "sync", query: "WEBDAV 同步口令"),
               !SettingsSearchCatalog.matches(sectionID: "appearance", query: "坚果云"),
               SettingsSearchCatalog.searchTargets("WEBDAV 同步口令").map(\.id) == ["CloudPassphrase"],
               FileTransferProgress(completedBytes: 32, totalBytes: 64, phase: .copying).percentage == 50 else {

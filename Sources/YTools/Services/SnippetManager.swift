@@ -69,8 +69,8 @@ final class SnippetManager: ObservableObject, SnippetSaving {
         if revision > 0 { _ = queueCurrentSnapshot(failureMessage: "无法写入加密文本片段；现有文件未被覆盖。") }
     }
 
-    func searchModule(clipboardText: String, now: Date = Date()) -> SnippetSearchModule {
-        SnippetSearchModule(items: items, clipboardText: clipboardText, now: now)
+    func searchModule(clipboardText: String, now: Date = Date(), pastes: Bool = false) -> SnippetSearchModule {
+        SnippetSearchModule(items: items, clipboardText: clipboardText, now: now, pastes: pastes)
     }
 
     /// The snippet's text with {date}, {time} and {clipboard} expanded, for global shortcuts.
@@ -224,6 +224,7 @@ struct SnippetSearchModule: YToolsModule {
     let items: [SnippetItem]
     let clipboardText: String
     let now: Date
+    var pastes = false
 
     static func accepts(_ query: String) -> Bool {
         searchTerm(query) != nil
@@ -250,7 +251,7 @@ struct SnippetSearchModule: YToolsModule {
                     .joined(separator: " · "),
                 icon: .system("text.quote"),
                 score: 820,
-                action: .paste(expanded)
+                action: pastes ? .paste(expanded) : .copy(expanded)
             )
         }
     }

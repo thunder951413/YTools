@@ -102,8 +102,8 @@ final class ActionDispatcher {
             copyText(text)
         case let .paste(text):
             copyText(text)
-            if settingsProvider().clipboard.pasteToFrontApplication {
-                PasteService.shared.pasteIntoPreviousApplication()
+            if !PasteService.shared.pasteIntoPreviousApplication() {
+                ToastPresenter.show("已复制；在“设置 › 权限”中开启辅助功能后可直接粘贴", systemImage: "doc.on.clipboard")
             }
         case let .open(url):
             guard url.isFileURL else {

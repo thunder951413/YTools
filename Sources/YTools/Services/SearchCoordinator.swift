@@ -35,6 +35,8 @@ struct BackgroundSearchRequest: Sendable {
     let requestModules: [RegisteredSearchModule]
     /// Bundle paths of running apps, used to mark application results.
     var runningApplicationPaths: Set<String> = []
+    /// Built-in modules switched off in settings (by descriptor id).
+    var disabledModuleIDs: Set<String> = []
 }
 
 /// Owns every non-Spotlight query provider. All results—including trusted
@@ -47,6 +49,7 @@ actor SearchCoordinator {
     init(personalModules: [any YToolsModule] = [TextStatisticsModule()]) {
         standardModules = [
             RegisteredSearchModule(CalculatorModule(), contentType: .calculations),
+            RegisteredSearchModule(PercentModule(), contentType: .calculations),
             RegisteredSearchModule(UnitConversionModule(), contentType: .calculations),
             RegisteredSearchModule(NumberBaseModule(), contentType: .calculations),
             RegisteredSearchModule(SpellingModule(), contentType: .dictionary),
@@ -94,6 +97,7 @@ actor SearchCoordinator {
             }
             for registration in standardModules + request.requestModules {
                 guard request.enabledContentTypes.contains(registration.contentType),
+                      !request.disabledModuleIDs.contains(registration.module.descriptor.id),
                       registration.policy.permits(registration.module.descriptor) else { continue }
                 group.addTask {
                     await Self.search(registration.module, query: request.query,
