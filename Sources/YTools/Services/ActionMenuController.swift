@@ -1,7 +1,7 @@
 import Foundation
 
 struct ActionMenuController {
-    private let registry = ActionRegistry()
+    private var registry = ActionRegistry()
     private(set) var actions: [LauncherAction] = []
     private(set) var subject: LauncherResult?
     private(set) var titleOverride: String?
@@ -13,7 +13,8 @@ struct ActionMenuController {
         actions.indices.contains(selectedIndex) ? actions[selectedIndex] : nil
     }
 
-    mutating func show(for result: LauncherResult) -> Bool {
+    mutating func show(for result: LauncherResult, favoriteFolders: [String] = []) -> Bool {
+        registry.favoriteFolders = favoriteFolders
         let available = registry.actions(for: result)
         guard !available.isEmpty else { return false }
         actions = available

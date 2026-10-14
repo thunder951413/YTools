@@ -47,12 +47,16 @@ public struct ModuleResultPolicy: Sendable {
             return !name.isEmpty && name.count <= 200
         case let .application(url), let .file(url):
             return descriptor.capabilities.contains(.localFileRead) && url.isFileURL
+        case let .color(hex):
+            return hex.count == 7 && hex.hasPrefix("#") && hex.dropFirst().allSatisfy(\.isHexDigit)
+        case let .glyph(text):
+            return !text.isEmpty && text.count <= 4 && text.unicodeScalars.count <= 16
         }
     }
 
     private func permits(_ action: ResultAction, descriptor: ModuleDescriptor) -> Bool {
         switch action {
-        case let .copy(text):
+        case let .copy(text), let .paste(text):
             return text.count <= 1_000_000
         case .none, .openSettings:
             return true
@@ -64,11 +68,17 @@ public struct ModuleResultPolicy: Sendable {
                 && (path.hasPrefix("/") || path.hasPrefix("~"))
         case let .editQuery(text):
             return text.count <= 1_000 && !text.contains(where: \.isNewline)
+        case let .showQRCode(text):
+            return !text.isEmpty && text.utf8.count <= 1_200
         case let .hideApplication(bundleID), let .quitApplication(bundleID):
             return allowsPrivilegedActions && !bundleID.isEmpty && bundleID.count <= 255
         case .showTrash, .emptyTrash, .startScreenSaver, .sleepDisplays,
-             .openFocusSettings, .openAppearanceSettings:
+             .openFocusSettings, .openAppearanceSettings,
+             .lockScreen, .ejectDisks, .toggleMute,
+             .sleepComputer, .restartComputer, .shutDownComputer:
             return allowsPrivilegedActions
+        case let .setVolume(percent):
+            return allowsPrivilegedActions && (0...100).contains(percent)
         }
     }
 }

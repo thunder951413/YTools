@@ -74,6 +74,9 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     private let preferences: AppPreferences
     private let cloudSync: ClipboardCloudSyncService
     private var timer: Timer?
+    private var sensitiveCleanupTimer: Timer?
+    /// Items queued with ⌥↩ for sequential paste, oldest first.
+    @Published private(set) var pasteQueue: [UUID] = []
     private var cloudPullTimer: Timer?
     private var cancellables: Set<AnyCancellable> = []
     private var lastChangeCount: Int
@@ -127,6 +130,8 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         if monitorsClipboard {
             timer = Timer.scheduledTimer(timeInterval: 0.5, target: self,
                 selector: #selector(pollPasteboard), userInfo: nil, repeats: true)
+            sensitiveCleanupTimer = Timer.scheduledTimer(timeInterval: 60, target: self,
+                selector: #selector(removeExpiredSensitiveItems), userInfo: nil, repeats: true)
         }
         preferences.$clipboardRetentionDays.dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async { self?.pruneAndPersist() }
@@ -154,6 +159,8 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         catchupDebouncer.cancel()
         timer?.invalidate()
         timer = nil
+        sensitiveCleanupTimer?.invalidate()
+        sensitiveCleanupTimer = nil
         cloudPullTimer?.invalidate()
         cloudPullTimer = nil
         filterDebouncer.cancel()
@@ -282,6 +289,52 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         items.removeAll { $0.id == item.id }
         selectedIndex = min(selectedIndex, max(filteredItems.count - 1, 0))
         persistCurrent(deletedIDs: [item.id])
+    }
+
+    /// Removes text that looks like a one-time code or token once it is older
+    /// than the configured number of minutes. Pinned items are kept.
+    @objc func removeExpiredSensitiveItems() {
+        let minutes = preferences.clipboardBehavior.sensitiveAutoDeleteMinutes
+        guard minutes > 0, storageReady, !isClearing, !isShuttingDown else { return }
+        let cutoff = Date().addingTimeInterval(-Double(minutes) * 60)
+        let expired = Set(items.filter { item in
+            !item.pinned && item.kind == .text && item.createdAt < cutoff
+                && SensitiveTextDetector.looksSensitive(item.payload.first ?? "")
+        }.map(\.id))
+        guard !expired.isEmpty else { return }
+        items.removeAll { expired.contains($0.id) }
+        pasteQueue.removeAll { expired.contains($0) }
+        selectedIndex = min(selectedIndex, max(filteredItems.count - 1, 0))
+        persistCurrent(deletedIDs: Array(expired))
+    }
+
+    /// ⌥↩: add the selected item to the sequential-paste queue.
+    func queueSelectedForSequentialPaste() {
+        ensureFilterIsCurrent()
+        let visible = filteredItems
+        guard preferences.clipboardBehavior.sequentialPaste, visible.indices.contains(selectedIndex) else { return }
+        let id = visible[selectedIndex].id
+        if !pasteQueue.contains(id) { pasteQueue.append(id) }
+        NSSound(named: "Tink")?.play()
+    }
+
+    func clearPasteQueue() { pasteQueue.removeAll() }
+
+    /// Global shortcut: copy the next queued item and paste it into the
+    /// frontmost app (copy only without the Accessibility permission).
+    func pasteNextInSequence() async {
+        PasteService.shared.rememberFrontmostApplication()
+        while let id = pasteQueue.first {
+            pasteQueue.removeFirst()
+            guard let item = items.first(where: { $0.id == id }) else { continue }
+            if await copy(item) {
+                if !PasteService.shared.pasteIntoPreviousApplication(delay: .milliseconds(10)) {
+                    NSSound(named: "Pop")?.play()
+                }
+            }
+            return
+        }
+        NSSound.beep()
     }
 
     func deleteSelected() {
@@ -427,7 +480,8 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
             let policy = ClipboardTextPolicy(
                 maximumCharacters: preferences.clipboardMaximumTextCharacters
             )
-            guard policy.shouldStore(text) else { return nil }
+            guard policy.shouldStore(text),
+                  !preferences.clipboardBehavior.ignoreRules.contains(where: { $0.matches(text) }) else { return nil }
             return .text(value: text, sourceApplication: source, createdAt: createdAt)
         }
         return nil

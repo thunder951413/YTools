@@ -298,6 +298,16 @@ struct ResultRow: View {
             Image(nsImage: WorkspaceIconCache.shared.icon(for: url))
                 .resizable()
                 .scaledToFit()
+        case let .color(hex):
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color(hexString: hex))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Color.primary.opacity(0.18)))
+                .padding(3)
+        case let .glyph(text):
+            Text(text)
+                .font(.system(size: 24))
+                .minimumScaleFactor(0.5)
+                .lineLimit(1)
         }
     }
 }

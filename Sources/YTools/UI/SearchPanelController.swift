@@ -42,6 +42,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             snippets: snippets,
             recentDocuments: recentDocuments,
             onShowLargeType: { [weak largeTypeController] text in largeTypeController?.show(text: text) },
+            onShowQRCode: { [weak largeTypeController] text in largeTypeController?.show(qrCode: text) },
             onOpenSettings: onOpenSettings
         )
         let panel = LauncherPanel(
@@ -76,7 +77,8 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
                 launcher: launcher,
                 clipboard: clipboard,
                 preferences: preferences,
-                onHide: { [weak self] in self?.hide() }
+                onHide: { [weak self] in self?.hide() },
+                onClipboardActivate: { [weak self] in self?.finishClipboardActivation() }
             )
             .ignoresSafeArea()
         )
@@ -165,6 +167,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         guard let window else { return }
         adjustPanelSize(animated: false)
         position(window)
+        if window.isVisible == false { PasteService.shared.rememberFrontmostApplication() }
         NSApp.activate(ignoringOtherApps: true)
         if KeyboardInputSourceManager.select(preferences.forcedKeyboardInputSourceID) {
             preferences.keyboardInputSourceError = nil
@@ -180,6 +183,15 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         launcher.endPreviewSession()
         launcher.persistLastQuery()
         window?.orderOut(nil)
+    }
+
+    /// After a clipboard item was copied: hide, then paste into the previous
+    /// app when "paste directly" is on and Accessibility is granted.
+    func finishClipboardActivation() {
+        hide()
+        if preferences.clipboardBehavior.pasteToFrontApplication {
+            PasteService.shared.pasteIntoPreviousApplication()
+        }
     }
 
     func clearUsageLearning() {
@@ -388,7 +400,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             case .clipboard:
                 Task { [weak self] in
                     guard let self, await self.clipboard.copySelected() else { return }
-                    self.hide()
+                    self.finishClipboardActivation()
                 }
                 return true
             }
@@ -433,6 +445,8 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             }
         case .toggleClipboardPreview:
             clipboard.togglePreview()
+        case .queueClipboardItem:
+            clipboard.queueSelectedForSequentialPaste()
         case .togglePreview:
             launcher.togglePreview()
         case .showLargeType:

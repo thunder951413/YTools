@@ -73,6 +73,13 @@ final class SnippetManager: ObservableObject, SnippetSaving {
         SnippetSearchModule(items: items, clipboardText: clipboardText, now: now)
     }
 
+    /// The snippet's text with {date}, {time} and {clipboard} expanded, for global shortcuts.
+    func expandedContent(for id: UUID) -> String? {
+        guard let item = items.first(where: { $0.id == id }) else { return nil }
+        let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
+        return searchModule(clipboardText: clipboard).expandedText(item.content)
+    }
+
     var saveError: String? { storageError }
 
     @discardableResult
@@ -243,7 +250,7 @@ struct SnippetSearchModule: YToolsModule {
                     .joined(separator: " · "),
                 icon: .system("text.quote"),
                 score: 820,
-                action: .copy(expanded)
+                action: .paste(expanded)
             )
         }
     }
@@ -260,6 +267,8 @@ struct SnippetSearchModule: YToolsModule {
     }
 
     private func searchTerm(_ query: String) -> String? { Self.searchTerm(query) }
+
+    func expandedText(_ content: String) -> String { expand(content) }
 
     private func expand(_ content: String) -> String {
         let formatter = DateFormatter()

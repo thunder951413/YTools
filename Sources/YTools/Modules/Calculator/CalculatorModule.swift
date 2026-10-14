@@ -14,8 +14,17 @@ struct CalculatorModule: YToolsModule {
             : rawExpression
         guard !expression.isEmpty,
               expression.rangeOfCharacter(from: CharacterSet(charactersIn: "+-*/%^×÷")) != nil
-                || expression.rangeOfCharacter(from: .letters) != nil,
-              let value = try? calculator.evaluate(expression) else {
+                || expression.rangeOfCharacter(from: .letters) != nil else {
+            return []
+        }
+        let value: Double
+        var explanation = expression
+        if let evaluated = try? calculator.evaluate(expression) {
+            value = evaluated
+        } else if let percent = PercentCalculator.evaluate(expression, calculator: calculator) {
+            value = percent.value
+            explanation = percent.explanation
+        } else {
             return []
         }
 
@@ -24,7 +33,7 @@ struct CalculatorModule: YToolsModule {
             id: "calculator:\(expression)",
             moduleID: descriptor.id,
             title: result,
-            subtitle: shouldContinue ? "\(expression)  ·  回车回填并继续计算" : "\(expression)  ·  回车复制结果",
+            subtitle: shouldContinue ? "\(explanation)  ·  回车回填并继续计算" : "\(explanation)  ·  回车复制结果",
             icon: .system("function"),
             score: 1_000,
             action: shouldContinue ? .editQuery(result) : .copy(result)

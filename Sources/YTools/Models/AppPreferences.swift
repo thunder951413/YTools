@@ -3,7 +3,7 @@ import Combine
 import Foundation
 import YToolsCore
 
-struct HotKeyDefinition: Codable, Equatable {
+struct HotKeyDefinition: Codable, Equatable, Sendable {
     var keyCode: UInt32
     var modifiers: UInt32
 
@@ -171,6 +171,11 @@ enum SearchContentType: String, Codable, CaseIterable, Identifiable, Sendable {
     case snippets
     case recentDocuments
     case textTools
+    case textTransforms
+    case dateTime
+    case generators
+    case emoji
+    case runningApplications
 
     var id: String { rawValue }
 
@@ -183,7 +188,12 @@ enum SearchContentType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .systemTools: "系统工具与设置"
         case .snippets: "文本片段"
         case .recentDocuments: "最近文档"
-        case .textTools: "文本统计工具"
+        case .textTools: "文本统计"
+        case .textTransforms: "文本转换"
+        case .dateTime: "时间与日期"
+        case .generators: "生成工具"
+        case .emoji: "Emoji 与符号"
+        case .runningApplications: "运行中的应用"
         }
     }
 
@@ -196,7 +206,12 @@ enum SearchContentType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .systemTools: "可配置系统命令、废纸篓、屏保、显示器休眠和系统设置入口"
         case .snippets: "搜索保存在本机的文本片段"
         case .recentDocuments: "搜索由 YTools 记录的最近打开项目"
-        case .textTools: "统计剪贴板文字的字数、行数等信息"
+        case .textTools: "统计文字的字数、行数等信息"
+        case .textTransforms: "tx：大小写、JSON、编码、哈希、按行排序去重"
+        case .dateTime: "时间戳、日期加减、世界时间"
+        case .generators: "密码、UUID、二维码与颜色换算"
+        case .emoji: "emoji / 表情 / 符号 关键词，支持拼音"
+        case .runningApplications: "切换、隐藏或退出正在运行的应用"
         }
     }
 
@@ -210,6 +225,11 @@ enum SearchContentType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .snippets: "text.quote"
         case .recentDocuments: "clock.arrow.circlepath"
         case .textTools: "textformat.123"
+        case .textTransforms: "textformat"
+        case .dateTime: "clock"
+        case .generators: "wand.and.stars"
+        case .emoji: "face.smiling"
+        case .runningApplications: "macwindow.on.rectangle"
         }
     }
 }
@@ -256,6 +276,20 @@ final class AppPreferences: ObservableObject {
         didSet { defaults.set(resultExpansionDuration, forKey: Keys.resultExpansionDuration) }
     }
     @Published var lastLauncherQuery: String { didSet { defaults.set(lastLauncherQuery, forKey: Keys.lastLauncherQuery) } }
+    @Published var tools: ToolSettings { didSet { saveSettings(tools, forKey: Keys.tools) } }
+    @Published var behavior: BehaviorSettings { didSet { saveSettings(behavior, forKey: Keys.behavior) } }
+    @Published var clipboardBehavior: ClipboardBehaviorSettings {
+        didSet { saveSettings(clipboardBehavior, forKey: Keys.clipboardBehavior) }
+    }
+    @Published var fileActions: FileActionSettings { didSet { saveSettings(fileActions, forKey: Keys.fileActions) } }
+    @Published var toolHotKeys: ToolHotKeySettings {
+        didSet { saveSettings(toolHotKeys, forKey: Keys.toolHotKeys); notifyHotKeyChange() }
+    }
+    @Published var customHotKeys: [CustomHotKey] {
+        didSet { saveSettings(customHotKeys, forKey: Keys.customHotKeys); notifyHotKeyChange() }
+    }
+    /// Shortcuts that could not be registered (taken by macOS or another app).
+    @Published var unavailableHotKeyIDs: Set<String> = []
     @Published var enabledSearchContentTypes: Set<SearchContentType> {
         didSet {
             defaults.set(
@@ -355,19 +389,34 @@ final class AppPreferences: ObservableObject {
         if defaults.object(forKey: Keys.enabledSearchContentTypes) == nil {
             self.enabledSearchContentTypes = Set(SearchContentType.allCases)
         } else {
-            self.enabledSearchContentTypes = Set(
-                (defaults.stringArray(forKey: Keys.enabledSearchContentTypes) ?? [])
-                    .compactMap(SearchContentType.init(rawValue:))
-            )
+            // Content types added by a newer version start enabled; types the
+            // user already saw keep their stored on/off state.
+            let stored = Set((defaults.stringArray(forKey: Keys.enabledSearchContentTypes) ?? [])
+                .compactMap(SearchContentType.init(rawValue:)))
+            let known = Set((defaults.stringArray(forKey: Keys.knownSearchContentTypes)
+                ?? ["applications", "files", "calculations", "dictionary", "systemTools", "snippets", "recentDocuments", "textTools"])
+                .compactMap(SearchContentType.init(rawValue:)))
+            self.enabledSearchContentTypes = stored.union(Set(SearchContentType.allCases).subtracting(known))
         }
+        defaults.set(SearchContentType.allCases.map(\.rawValue), forKey: Keys.knownSearchContentTypes)
+        self.tools = Self.loadSettings(ToolSettings.self, from: defaults, forKey: Keys.tools) ?? ToolSettings()
+        self.behavior = Self.loadSettings(BehaviorSettings.self, from: defaults, forKey: Keys.behavior) ?? BehaviorSettings()
+        self.clipboardBehavior = Self.loadSettings(ClipboardBehaviorSettings.self, from: defaults, forKey: Keys.clipboardBehavior)
+            ?? ClipboardBehaviorSettings()
+        self.fileActions = Self.loadSettings(FileActionSettings.self, from: defaults, forKey: Keys.fileActions) ?? FileActionSettings()
+        self.toolHotKeys = Self.loadSettings(ToolHotKeySettings.self, from: defaults, forKey: Keys.toolHotKeys) ?? ToolHotKeySettings()
+        self.customHotKeys = Self.loadSettings([CustomHotKey].self, from: defaults, forKey: Keys.customHotKeys) ?? []
         if defaults.object(forKey: Keys.enabledSystemCommands) == nil {
             self.enabledSystemCommands = Set(SystemCommandID.allCases)
         } else {
-            self.enabledSystemCommands = Set(
-                (defaults.stringArray(forKey: Keys.enabledSystemCommands) ?? [])
-                    .compactMap(SystemCommandID.init(rawValue:))
-            )
+            let stored = Set((defaults.stringArray(forKey: Keys.enabledSystemCommands) ?? [])
+                .compactMap(SystemCommandID.init(rawValue:)))
+            let known = Set((defaults.stringArray(forKey: Keys.knownSystemCommands)
+                ?? ["emptyTrash", "showTrash", "screenSaver", "sleepDisplays", "focusSettings", "appearanceSettings"])
+                .compactMap(SystemCommandID.init(rawValue:)))
+            self.enabledSystemCommands = stored.union(Set(SystemCommandID.allCases).subtracting(known))
         }
+        defaults.set(SystemCommandID.allCases.map(\.rawValue), forKey: Keys.knownSystemCommands)
         let storedSystemKeywords = defaults.dictionary(forKey: Keys.systemCommandKeywords) as? [String: String] ?? [:]
         self.systemCommandKeywords = Dictionary(uniqueKeysWithValues: SystemCommandID.allCases.map { command in
             (command, storedSystemKeywords[command.rawValue] ?? command.defaultKeyword)
@@ -440,6 +489,11 @@ final class AppPreferences: ObservableObject {
         systemCommandKeywords = Dictionary(uniqueKeysWithValues: SystemCommandID.allCases.map {
             ($0, $0.defaultKeyword)
         })
+        tools = ToolSettings()
+        behavior = BehaviorSettings()
+        clipboardBehavior = ClipboardBehaviorSettings()
+        fileActions = FileActionSettings()
+        toolHotKeys = ToolHotKeySettings()
         includeFilesInDefaultResults = true
         includeAutomaticDictionary = true
         maximumSearchResults = 8
@@ -750,5 +804,23 @@ final class AppPreferences: ObservableObject {
         static let clipboardCloudSyncEnabled = "preferences.clipboard.cloudSyncEnabled"
         static let clipboardCloudSyncFolder = "preferences.clipboard.cloudSyncFolder"
         static let clipboardCloudSyncIntervalMinutes = "preferences.clipboard.cloudSyncIntervalMinutes"
+        static let knownSearchContentTypes = "preferences.search.knownContentTypes"
+        static let tools = "preferences.tools.settings"
+        static let behavior = "preferences.behavior.settings"
+        static let clipboardBehavior = "preferences.clipboard.behavior"
+        static let fileActions = "preferences.files.actions"
+        static let toolHotKeys = "preferences.hotkey.tools"
+        static let customHotKeys = "preferences.hotkey.custom"
+        static let knownSystemCommands = "preferences.systemCommands.known"
+    }
+
+    private func saveSettings<Value: Encodable>(_ value: Value, forKey key: String) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    private static func loadSettings<Value: Decodable>(_ type: Value.Type, from defaults: UserDefaults, forKey key: String) -> Value? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
     }
 }

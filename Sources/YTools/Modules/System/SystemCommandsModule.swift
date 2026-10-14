@@ -10,6 +10,7 @@ struct SystemCommandsModule: YToolsModule {
     func search(_ request: ModuleSearchRequest) async throws -> [LauncherResult] {
         let term = request.query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !term.isEmpty else { return [] }
+        if let volume = volumeResult(for: term) { return [volume] }
         return commands.compactMap { command in
             guard configuration.enabled.contains(command.id) else { return nil }
             let keyword = configuration.keywords[command.id, default: command.id.defaultKeyword]
@@ -66,8 +67,37 @@ struct SystemCommandsModule: YToolsModule {
                 icon: "circle.lefthalf.filled",
                 score: 1_080,
                 action: .openAppearanceSettings
-            )
+            ),
+            command(.lockScreen, subtitle: "立即锁定 Mac", icon: "lock", score: 1_200, action: .lockScreen),
+            command(.ejectDisks, subtitle: "安全推出可移除磁盘和磁盘映像", icon: "eject", score: 1_160, action: .ejectDisks),
+            command(.toggleMute, subtitle: "切换默认输出设备的静音状态", icon: "speaker.slash", score: 1_160, action: .toggleMute),
+            command(.setVolume, subtitle: "继续输入数字，例如 vol 40", icon: "speaker.wave.2", score: 1_100,
+                    action: .editQuery(configuration.keywords[.setVolume, default: SystemCommandID.setVolume.defaultKeyword] + " ")),
+            command(.sleepComputer, subtitle: "让 Mac 进入睡眠", icon: "powersleep", score: 1_140, action: .sleepComputer),
+            command(.restartComputer, subtitle: "请求所有应用正常退出后重启", icon: "restart", score: 1_100, action: .restartComputer),
+            command(.shutDownComputer, subtitle: "请求所有应用正常退出后关机", icon: "power", score: 1_100, action: .shutDownComputer)
         ]
+    }
+
+    /// `vol 40` / `音量 40` sets the output volume directly.
+    private func volumeResult(for term: String) -> LauncherResult? {
+        guard configuration.enabled.contains(.setVolume) else { return nil }
+        let keyword = configuration.keywords[.setVolume, default: SystemCommandID.setVolume.defaultKeyword]
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        for prefix in [keyword, "音量"] where !prefix.isEmpty && term.hasPrefix(prefix + " ") {
+            let value = term.dropFirst(prefix.count + 1).trimmingCharacters(in: CharacterSet(charactersIn: " %"))
+            guard let percent = Int(value), (0...100).contains(percent) else { return nil }
+            return LauncherResult(
+                id: "system:setVolume:\(percent)",
+                moduleID: descriptor.id,
+                title: "音量设为 \(percent)%",
+                subtitle: percent == 0 ? "等同于静音" : "调整默认输出设备音量",
+                icon: .system(percent == 0 ? "speaker.slash" : "speaker.wave.2"),
+                score: 1_320,
+                action: .setVolume(percent)
+            )
+        }
+        return nil
     }
 
     private func command(

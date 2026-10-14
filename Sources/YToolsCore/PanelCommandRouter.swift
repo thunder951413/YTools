@@ -40,6 +40,8 @@ public enum PanelCommand: Equatable, Sendable {
     case deleteClipboardItem
     case saveClipboardAsSnippet
     case toggleClipboardPreview
+    /// ⌥↩ in the clipboard: append the selection to the sequential-paste queue.
+    case queueClipboardItem
     case togglePreview
     case showLargeType
     case revealSelected
@@ -75,6 +77,8 @@ public struct PanelCommandRouter: Sendable {
         switch (event.keyCode, mode) {
         case (KeyCode.returnKey, _) where event.modifiers.isEmpty:
             return .activateSelected
+        case (KeyCode.returnKey, .clipboard) where event.modifiers == .option:
+            return .queueClipboardItem
         case (KeyCode.upArrow, .launcher) where event.modifiers.contains(.option):
             return .addSelectedToBuffer(moveToNext: false)
         case (KeyCode.downArrow, .launcher) where event.modifiers.contains(.option):

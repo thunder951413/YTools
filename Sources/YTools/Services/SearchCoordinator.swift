@@ -33,6 +33,8 @@ struct BackgroundSearchRequest: Sendable {
     let customApplicationPaths: [String]
     let maximumResults: Int
     let requestModules: [RegisteredSearchModule]
+    /// Bundle paths of running apps, used to mark application results.
+    var runningApplicationPaths: Set<String> = []
 }
 
 /// Owns every non-Spotlight query provider. All results—including trusted
@@ -46,6 +48,7 @@ actor SearchCoordinator {
         standardModules = [
             RegisteredSearchModule(CalculatorModule(), contentType: .calculations),
             RegisteredSearchModule(UnitConversionModule(), contentType: .calculations),
+            RegisteredSearchModule(NumberBaseModule(), contentType: .calculations),
             RegisteredSearchModule(SpellingModule(), contentType: .dictionary),
             RegisteredSearchModule(SettingsModule(), contentType: .systemTools)
         ] + personalModules.map { RegisteredSearchModule($0, contentType: .textTools) }
@@ -85,7 +88,8 @@ actor SearchCoordinator {
             if request.enabledContentTypes.contains(.applications) {
                 group.addTask {
                     await self.searchApplications(query: request.query, aliases: request.applicationAliases,
-                        customApplicationPaths: request.customApplicationPaths)
+                        customApplicationPaths: request.customApplicationPaths,
+                        runningApplicationPaths: request.runningApplicationPaths)
                 }
             }
             for registration in standardModules + request.requestModules {
@@ -109,7 +113,8 @@ actor SearchCoordinator {
     private func searchApplications(
         query: String,
         aliases: [String: String],
-        customApplicationPaths: [String]
+        customApplicationPaths: [String],
+        runningApplicationPaths: Set<String> = []
     ) async -> [LauncherResult] {
         let descriptor = ModuleDescriptor(
             id: "applications",
@@ -121,8 +126,14 @@ actor SearchCoordinator {
             aliases: aliases,
             customApplicationPaths: customApplicationPaths
         )
+        let marked = runningApplicationPaths.isEmpty ? results : results.map { result in
+            guard let url = result.resourceURL, runningApplicationPaths.contains(url.standardizedFileURL.path) else { return result }
+            return LauncherResult(id: result.id, moduleID: result.moduleID, title: result.title,
+                                  subtitle: result.subtitle.isEmpty ? "运行中" : result.subtitle + " · 运行中",
+                                  icon: result.icon, score: result.score, action: result.action)
+        }
         return sanitize(
-            results,
+            marked,
             descriptor: descriptor,
             policy: ModuleResultPolicy(allowedCapabilities: [.localFileRead])
         )

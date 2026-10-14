@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastWorkingLauncherHotKey: HotKeyDefinition?
     private var lastWorkingClipboardHotKey: HotKeyDefinition?
     private var themeCancellable: AnyCancellable?
+    private var sequentialPasteCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -50,6 +51,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.clipboard = clipboard
         self.hotKeyManager = hotKeyManager
         preferences.hotKeysDidChange = { [weak self] in self?.configureHotKeys() }
+        sequentialPasteCancellable = preferences.$clipboardBehavior
+            .map(\.sequentialPaste)
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.configureHotKeys() }
         preferences.menuBarVisibilityDidChange = { [weak self] in self?.updateStatusItemVisibility() }
         preferences.clearUsageLearningHandler = { [weak panelController] in
             panelController?.clearUsageLearning()
@@ -99,8 +105,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lastWorkingLauncherHotKey = preferences.launcherHotKey
             lastWorkingClipboardHotKey = preferences.clipboardHotKey
         }
+        registerAuxiliaryHotKeys()
         launcherMenuItem?.title = "显示启动器（\(preferences.launcherHotKey.displayString)）"
         clipboardMenuItem?.title = "剪贴板历史（\(preferences.clipboardHotKey.displayString)）"
+    }
+
+    /// Tool shortcuts and user-defined shortcuts. A shortcut that is already
+    /// taken is reported in settings instead of blocking the others.
+    private func registerAuxiliaryHotKeys() {
+        guard let hotKeyManager else { return }
+        var unavailable = Set<String>()
+        if let shortcut = preferences.toolHotKeys.recognizeText,
+           !hotKeyManager.register(id: 10, keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, action: {
+               TextRecognitionService.shared.start()
+           }) {
+            unavailable.insert("recognizeText")
+        }
+        if preferences.clipboardEnabled, preferences.clipboardBehavior.sequentialPaste,
+           let shortcut = preferences.toolHotKeys.sequentialPaste,
+           !hotKeyManager.register(id: 11, keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, action: { [weak self] in
+               Task { await self?.clipboard?.pasteNextInSequence() }
+           }) {
+            unavailable.insert("sequentialPaste")
+        }
+        for (index, custom) in preferences.customHotKeys.prefix(64).enumerated() {
+            let registered = hotKeyManager.register(
+                id: UInt32(100 + index), keyCode: custom.hotKey.keyCode, modifiers: custom.hotKey.modifiers
+            ) { [weak self] in
+                self?.perform(custom)
+            }
+            if !registered { unavailable.insert(custom.id.uuidString) }
+        }
+        if preferences.unavailableHotKeyIDs != unavailable { preferences.unavailableHotKeyIDs = unavailable }
+    }
+
+    private func perform(_ shortcut: CustomHotKey) {
+        switch shortcut.target {
+        case let .application(path):
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: path) else {
+                ToastPresenter.show("找不到应用：\(url.lastPathComponent)", systemImage: "exclamationmark.triangle.fill")
+                return
+            }
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        case let .folder(path):
+            guard FileManager.default.fileExists(atPath: path) else {
+                ToastPresenter.show("找不到文件夹：\(path)", systemImage: "exclamationmark.triangle.fill")
+                return
+            }
+            NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true))
+        case let .snippet(id):
+            guard let text = snippets?.expandedContent(for: id) else {
+                ToastPresenter.show("文本片段已被删除", systemImage: "exclamationmark.triangle.fill")
+                return
+            }
+            PasteService.shared.rememberFrontmostApplication()
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            if !PasteService.shared.pasteIntoPreviousApplication(delay: .milliseconds(10)) {
+                ToastPresenter.show("已复制“\(shortcut.title)”；开启辅助功能权限后可直接粘贴", systemImage: "doc.on.clipboard")
+            }
+        }
     }
 
     private func registerHotKeys(

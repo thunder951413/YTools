@@ -1,6 +1,9 @@
 import Foundation
 
 struct ActionRegistry {
+    /// Shortcut destinations for "移到…" (from settings › 文件 › 常用文件夹).
+    var favoriteFolders: [String] = []
+
     func actions(for result: LauncherResult) -> [LauncherAction] {
         var actions: [LauncherAction] = []
 
@@ -85,6 +88,20 @@ struct ActionRegistry {
                     "folder.badge.plus",
                     .moveFile(url)
                 ))
+                actions.append(contentsOf: favoriteFolderActions(for: url))
+                actions.append(action("rename", "重命名…", "在原位置修改名称；不会覆盖同名项目", "pencil", .rename(url)))
+                actions.append(action("compress", "压缩为 ZIP", "在同一目录生成 .zip，不跟随符号链接", "archivebox", .compress(url)))
+                if isDirectory {
+                    actions.append(action("new-file", "新建文件…", "在该目录中创建空文件", "doc.badge.plus", .newFile(in: url)))
+                    actions.append(action("new-folder", "新建文件夹…", "在该目录中创建文件夹", "folder.badge.plus", .newFolder(in: url)))
+                }
+                actions.append(action(
+                    "open-terminal",
+                    "在终端中打开",
+                    isDirectory ? "在该目录打开终端" : "在所在目录打开终端",
+                    "terminal",
+                    .openInTerminal(isDirectory ? url : url.deletingLastPathComponent())
+                ))
                 actions.append(action(
                     "trash-file",
                     "移入废纸篓…",
@@ -95,7 +112,7 @@ struct ActionRegistry {
             }
         } else {
             switch result.action {
-            case let .copy(text):
+            case let .copy(text), let .paste(text):
                 actions.append(action("copy", "复制", "复制结果到剪贴板", "doc.on.doc", .copyText(text)))
                 actions.append(action("large-type", "大字显示", "全屏清晰显示文本", "textformat.size.larger", .largeType(text)))
                 actions.append(action("save-snippet", "保存为文本片段", "加密保存到默认分类", "text.badge.plus", .saveSnippet(text)))
@@ -145,6 +162,20 @@ struct ActionRegistry {
         _ kind: LauncherActionKind
     ) -> LauncherAction {
         LauncherAction(id: id, title: title, subtitle: subtitle, systemIcon: icon, kind: kind)
+    }
+
+    private func favoriteFolderActions(for url: URL) -> [LauncherAction] {
+        let parent = url.deletingLastPathComponent().standardizedFileURL.path
+        return favoriteFolders.prefix(5).compactMap { path -> LauncherAction? in
+            var isDirectory: ObjCBool = false
+            let destination = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+            guard destination.path != parent, destination.path != url.standardizedFileURL.path,
+                  !destination.path.hasPrefix(url.standardizedFileURL.path + "/"),
+                  FileManager.default.fileExists(atPath: destination.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else { return nil }
+            return action("move-to:" + destination.path, "移到“\(destination.lastPathComponent)”",
+                          destination.path, "arrow.right.doc.on.clipboard", .transfer(url, destination: destination, move: true))
+        }
     }
 
     private func navigationQuery(for url: URL) -> String {

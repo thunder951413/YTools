@@ -77,3 +77,21 @@ extension LauncherAppearanceStyle {
         }
     }
 }
+
+extension Color {
+    /// `#RRGGBB` → sRGB colour; invalid input falls back to gray.
+    init(hexString: String) {
+        let digits = hexString.hasPrefix("#") ? String(hexString.dropFirst()) : hexString
+        guard digits.count == 6, let value = Int(digits, radix: 16) else {
+            self = .gray
+            return
+        }
+        self.init(
+            .sRGB,
+            red: Double(value >> 16 & 0xFF) / 255,
+            green: Double(value >> 8 & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255,
+            opacity: 1
+        )
+    }
+}

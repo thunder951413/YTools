@@ -68,18 +68,29 @@ final class ActionDispatcher {
     }
     private let onOpenSettings: () -> Void
     private let onShowLargeType: (String) -> Void
+    private let onShowQRCode: (String) -> Void
+    struct Settings {
+        var behavior = BehaviorSettings()
+        var clipboard = ClipboardBehaviorSettings()
+        var fileActions = FileActionSettings()
+    }
+
+    /// Current behaviour preferences; LauncherModel keeps this pointed at AppPreferences.
+    var settingsProvider: () -> Settings = { Settings() }
 
     init(
         snippets: any SnippetSaving,
         recentDocuments: any RecentDocumentsRecording,
         onOpenSettings: @escaping () -> Void,
         onShowLargeType: @escaping (String) -> Void,
+        onShowQRCode: @escaping (String) -> Void = { _ in },
         chooseFileDestination: ((FileOperationService.Operation) -> URL?)? = nil
     ) {
         self.snippets = snippets
         self.recentDocuments = recentDocuments
         self.onOpenSettings = onOpenSettings
         self.onShowLargeType = onShowLargeType
+        self.onShowQRCode = onShowQRCode
         self.chooseFileDestination = chooseFileDestination ?? Self.pickFileDestination
     }
 
@@ -89,6 +100,11 @@ final class ActionDispatcher {
         switch action {
         case let .copy(text):
             copyText(text)
+        case let .paste(text):
+            copyText(text)
+            if settingsProvider().clipboard.pasteToFrontApplication {
+                PasteService.shared.pasteIntoPreviousApplication()
+            }
         case let .open(url):
             guard url.isFileURL else {
                 showAlert(title: "已阻止外部链接", message: "YTools 只允许打开本机文件和应用。")
@@ -102,10 +118,20 @@ final class ActionDispatcher {
             return .navigate(path)
         case let .editQuery(text):
             return .navigate(text)
+        case let .showQRCode(text):
+            onShowQRCode(text)
         case let .hideApplication(bundleID):
             NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).forEach { $0.hide() }
         case let .quitApplication(bundleID):
-            NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).forEach { $0.terminate() }
+            let applications = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            guard !applications.isEmpty else { return .keepPanel }
+            if settingsProvider().behavior.confirmQuitApplication {
+                let name = applications.first?.localizedName ?? bundleID
+                guard confirm(title: "退出“\(name)”？", message: "应用会收到正常退出请求，未保存的内容由应用自行提示。", button: "退出") else {
+                    return .keepPanel
+                }
+            }
+            applications.forEach { $0.terminate() }
         case .showTrash:
             let trash = FileManager.default.urls(for: .trashDirectory, in: .userDomainMask).first
                 ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
@@ -127,10 +153,74 @@ final class ActionDispatcher {
             return openSystemSettingsPane("com.apple.Appearance-Settings.extension")
         case .openSettings:
             onOpenSettings()
+        case .lockScreen:
+            if !ScreenLock.lock() {
+                do { try runFixedSystemCommand() } catch {
+                    showAlert(title: "无法锁定屏幕", message: "锁定屏幕需要辅助功能权限，可在 YTools 设置 › 权限中开启。")
+                    return .keepPanel
+                }
+            }
+        case .ejectDisks:
+            let volumes = DiskEjector.ejectableVolumes()
+            guard !volumes.isEmpty else {
+                showAlert(title: "没有可推出的磁盘", message: "当前没有已装载的外接磁盘或磁盘映像。")
+                return .keepPanel
+            }
+            Task { [weak self] in
+                let outcome = await DiskEjector.ejectAll()
+                if !outcome.failed.isEmpty {
+                    self?.showAlert(title: "部分磁盘无法推出", message: outcome.failed.joined(separator: "\n") + "\n\n可能有应用正在使用这些磁盘。")
+                } else {
+                    NSSound(named: "Pop")?.play()
+                }
+            }
+        case .toggleMute:
+            guard let muted = SystemAudio.isMuted(), SystemAudio.setMuted(!muted) else {
+                showAlert(title: "无法切换静音", message: "当前输出设备不支持静音控制。")
+                return .keepPanel
+            }
+        case let .setVolume(percent):
+            guard SystemAudio.setVolume(percent: percent) else {
+                showAlert(title: "无法设置音量", message: "当前输出设备不支持软件音量控制。")
+                return .keepPanel
+            }
+        case .sleepComputer:
+            return performPower(.sleep)
+        case .restartComputer:
+            return performPower(.restart)
+        case .shutDownComputer:
+            return performPower(.shutDown)
         case .none:
             return .keepPanel
         }
         return .hidePanel
+    }
+
+    private func performPower(_ action: PowerAction) -> ActionExecutionOutcome {
+        if settingsProvider().behavior.confirmPowerActions {
+            guard confirm(title: "确定要\(action.title)吗？", message: action == .sleep
+                          ? "Mac 将立即进入睡眠。"
+                          : "所有应用会先收到正常退出请求；有未保存内容的应用可以取消。", button: action.title) else {
+                return .keepPanel
+            }
+        }
+        do {
+            try action.perform()
+        } catch {
+            showAlert(title: "无法\(action.title)", message: "macOS 拒绝了请求：\(error.localizedDescription)")
+            return .keepPanel
+        }
+        return .hidePanel
+    }
+
+    private func confirm(title: String, message: String, button: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: button)
+        alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     func execute(_ kind: LauncherActionKind) -> ActionExecutionOutcome {
@@ -183,8 +273,108 @@ final class ActionDispatcher {
             return .clearFileBufferAndHide
         case let .copyPaths(urls):
             copyText(urls.map(\.path).joined(separator: "\n"))
+        case let .newFile(directory):
+            let suggested = "未命名." + settingsProvider().fileActions.newFileExtension
+            guard let name = promptForName(title: "新建文件", message: directory.path, initial: suggested, button: "创建") else {
+                return .keepPanel
+            }
+            let target = directory.appendingPathComponent(name)
+            do {
+                try Data().write(to: target, options: .withoutOverwriting)
+            } catch {
+                showAlert(title: "无法创建文件", message: FileManager.default.fileExists(atPath: target.path)
+                          ? "已存在同名项目，未覆盖。" : error.localizedDescription)
+                return .keepPanel
+            }
+            NSWorkspace.shared.activateFileViewerSelecting([target])
+        case let .newFolder(directory):
+            guard let name = promptForName(title: "新建文件夹", message: directory.path, initial: "未命名文件夹", button: "创建") else {
+                return .keepPanel
+            }
+            let target = directory.appendingPathComponent(name, isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+            } catch {
+                showAlert(title: "无法创建文件夹", message: FileManager.default.fileExists(atPath: target.path)
+                          ? "已存在同名项目，未覆盖。" : error.localizedDescription)
+                return .keepPanel
+            }
+            NSWorkspace.shared.activateFileViewerSelecting([target])
+        case let .rename(url):
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                showAlert(title: "项目已不存在", message: url.path)
+                return .keepPanel
+            }
+            guard let name = promptForName(title: "重命名", message: url.deletingLastPathComponent().path,
+                                           initial: url.lastPathComponent, button: "重命名"),
+                  name != url.lastPathComponent else { return .keepPanel }
+            let target = url.deletingLastPathComponent().appendingPathComponent(name)
+            do {
+                // moveItem refuses to replace an existing item.
+                try FileManager.default.moveItem(at: url, to: target)
+            } catch {
+                showAlert(title: "无法重命名", message: FileManager.default.fileExists(atPath: target.path)
+                          ? "已存在同名项目，未覆盖。" : error.localizedDescription)
+                return .keepPanel
+            }
+            NSWorkspace.shared.activateFileViewerSelecting([target])
+        case let .compress(url):
+            let reveal = settingsProvider().fileActions.revealArchiveAfterCompression
+            ToastPresenter.show("正在压缩“\(url.lastPathComponent)”…", systemImage: "archivebox")
+            Task {
+                do {
+                    let archive = try await Task.detached(priority: .userInitiated) {
+                        try ZipArchiveWriter.archive(url)
+                    }.value
+                    ToastPresenter.show("已压缩为 \(archive.lastPathComponent)", systemImage: "archivebox.fill")
+                    if reveal { NSWorkspace.shared.activateFileViewerSelecting([archive]) }
+                } catch {
+                    ToastPresenter.show("压缩失败：\(error.localizedDescription)", systemImage: "exclamationmark.triangle.fill",
+                                        duration: .seconds(3))
+                }
+            }
+        case let .openInTerminal(directory):
+            let terminal = settingsProvider().fileActions.terminal
+            guard let application = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleIdentifier)
+                    ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: TerminalApplication.terminal.bundleIdentifier) else {
+                showAlert(title: "找不到终端应用", message: "请在设置 › 文件中选择已安装的终端。")
+                return .keepPanel
+            }
+            NSWorkspace.shared.open([directory], withApplicationAt: application, configuration: NSWorkspace.OpenConfiguration())
+        case let .transfer(url, destination, move):
+            return startFileOperation(move ? .move : .copy, source: url, directory: destination)
         }
         return .hidePanel
+    }
+
+    /// Modal name prompt that keeps the launcher panel from hiding while open.
+    private func promptForName(title: String, message: String, initial: String, button: String) -> String? {
+        isChoosingDestination = true
+        defer {
+            onDestinationPickerClosed?()
+            isChoosingDestination = false
+        }
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: button)
+        alert.addButton(withTitle: "取消")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.stringValue = initial
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.isValidFileName(name) else {
+            showAlert(title: "名称无效", message: "名称不能为空，不能包含“/”或“:”，也不能是“.”或“..”。")
+            return nil
+        }
+        return name
+    }
+
+    static func isValidFileName(_ name: String) -> Bool {
+        !name.isEmpty && name.utf8.count <= 255 && !name.contains("/") && !name.contains(":")
+            && name != "." && name != ".." && !name.contains("\0")
     }
 
     func reveal(_ url: URL) {

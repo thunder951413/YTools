@@ -94,6 +94,7 @@ final class LauncherModel: ObservableObject {
         snippets: SnippetManager? = nil,
         recentDocuments: RecentDocumentsManager? = nil,
         onShowLargeType: @escaping (String) -> Void = { _ in },
+        onShowQRCode: @escaping (String) -> Void = { _ in },
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.preferences = preferences
@@ -106,8 +107,14 @@ final class LauncherModel: ObservableObject {
             snippets: snippetModule,
             recentDocuments: recentModule,
             onOpenSettings: onOpenSettings,
-            onShowLargeType: onShowLargeType
+            onShowLargeType: onShowLargeType,
+            onShowQRCode: onShowQRCode
         )
+        actionDispatcher.settingsProvider = { [weak preferences] in
+            guard let preferences else { return ActionDispatcher.Settings() }
+            return ActionDispatcher.Settings(behavior: preferences.behavior, clipboard: preferences.clipboardBehavior,
+                                             fileActions: preferences.fileActions)
+        }
         actionDispatcher.onStatusChanged = { [weak self] busy, text in
             guard let self else { return }
             let operationFinished = self.isActionBusy && !busy
@@ -223,7 +230,11 @@ final class LauncherModel: ObservableObject {
             applicationAliases: preferences.applicationAliases,
             customApplicationPaths: preferences.customApplicationPaths,
             maximumResults: preferences.maximumSearchResults,
-            requestModules: makeRequestModules(for: requestedQuery)
+            requestModules: makeRequestModules(for: requestedQuery),
+            runningApplicationPaths: preferences.behavior.markRunningApplications
+                && preferences.isSearchContentEnabled(.applications)
+                ? Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
+                : []
         )
         searchTask = Task { [weak self, searchCoordinator] in
             let results = await searchCoordinator.search(request) { [weak self] results in
@@ -316,10 +327,22 @@ final class LauncherModel: ObservableObject {
     }
 
     private func makeRequestModules(for query: String) -> [RegisteredSearchModule] {
-        let clipboardText = SnippetSearchModule.accepts(query)
+        let needsClipboard = SnippetSearchModule.accepts(query) || TextTransformModule.accepts(query)
+        let clipboardText = needsClipboard
             ? NSPasteboard.general.string(forType: .string) ?? ""
             : ""
+        let tools = preferences.tools
         return [
+            RegisteredSearchModule(TextTransformModule(clipboardText: clipboardText), contentType: .textTransforms),
+            RegisteredSearchModule(DateTimeModule(settings: tools), contentType: .dateTime),
+            RegisteredSearchModule(GeneratorModule(settings: tools), contentType: .generators),
+            RegisteredSearchModule(EmojiModule(skinTone: tools.emojiSkinTone), contentType: .emoji),
+            RegisteredSearchModule(
+                RunningApplicationsModule(applications: RunningApplicationsModule.command(for: query) == nil ? [] : runningApplications()),
+                contentType: .runningApplications,
+                allowedCapabilities: [.localFileRead],
+                allowsPrivilegedActions: true
+            ),
             RegisteredSearchModule(
                 snippets.searchModule(clipboardText: clipboardText),
                 contentType: .snippets
@@ -338,6 +361,18 @@ final class LauncherModel: ObservableObject {
                 allowsPrivilegedActions: true
             )
         ]
+    }
+
+    private func runningApplications() -> [RunningApplicationInfo] {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.processIdentifier != ownPID }
+            .compactMap { application in
+                guard let identifier = application.bundleIdentifier, let url = application.bundleURL else { return nil }
+                return RunningApplicationInfo(name: application.localizedName ?? url.deletingPathExtension().lastPathComponent,
+                                              bundleIdentifier: identifier, path: url.path)
+            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     func cancelFileOperation() { actionDispatcher.cancelFileOperation() }
@@ -464,7 +499,7 @@ final class LauncherModel: ObservableObject {
     func showActionsForSelected() -> Bool {
         presentation.userSelected()
         guard !isShowingActions, results.indices.contains(selectedIndex) else { return false }
-        guard actionMenu.show(for: results[selectedIndex]) else { return false }
+        guard actionMenu.show(for: results[selectedIndex], favoriteFolders: preferences.fileActions.favoriteFolders) else { return false }
         showsPreview = false
         pinnedPreviewURL = nil
         return true

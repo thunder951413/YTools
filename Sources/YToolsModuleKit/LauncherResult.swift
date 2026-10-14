@@ -4,6 +4,10 @@ public enum ResultIcon: Equatable, Sendable {
     case system(String)
     case application(URL)
     case file(URL)
+    /// A colour swatch, `#RRGGBB`.
+    case color(String)
+    /// A short glyph such as an emoji or symbol drawn as the icon.
+    case glyph(String)
 }
 
 /// The complete action vocabulary available to a compiled module. Deliberately
@@ -15,6 +19,8 @@ public enum ResultAction: Equatable, Sendable {
     case navigate(String)
     /// Replaces the launcher query with plain text (no file access implied).
     case editQuery(String)
+    /// Shows the text as a QR code generated on this device.
+    case showQRCode(String)
     case hideApplication(String)
     case quitApplication(String)
     case showTrash
@@ -24,6 +30,17 @@ public enum ResultAction: Equatable, Sendable {
     case openFocusSettings
     case openAppearanceSettings
     case openSettings
+    case lockScreen
+    case ejectDisks
+    case toggleMute
+    /// Sets the output volume, 0–100.
+    case setVolume(Int)
+    case sleepComputer
+    case restartComputer
+    case shutDownComputer
+    /// Copies the text and, when enabled and permitted, pastes it into the
+    /// previously active application.
+    case paste(String)
     case none
 }
 
@@ -62,7 +79,7 @@ public struct LauncherResult: Identifiable, Equatable, Sendable {
     public var resourceURL: URL? {
         switch icon {
         case let .application(url), let .file(url): url
-        case .system: nil
+        case .system, .color, .glyph: nil
         }
     }
 

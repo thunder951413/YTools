@@ -162,7 +162,10 @@ struct ClipboardHistoryView: View {
             .frame(height: 32)
             HStack(spacing: 14) {
                 Text("↑↓ 选择")
-                Text("↩ 复制")
+                Text(preferences.clipboardBehavior.pasteToFrontApplication ? "↩ 粘贴" : "↩ 复制")
+                if preferences.clipboardBehavior.sequentialPaste {
+                    Text(manager.pasteQueue.isEmpty ? "⌥↩ 加入连续粘贴" : "连续粘贴队列 \(manager.pasteQueue.count) 条")
+                }
                 Text("⌘D 删除")
                 Text("Esc 清空/关闭")
                 Spacer()

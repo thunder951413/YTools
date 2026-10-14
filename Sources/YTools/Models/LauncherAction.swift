@@ -14,6 +14,12 @@ enum LauncherActionKind: Equatable {
     case openMany([URL])
     case revealMany([URL])
     case copyPaths([URL])
+    case newFile(in: URL)
+    case newFolder(in: URL)
+    case rename(URL)
+    case compress(URL)
+    case openInTerminal(URL)
+    case transfer(URL, destination: URL, move: Bool)
 }
 
 struct LauncherAction: Identifiable, Equatable {
