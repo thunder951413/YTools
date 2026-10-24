@@ -46,7 +46,7 @@ struct LauncherView: View {
                         .onSubmit {
                             if model.activateSelected() { onActivate() }
                         }
-                    if model.isSearchPending {
+                    if model.showsSearchActivity {
                         ProgressView()
                             .controlSize(.small)
                             .accessibilityLabel("正在搜索")
@@ -125,11 +125,7 @@ struct LauncherView: View {
                     }
                 }
             } else if model.isSearchPending && model.results.isEmpty {
-                VStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text("正在搜索，结果会逐步显示…").font(.callout).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                pendingContent
             } else if model.results.isEmpty {
                 emptyResultsView
             } else {
@@ -192,6 +188,39 @@ struct LauncherView: View {
                         }
                     }
                 }
+        }
+    }
+
+    /// Between a keystroke and the next batch: keep the previous rows visible
+    /// but inert, and only show the spinner copy once the wait is noticeable.
+    @ViewBuilder
+    private var pendingContent: some View {
+        if !model.staleResults.isEmpty {
+            List(model.staleResults, id: \.id) { result in
+                ResultRow(
+                    result: result,
+                    selected: false,
+                    compact: preferences.compactResults,
+                    showSubtitle: preferences.showSubtitles,
+                    buffered: false,
+                    shortcutNumber: nil,
+                    selectionOpacity: style.selectionOpacity
+                )
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            }
+            .listStyle(.plain)
+            .opacity(0.45)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        } else if model.showsSearchActivity {
+            VStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("正在搜索，结果会逐步显示…").font(.callout).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            Color.clear
         }
     }
 

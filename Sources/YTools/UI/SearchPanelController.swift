@@ -71,6 +71,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             NSApp.activate(ignoringOtherApps: true)
             panel?.makeKeyAndOrderFront(nil)
         }
+        launcher.onDeferredActivation = { [weak self] in self?.hide() }
         panel.contentViewController = NSHostingController(
             rootView: PanelRootView(
                 state: state,
@@ -176,10 +177,12 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         }
         window.makeKeyAndOrderFront(nil)
         selectAllInSearchField()
+        if state.mode == .launcher { launcher.refreshForPresentation() }
     }
 
     func hide() {
         shiftPreviewTimer?.invalidate()
+        launcher.cancelDeferredActivation()
         launcher.endPreviewSession()
         launcher.persistLastQuery()
         window?.orderOut(nil)

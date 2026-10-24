@@ -17,7 +17,18 @@ final class LauncherModel: ObservableObject {
         }
     }
     @Published private(set) var results: [LauncherResult] = []
-    @Published private(set) var isSearchPending = false
+    /// The previous query's rows, shown dimmed and inert while the next batch
+    /// is on its way. Every action reads `results`, which is empty meanwhile,
+    /// so a stale row can never be activated.
+    @Published private(set) var staleResults: [LauncherResult] = []
+    @Published private(set) var isSearchPending = false {
+        didSet {
+            guard isSearchPending != oldValue else { return }
+            updateSearchActivity()
+        }
+    }
+    /// Lags `isSearchPending` so fast searches never flash a spinner.
+    @Published private(set) var showsSearchActivity = false
     @Published private(set) var isActionBusy = false
     @Published private(set) var actionStatusText = ""
     @Published private var presentation = SearchPresentationState()
@@ -60,6 +71,13 @@ final class LauncherModel: ObservableObject {
     private var searchGeneration = 0
     private var backgroundPending = false
     private var spotlightPending = false
+    private var searchIsScheduled = false
+    private var inputTiming = SearchInputTiming()
+    private var activityTask: Task<Void, Never>?
+    /// Return was pressed before the first batch arrived; activate the top
+    /// result as soon as it does instead of swallowing the key.
+    private var activateWhenReady = false
+    var onDeferredActivation: (() -> Void)?
 
     var isChoosingActionDestination: Bool { actionDispatcher.isChoosingDestination }
     var onActionDestinationPickerClosed: (() -> Void)? {
@@ -174,24 +192,80 @@ final class LauncherModel: ObservableObject {
         // Keep typing responsive: invalidate the old callback now, and defer
         // the potentially blocking NSMetadataQuery.stop() to performSearch().
         spotlight.supersede()
+        activateWhenReady = false
+        let isLeadingEdge = inputTiming.isLeadingEdge(
+            at: ContinuousClock.now,
+            quietPeriod: .milliseconds(searchInputDelayMilliseconds)
+        )
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             resetForEmptyQuery()
         } else {
             presentation.beginQuery()
             if !isSearchPending { isSearchPending = true }
             if !results.isEmpty {
+                staleResults = results
                 results = []
                 if selectedIndex != 0 { selectedIndex = 0 }
             }
-            scheduleSearch()
+            if isLeadingEdge {
+                performSearch()
+            } else {
+                scheduleSearch()
+            }
         }
+    }
+
+    private var searchInputDelayMilliseconds: Int {
+        Int((preferences.searchInputDelay * 1_000).rounded())
     }
 
     private func scheduleSearch() {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let delayMilliseconds = Int((preferences.searchInputDelay * 1_000).rounded())
-        searchDebouncer.schedule(after: .milliseconds(delayMilliseconds)) { [weak self] in
+        searchIsScheduled = true
+        searchDebouncer.schedule(after: .milliseconds(searchInputDelayMilliseconds)) { [weak self] in
             self?.performSearch()
+        }
+    }
+
+    private func updateSearchActivity() {
+        activityTask?.cancel()
+        activityTask = nil
+        guard isSearchPending else {
+            if showsSearchActivity { showsSearchActivity = false }
+            return
+        }
+        activityTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+            } catch {
+                return
+            }
+            guard let self, self.isSearchPending else { return }
+            self.showsSearchActivity = true
+            self.activityTask = nil
+        }
+    }
+
+    /// Searches a query restored from the previous session. Swift skips a
+    /// property's `didSet` when it is assigned inside the type's own `init`,
+    /// so the restored text may have no results behind it.
+    func refreshForPresentation() {
+        guard results.isEmpty, !isSearchPending,
+              !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        refreshImmediately()
+    }
+
+    func cancelDeferredActivation() {
+        activateWhenReady = false
+    }
+
+    private func resolveDeferredActivation() {
+        guard activateWhenReady else { return }
+        if results.indices.contains(selectedIndex) {
+            activateWhenReady = false
+            if activate(results[selectedIndex]) { onDeferredActivation?() }
+        } else if !isSearchPending {
+            activateWhenReady = false
         }
     }
 
@@ -212,6 +286,8 @@ final class LauncherModel: ObservableObject {
             return
         }
         if !isSearchPending { isSearchPending = true }
+        searchDebouncer.cancel()
+        searchIsScheduled = false
         searchGeneration += 1
         let generation = searchGeneration
         presentation.beginQuery()
@@ -247,6 +323,7 @@ final class LauncherModel: ObservableObject {
             self.backgroundPending = false
             self.isSearchPending = self.spotlightPending
             self.rebuildResults()
+            self.resolveDeferredActivation()
         }
         let spotlightQuery = isFileNavigationActive || !preferences.isSearchContentEnabled(.files)
             ? ""
@@ -260,11 +337,14 @@ final class LauncherModel: ObservableObject {
         presentation.reset()
         backgroundPending = false
         spotlightPending = false
+        searchIsScheduled = false
+        activateWhenReady = false
         searchDebouncer.cancel()
         searchTask?.cancel()
         searchTask = nil
         spotlightResults = []
         backgroundResults = []
+        if !staleResults.isEmpty { staleResults = [] }
         if isSearchPending { isSearchPending = false }
         if !results.isEmpty { results = [] }
         if selectedIndex != 0 { selectedIndex = 0 }
@@ -297,6 +377,7 @@ final class LauncherModel: ObservableObject {
                 self.spotlightPending = false
                 self.isSearchPending = self.backgroundPending
                 self.rebuildResults()
+                self.resolveDeferredActivation()
             }
         }
         guard additionalDelay > 0 else {
@@ -319,6 +400,7 @@ final class LauncherModel: ObservableObject {
         results = aggregated.results
         selectedIndex = aggregated.selectedIndex
         applyingResults = false
+        if !staleResults.isEmpty, !results.isEmpty || !backgroundPending { staleResults = [] }
         presentation.includeResults(count: results.count)
         if selectedFileURL == nil {
             showsPreview = false
@@ -389,8 +471,19 @@ final class LauncherModel: ObservableObject {
     @discardableResult
     func activateSelected() -> Bool {
         if isShowingActions { return activateSelectedAction() }
-        guard results.indices.contains(selectedIndex) else { return false }
+        guard results.indices.contains(selectedIndex) else {
+            deferActivationUntilResultsArrive()
+            return false
+        }
         return activate(results[selectedIndex])
+    }
+
+    /// Return pressed while the first batch is still pending: skip the rest of
+    /// the debounce window and activate the top result when it arrives.
+    private func deferActivationUntilResultsArrive() {
+        guard isSearchPending, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        activateWhenReady = true
+        if searchIsScheduled { performSearch() }
     }
 
     @discardableResult
@@ -661,6 +754,9 @@ final class LauncherModel: ObservableObject {
         spotlightDebouncer.cancel()
         searchTask?.cancel()
         searchTask = nil
+        activityTask?.cancel()
+        activityTask = nil
+        activateWhenReady = false
         previewTask?.cancel()
         previewTask = nil
         spotlight.shutdown()
