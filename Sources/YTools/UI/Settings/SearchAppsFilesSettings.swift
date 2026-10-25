@@ -26,7 +26,7 @@ struct SearchSettingsView: View {
             .settingsTarget("EnabledSearchContentTypes")
 
             SettingsGroup(title: "搜索行为") {
-                SettingsRow(title: "输入停止后搜索", detail: "应用与计算按此等待；Spotlight 至少等待 300 毫秒") {
+                SettingsRow(title: "输入停止后搜索", detail: "应用与计算每次按键即时搜索；文件（Spotlight）和剪贴板历史按此等待，文件至少 300 毫秒") {
                     SettingsSlider(value: $preferences.searchInputDelay, range: 0.05...0.4, step: 0.025,
                                    label: "\(Int((preferences.searchInputDelay * 1_000).rounded())) ms")
                 }

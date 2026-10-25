@@ -191,29 +191,11 @@ struct LauncherView: View {
         }
     }
 
-    /// Between a keystroke and the next batch: keep the previous rows visible
-    /// but inert, and only show the spinner copy once the wait is noticeable.
+    /// Nothing to show yet: stay blank, and only explain the wait once it is
+    /// noticeable so fast searches never flash a spinner.
     @ViewBuilder
     private var pendingContent: some View {
-        if !model.staleResults.isEmpty {
-            List(model.staleResults, id: \.id) { result in
-                ResultRow(
-                    result: result,
-                    selected: false,
-                    compact: preferences.compactResults,
-                    showSubtitle: preferences.showSubtitles,
-                    buffered: false,
-                    shortcutNumber: nil,
-                    selectionOpacity: style.selectionOpacity
-                )
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
-            }
-            .listStyle(.plain)
-            .opacity(0.45)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-        } else if model.showsSearchActivity {
+        if model.showsSearchActivity {
             VStack(spacing: 10) {
                 ProgressView().controlSize(.small)
                 Text("正在搜索，结果会逐步显示…").font(.callout).foregroundStyle(.secondary)

@@ -17,10 +17,6 @@ final class LauncherModel: ObservableObject {
         }
     }
     @Published private(set) var results: [LauncherResult] = []
-    /// The previous query's rows, shown dimmed and inert while the next batch
-    /// is on its way. Every action reads `results`, which is empty meanwhile,
-    /// so a stale row can never be activated.
-    @Published private(set) var staleResults: [LauncherResult] = []
     @Published private(set) var isSearchPending = false {
         didSet {
             guard isSearchPending != oldValue else { return }
@@ -64,15 +60,15 @@ final class LauncherModel: ObservableObject {
     private var spotlightResults: [LauncherResult] = []
     private var backgroundResults: [LauncherResult] = []
     private var searchTask: Task<Void, Never>?
-    private let searchDebouncer = DebouncedAction()
     private let spotlightDebouncer = DebouncedAction()
     private var previewTask: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
     private var searchGeneration = 0
     private var backgroundPending = false
     private var spotlightPending = false
-    private var searchIsScheduled = false
-    private var inputTiming = SearchInputTiming()
+    /// The rows on screen still belong to the previous keystroke: they stay
+    /// visible so the list updates in place, but nothing may act on them.
+    private var awaitingFirstBatch = false
     private var activityTask: Task<Void, Never>?
     /// Return was pressed before the first batch arrived; activate the top
     /// result as soon as it does instead of swallowing the key.
@@ -162,10 +158,6 @@ final class LauncherModel: ObservableObject {
         .dropFirst()
         .sink { [weak self] _ in self?.refreshImmediately() }
         .store(in: &cancellables)
-        preferences.$searchInputDelay
-            .dropFirst()
-            .sink { [weak self] _ in self?.scheduleSearch() }
-            .store(in: &cancellables)
         preferences.$previewSelectionDelay
             .dropFirst()
             .sink { [weak self] _ in self?.schedulePreviewUpdate() }
@@ -193,37 +185,20 @@ final class LauncherModel: ObservableObject {
         // the potentially blocking NSMetadataQuery.stop() to performSearch().
         spotlight.supersede()
         activateWhenReady = false
-        let isLeadingEdge = inputTiming.isLeadingEdge(
-            at: ContinuousClock.now,
-            quietPeriod: .milliseconds(searchInputDelayMilliseconds)
-        )
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             resetForEmptyQuery()
         } else {
             presentation.beginQuery()
             if !isSearchPending { isSearchPending = true }
-            if !results.isEmpty {
-                staleResults = results
-                results = []
-                if selectedIndex != 0 { selectedIndex = 0 }
+            // Like Alfred: search on every keystroke and swap the rows in
+            // place when the new batch lands, rather than blanking the list.
+            awaitingFirstBatch = !results.isEmpty
+            if selectedIndex != 0 {
+                applyingResults = true
+                selectedIndex = 0
+                applyingResults = false
             }
-            if isLeadingEdge {
-                performSearch()
-            } else {
-                scheduleSearch()
-            }
-        }
-    }
-
-    private var searchInputDelayMilliseconds: Int {
-        Int((preferences.searchInputDelay * 1_000).rounded())
-    }
-
-    private func scheduleSearch() {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        searchIsScheduled = true
-        searchDebouncer.schedule(after: .milliseconds(searchInputDelayMilliseconds)) { [weak self] in
-            self?.performSearch()
+            performSearch()
         }
     }
 
@@ -236,7 +211,7 @@ final class LauncherModel: ObservableObject {
         }
         activityTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(for: .milliseconds(250))
+                try await Task.sleep(for: .milliseconds(400))
             } catch {
                 return
             }
@@ -260,7 +235,7 @@ final class LauncherModel: ObservableObject {
     }
 
     private func resolveDeferredActivation() {
-        guard activateWhenReady else { return }
+        guard activateWhenReady, !awaitingFirstBatch else { return }
         if results.indices.contains(selectedIndex) {
             activateWhenReady = false
             if activate(results[selectedIndex]) { onDeferredActivation?() }
@@ -270,7 +245,6 @@ final class LauncherModel: ObservableObject {
     }
 
     private func refreshImmediately() {
-        searchDebouncer.cancel()
         spotlightDebouncer.cancel()
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             resetForEmptyQuery()
@@ -286,8 +260,6 @@ final class LauncherModel: ObservableObject {
             return
         }
         if !isSearchPending { isSearchPending = true }
-        searchDebouncer.cancel()
-        searchIsScheduled = false
         searchGeneration += 1
         let generation = searchGeneration
         presentation.beginQuery()
@@ -321,6 +293,7 @@ final class LauncherModel: ObservableObject {
                   self.searchGeneration == generation else { return }
             self.backgroundResults = results
             self.backgroundPending = false
+            self.awaitingFirstBatch = false
             self.isSearchPending = self.spotlightPending
             self.rebuildResults()
             self.resolveDeferredActivation()
@@ -330,21 +303,18 @@ final class LauncherModel: ObservableObject {
             : requestedQuery
         spotlightPending = !spotlightQuery.isEmpty
         scheduleSpotlightSearch(spotlightQuery, requestedQuery: requestedQuery, generation: generation)
-        rebuildResults()
     }
 
     private func resetForEmptyQuery() {
         presentation.reset()
         backgroundPending = false
         spotlightPending = false
-        searchIsScheduled = false
+        awaitingFirstBatch = false
         activateWhenReady = false
-        searchDebouncer.cancel()
         searchTask?.cancel()
         searchTask = nil
         spotlightResults = []
         backgroundResults = []
-        if !staleResults.isEmpty { staleResults = [] }
         if isSearchPending { isSearchPending = false }
         if !results.isEmpty { results = [] }
         if selectedIndex != 0 { selectedIndex = 0 }
@@ -357,6 +327,7 @@ final class LauncherModel: ObservableObject {
     private func publishBackground(_ results: [LauncherResult], query requestedQuery: String, generation: Int) {
         guard !Task.isCancelled, query == requestedQuery, searchGeneration == generation else { return }
         backgroundResults = results
+        awaitingFirstBatch = false
         rebuildResults()
     }
 
@@ -365,10 +336,10 @@ final class LauncherModel: ObservableObject {
             spotlight.cancel()
             return
         }
-        // Lightweight providers respond at the user-selected delay. Metadata
-        // search receives a longer idle window so ordinary typing never starts
-        // and immediately tears down an NSMetadataQuery between keystrokes.
-        let additionalDelay = max(0, 0.3 - preferences.searchInputDelay)
+        // Lightweight providers search on every keystroke. Metadata search
+        // waits for an idle window so ordinary typing never starts and
+        // immediately tears down an NSMetadataQuery between keystrokes.
+        let idleDelay = max(0.3, preferences.searchInputDelay)
         let start = { @MainActor [weak self] in
             guard let self, self.query == requestedQuery, self.searchGeneration == generation else { return }
             self.spotlight.search(spotlightQuery) { [weak self] results in
@@ -380,11 +351,7 @@ final class LauncherModel: ObservableObject {
                 self.resolveDeferredActivation()
             }
         }
-        guard additionalDelay > 0 else {
-            start()
-            return
-        }
-        let milliseconds = Int((additionalDelay * 1_000).rounded())
+        let milliseconds = Int((idleDelay * 1_000).rounded())
         spotlightDebouncer.schedule(after: .milliseconds(milliseconds), action: start)
     }
 
@@ -400,7 +367,6 @@ final class LauncherModel: ObservableObject {
         results = aggregated.results
         selectedIndex = aggregated.selectedIndex
         applyingResults = false
-        if !staleResults.isEmpty, !results.isEmpty || !backgroundPending { staleResults = [] }
         presentation.includeResults(count: results.count)
         if selectedFileURL == nil {
             showsPreview = false
@@ -471,23 +437,23 @@ final class LauncherModel: ObservableObject {
     @discardableResult
     func activateSelected() -> Bool {
         if isShowingActions { return activateSelectedAction() }
-        guard results.indices.contains(selectedIndex) else {
+        guard !awaitingFirstBatch, results.indices.contains(selectedIndex) else {
             deferActivationUntilResultsArrive()
             return false
         }
         return activate(results[selectedIndex])
     }
 
-    /// Return pressed while the first batch is still pending: skip the rest of
-    /// the debounce window and activate the top result when it arrives.
+    /// Return pressed before the new keystroke's first batch arrived: activate
+    /// the top result when it does instead of swallowing the key.
     private func deferActivationUntilResultsArrive() {
         guard isSearchPending, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         activateWhenReady = true
-        if searchIsScheduled { performSearch() }
     }
 
     @discardableResult
     func activate(_ result: LauncherResult, recordUsage: Bool = true) -> Bool {
+        guard !awaitingFirstBatch else { return false }
         if recordUsage { resultAggregator.record(result, query: query) }
         return apply(actionDispatcher.execute(result.action))
     }
@@ -497,14 +463,14 @@ final class LauncherModel: ObservableObject {
             actionMenu.moveSelection(by: offset)
             return
         }
-        guard !results.isEmpty else { return }
+        guard !awaitingFirstBatch, !results.isEmpty else { return }
         presentation.userSelected()
         selectedIndex = (selectedIndex + offset + results.count) % results.count
     }
 
     @discardableResult
     func activateResult(at index: Int) -> Bool {
-        guard !isShowingActions, results.indices.contains(index) else { return false }
+        guard !isShowingActions, !awaitingFirstBatch, results.indices.contains(index) else { return false }
         selectedIndex = index
         return activate(results[index])
     }
@@ -512,7 +478,7 @@ final class LauncherModel: ObservableObject {
     var selectedFileURL: URL? {
         if let pinnedPreviewURL { return pinnedPreviewURL }
         if isShowingActions, let url = actionMenu.subject?.resourceURL { return url }
-        guard results.indices.contains(selectedIndex) else { return nil }
+        guard !awaitingFirstBatch, results.indices.contains(selectedIndex) else { return nil }
         return results[selectedIndex].fileURL
     }
 
@@ -600,7 +566,7 @@ final class LauncherModel: ObservableObject {
     @discardableResult
     func showActionsForSelected() -> Bool {
         presentation.userSelected()
-        guard !isShowingActions, results.indices.contains(selectedIndex) else { return false }
+        guard !isShowingActions, !awaitingFirstBatch, results.indices.contains(selectedIndex) else { return false }
         guard actionMenu.show(for: results[selectedIndex], favoriteFolders: preferences.fileActions.favoriteFolders) else { return false }
         showsPreview = false
         pinnedPreviewURL = nil
@@ -715,7 +681,7 @@ final class LauncherModel: ObservableObject {
     }
 
     var selectedLargeTypeText: String? {
-        guard !isShowingActions, results.indices.contains(selectedIndex) else { return nil }
+        guard !isShowingActions, !awaitingFirstBatch, results.indices.contains(selectedIndex) else { return nil }
         let result = results[selectedIndex]
         if case let .copy(text) = result.action { return text }
         return result.title.isEmpty ? nil : result.title
@@ -750,7 +716,6 @@ final class LauncherModel: ObservableObject {
 
     func shutdown() {
         searchGeneration += 1
-        searchDebouncer.cancel()
         spotlightDebouncer.cancel()
         searchTask?.cancel()
         searchTask = nil
