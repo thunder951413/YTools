@@ -384,7 +384,7 @@ public partial class SettingsWindow : Window
             0.025,
             valueMultiplier: 1_000,
             valueSuffix: " 毫秒",
-            detail: "连续输入会重新计时；停顿达到该时间后才开始并显示最终搜索结果。"));
+            detail: "应用与计算每次按键即时搜索；文件搜索和剪贴板历史在停顿达到该时间后才开始，文件搜索至少 300 毫秒。"));
         stack.Children.Add(SubHeader("搜索范围"));
         stack.Children.Add(new TextBlock
         {

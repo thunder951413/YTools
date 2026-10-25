@@ -52,6 +52,7 @@ public partial class LauncherWindow : Window
         _preferences = preferences;
         DataContext = model;
         model.PropertyChanged += OnModelPropertyChanged;
+        model.DeferredActivationRequested += (_, _) => HidePanel();
         preferences.PropertyChanged += OnPreferencePropertyChanged;
         UpdateHotKeyError(preferences.HotKeyError);
         AdjustPanelSize();
@@ -72,11 +73,13 @@ public partial class LauncherWindow : Window
         SearchBox.Focus();
         SearchBox.SelectAll();
         UpdatePreview();
+        _model.RefreshForPresentation();
     }
 
     public void HidePanel()
     {
         _shiftPreviewTimer?.Stop();
+        _model?.CancelDeferredActivation();
         _model?.EndMomentaryPreview();
         _model?.PersistLastQuery();
         Hide();
@@ -114,6 +117,7 @@ public partial class LauncherWindow : Window
             case nameof(LauncherModel.LayoutRowCount):
             case nameof(LauncherModel.Results):
             case nameof(LauncherModel.IsSearchPending):
+            case nameof(LauncherModel.ShowsSearchActivity):
             case nameof(LauncherModel.Actions):
             case nameof(LauncherModel.IsShowingActions):
             case nameof(LauncherModel.Query):
@@ -484,7 +488,7 @@ public partial class LauncherWindow : Window
             return;
         }
 
-        SearchingState.Visibility = _model.IsSearchPending && _model.Results.Count == 0 && !_model.IsShowingActions
+        SearchingState.Visibility = _model.ShowsSearchActivity && _model.Results.Count == 0 && !_model.IsShowingActions
             ? Visibility.Visible : Visibility.Collapsed;
         EmptyState.Visibility = !_model.IsSearchPending
             && _model.Results.Count == 0

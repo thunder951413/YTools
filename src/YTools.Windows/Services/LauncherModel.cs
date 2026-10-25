@@ -8,9 +8,10 @@ using YTools.Services.Modules;
 namespace YTools.Services;
 
 /// <summary>
-/// Query state, ordering and selection facade for the launcher UI. File search
-/// runs on its own debounce (like the macOS Spotlight path); every other
-/// provider runs through the SearchCoordinator.
+/// Query state, ordering and selection facade for the launcher UI. Every
+/// provider except file search runs through the SearchCoordinator on each
+/// keystroke; file search waits on its own idle window (like the macOS
+/// Spotlight path).
 /// </summary>
 public sealed class LauncherModel : ObservableObject
 {
@@ -24,7 +25,7 @@ public sealed class LauncherModel : ObservableObject
     private readonly ActionDispatcher _actionDispatcher;
     private readonly ActionMenuController _actionMenu = new();
     private readonly FileBufferStore _fileBuffer = new();
-    private readonly DebouncedAction _searchDebouncer = new();
+    private readonly DebouncedAction _searchActivityDebouncer = new();
     private readonly DebouncedAction _fileSearchDebouncer = new();
     private readonly DebouncedAction _previewDebouncer = new();
     private CancellationTokenSource? _searchCancellation;
@@ -44,6 +45,13 @@ public sealed class LauncherModel : ObservableObject
     private bool _applyingResults;
     private bool _backgroundPending;
     private bool _filePending;
+    private bool _showsSearchActivity;
+    // The rows on screen still belong to the previous keystroke: they stay
+    // visible so the list updates in place, but nothing may act on them.
+    private bool _awaitingFirstBatch;
+    // Enter was pressed before the first batch arrived; activate the top
+    // result as soon as it does instead of swallowing the key.
+    private bool _activateWhenReady;
     public int LayoutRowCount => IsShowingActions ? Actions.Count : _presentation.ReservedRows;
 
     public LauncherModel(
@@ -84,9 +92,6 @@ public sealed class LauncherModel : ObservableObject
                 case nameof(AppPreferences.CustomApplicationPaths):
                     RefreshImmediately();
                     break;
-                case nameof(AppPreferences.SearchInputDelay):
-                    ScheduleSearch();
-                    break;
                 case nameof(AppPreferences.ShowSubtitles):
                 case nameof(AppPreferences.ShowNumberShortcuts):
                     RaisePropertyChanged(args.PropertyName);
@@ -102,10 +107,20 @@ public sealed class LauncherModel : ObservableObject
         // Restore the previous session's query so the panel opens with it
         // pre-selected (ShowLauncher selects all text): typing replaces it and
         // doing nothing re-runs the search and shows the previous results.
+        // The search itself runs from RefreshForPresentation when the panel is shown.
         var lastQuery = _preferences.LastLauncherQuery;
         if (!string.IsNullOrWhiteSpace(lastQuery))
         {
-            Query = lastQuery;
+            _query = lastQuery;
+        }
+    }
+
+    /// <summary>Searches a query restored from the previous session once the panel is shown.</summary>
+    public void RefreshForPresentation()
+    {
+        if (_results.Count == 0 && !IsSearchPending && !string.IsNullOrWhiteSpace(Query))
+        {
+            RefreshImmediately();
         }
     }
 
@@ -132,8 +147,24 @@ public sealed class LauncherModel : ObservableObject
     public bool IsSearchPending
     {
         get => _isSearchPending;
-        private set => SetField(ref _isSearchPending, value);
+        private set
+        {
+            if (SetField(ref _isSearchPending, value))
+            {
+                UpdateSearchActivity();
+            }
+        }
     }
+
+    /// <summary>Lags <see cref="IsSearchPending"/> so fast searches never flash a progress bar.</summary>
+    public bool ShowsSearchActivity
+    {
+        get => _showsSearchActivity;
+        private set => SetField(ref _showsSearchActivity, value);
+    }
+
+    /// <summary>Raised when a deferred Enter activated a result and the panel should close.</summary>
+    public event EventHandler? DeferredActivationRequested;
 
     public bool IsChoosingActionDestination => _actionDispatcher.IsChoosingDestination;
     public string ActionStatusText => _actionDispatcher.StatusText;
@@ -207,7 +238,7 @@ public sealed class LauncherModel : ObservableObject
                 return subjectPath;
             }
 
-            return _results.Count > _selectedIndex && _selectedIndex >= 0
+            return !_awaitingFirstBatch && _results.Count > _selectedIndex && _selectedIndex >= 0
                 ? _results[_selectedIndex].FilePath
                 : null;
         }
@@ -236,16 +267,55 @@ public sealed class LauncherModel : ObservableObject
             return ActivateSelectedAction();
         }
 
-        if (_results.Count <= _selectedIndex || _selectedIndex < 0)
+        if (_awaitingFirstBatch || _results.Count <= _selectedIndex || _selectedIndex < 0)
         {
+            DeferActivationUntilResultsArrive();
             return false;
         }
 
         return Activate(_results[_selectedIndex]);
     }
 
+    public void CancelDeferredActivation() => _activateWhenReady = false;
+
+    private void DeferActivationUntilResultsArrive()
+    {
+        if (!IsSearchPending || string.IsNullOrWhiteSpace(Query))
+        {
+            return;
+        }
+
+        _activateWhenReady = true;
+    }
+
+    private void ResolveDeferredActivation()
+    {
+        if (!_activateWhenReady || _awaitingFirstBatch)
+        {
+            return;
+        }
+
+        if (_results.Count > _selectedIndex && _selectedIndex >= 0)
+        {
+            _activateWhenReady = false;
+            if (Activate(_results[_selectedIndex]))
+            {
+                DeferredActivationRequested?.Invoke(this, EventArgs.Empty);
+            }
+        }
+        else if (!IsSearchPending)
+        {
+            _activateWhenReady = false;
+        }
+    }
+
     public bool Activate(LauncherResult result, bool recordUsage = true)
     {
+        if (_awaitingFirstBatch)
+        {
+            return false;
+        }
+
         if (recordUsage)
         {
             _resultAggregator.Record(result, Query);
@@ -265,7 +335,7 @@ public sealed class LauncherModel : ObservableObject
             return;
         }
 
-        if (_results.Count == 0)
+        if (_awaitingFirstBatch || _results.Count == 0)
         {
             return;
         }
@@ -276,7 +346,7 @@ public sealed class LauncherModel : ObservableObject
 
     public bool ActivateResult(int index)
     {
-        if (IsShowingActions || _results.Count <= index || index < 0)
+        if (IsShowingActions || _awaitingFirstBatch || _results.Count <= index || index < 0)
         {
             return false;
         }
@@ -343,7 +413,7 @@ public sealed class LauncherModel : ObservableObject
     public bool ShowActionsForSelected()
     {
         _presentation.UserSelected();
-        if (IsShowingActions || _results.Count <= _selectedIndex || _selectedIndex < 0)
+        if (IsShowingActions || _awaitingFirstBatch || _results.Count <= _selectedIndex || _selectedIndex < 0)
         {
             return false;
         }
@@ -413,6 +483,7 @@ public sealed class LauncherModel : ObservableObject
     {
         _presentation.UserSelected();
         if (IsShowingActions
+            || _awaitingFirstBatch
             || _results.Count <= _selectedIndex
             || _selectedIndex < 0
             || _results[_selectedIndex].ResourcePath is not { } path)
@@ -522,7 +593,7 @@ public sealed class LauncherModel : ObservableObject
     {
         get
         {
-            if (IsShowingActions || _results.Count <= _selectedIndex || _selectedIndex < 0)
+            if (IsShowingActions || _awaitingFirstBatch || _results.Count <= _selectedIndex || _selectedIndex < 0)
             {
                 return null;
             }
@@ -536,10 +607,11 @@ public sealed class LauncherModel : ObservableObject
 
     public void Dispose()
     {
-        _searchDebouncer.Cancel();
+        _searchActivityDebouncer.Cancel();
         _fileSearchDebouncer.Cancel();
         _previewDebouncer.Cancel();
         _searchCancellation?.Cancel();
+        _activateWhenReady = false;
         _fileSearch.Dispose();
     }
 
@@ -557,10 +629,10 @@ public sealed class LauncherModel : ObservableObject
         }
 
         // Invalidate both delayed and already-posted callbacks before touching
-        // query state. ScheduleSearch creates the sole new generation below.
-        _searchDebouncer.Cancel();
+        // query state. PerformSearch creates the sole new generation below.
         _searchCancellation?.Cancel();
         _fileSearchDebouncer.Cancel();
+        _activateWhenReady = false;
         if (string.IsNullOrWhiteSpace(Query))
         {
             ResetForEmptyQuery();
@@ -574,35 +646,40 @@ public sealed class LauncherModel : ObservableObject
                 IsSearchPending = true;
             }
 
-            if (_results.Count > 0)
+            // Like Alfred: search on every keystroke and swap the rows in
+            // place when the new batch lands, rather than blanking the list.
+            _awaitingFirstBatch = _results.Count > 0;
+            if (SelectedIndex != 0)
             {
-                _results = [];
-                RaisePropertyChanged(nameof(Results));
-                if (SelectedIndex != 0)
-                {
-                    SelectedIndex = 0;
-                }
+                _applyingResults = true;
+                SelectedIndex = 0;
+                _applyingResults = false;
             }
 
-            ScheduleSearch();
+            PerformSearch();
         }
     }
 
-    private void ScheduleSearch()
+    private void UpdateSearchActivity()
     {
-        if (string.IsNullOrWhiteSpace(Query))
+        _searchActivityDebouncer.Cancel();
+        if (!_isSearchPending)
         {
-            _searchDebouncer.Cancel();
+            ShowsSearchActivity = false;
             return;
         }
 
-        var delayMilliseconds = (int)(_preferences.SearchInputDelay * 1_000);
-        _searchDebouncer.Schedule(TimeSpan.FromMilliseconds(delayMilliseconds), PerformSearch);
+        _searchActivityDebouncer.Schedule(TimeSpan.FromMilliseconds(400), () =>
+        {
+            if (_isSearchPending)
+            {
+                ShowsSearchActivity = true;
+            }
+        });
     }
 
     private void RefreshImmediately()
     {
-        _searchDebouncer.Cancel();
         _fileSearchDebouncer.Cancel();
         if (string.IsNullOrWhiteSpace(Query))
         {
@@ -656,6 +733,7 @@ public sealed class LauncherModel : ObservableObject
                 {
                     if (!IsCurrentSearch(requestedQuery, generation, cancellation.Token)) { return; }
                     _backgroundResults = updates.ToList();
+                    _awaitingFirstBatch = false;
                     RebuildResults();
                 }).Task),
                 cancellation.Token)
@@ -671,6 +749,7 @@ public sealed class LauncherModel : ObservableObject
                     {
                         _backgroundResults = [];
                         _backgroundPending = false;
+                        _awaitingFirstBatch = false;
                         IsSearchPending = _filePending;
                         RebuildResults();
                     }
@@ -683,6 +762,7 @@ public sealed class LauncherModel : ObservableObject
                     if (isNewestRequest)
                     {
                         _backgroundPending = false;
+                        _awaitingFirstBatch = false;
                         IsSearchPending = _filePending;
                         RebuildResults();
                     }
@@ -694,8 +774,10 @@ public sealed class LauncherModel : ObservableObject
                 {
                     _backgroundResults = task.Result.ToList();
                     _backgroundPending = false;
+                    _awaitingFirstBatch = false;
                     IsSearchPending = _filePending;
                     RebuildResults();
+                    ResolveDeferredActivation();
                 }
             }, TaskScheduler.FromCurrentSynchronizationContext());
 
@@ -707,7 +789,6 @@ public sealed class LauncherModel : ObservableObject
             : requestedQuery;
         _filePending = !string.IsNullOrEmpty(fileQuery);
         ScheduleFileSearch(fileQuery, requestedQuery, generation, cancellation.Token);
-        RebuildResults();
     }
 
     private void ScheduleFileSearch(
@@ -721,7 +802,10 @@ public sealed class LauncherModel : ObservableObject
             return;
         }
 
-        var additionalDelay = Math.Max(0, 0.3 - _preferences.SearchInputDelay);
+        // Lightweight providers search on every keystroke. File search waits
+        // for an idle window so ordinary typing never starts and immediately
+        // abandons an index query between keystrokes.
+        var idleDelay = Math.Max(0.3, _preferences.SearchInputDelay);
         var start = () =>
         {
             if (!IsCurrentSearch(requestedQuery, generation, cancellationToken))
@@ -731,15 +815,8 @@ public sealed class LauncherModel : ObservableObject
 
             RunFileSearch(fileQuery, requestedQuery, generation, cancellationToken);
         };
-        if (additionalDelay <= 0)
-        {
-            start();
-        }
-        else
-        {
-            var milliseconds = (int)(additionalDelay * 1_000);
-            _fileSearchDebouncer.Schedule(TimeSpan.FromMilliseconds(milliseconds), start);
-        }
+        var milliseconds = (int)(idleDelay * 1_000);
+        _fileSearchDebouncer.Schedule(TimeSpan.FromMilliseconds(milliseconds), start);
     }
 
     private void RunFileSearch(
@@ -765,6 +842,7 @@ public sealed class LauncherModel : ObservableObject
                     _filePending = false;
                     IsSearchPending = _backgroundPending;
                     RebuildResults();
+                    ResolveDeferredActivation();
                 }
                 else if (task.IsFaulted && canPublish)
                 {
@@ -772,6 +850,7 @@ public sealed class LauncherModel : ObservableObject
                     _filePending = false;
                     IsSearchPending = _backgroundPending;
                     RebuildResults();
+                    ResolveDeferredActivation();
                 }
             }, TaskScheduler.FromCurrentSynchronizationContext());
     }
@@ -821,8 +900,9 @@ public sealed class LauncherModel : ObservableObject
         _presentation.Reset();
         _backgroundPending = false;
         _filePending = false;
+        _awaitingFirstBatch = false;
+        _activateWhenReady = false;
         RaisePropertyChanged(nameof(LayoutRowCount));
-        _searchDebouncer.Cancel();
         _searchCancellation?.Cancel();
         _fileResults = [];
         _backgroundResults = [];

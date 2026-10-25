@@ -220,7 +220,7 @@
                                      Background="Transparent"
                                      IsIndeterminate="True"
                                      IsHitTestVisible="False"
-                                     Visibility="{Binding IsSearchPending, Converter={StaticResource BoolToVisibility}}" />
+                                     Visibility="{Binding ShowsSearchActivity, Converter={StaticResource BoolToVisibility}}" />
                         <TextBlock x:Name="HotKeyErrorText"
                                    Foreground="{DynamicResource ErrorBrush}"
                                    FontSize="11"
