@@ -470,7 +470,7 @@ public static class IconService
     private const uint ShgfiLargeIcon = 0x000000000;
     private const uint ShgfiUseFileAttributes = 0x000000010;
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct ShFileInfo
     {
         public IntPtr Icon;
@@ -552,22 +552,30 @@ public static class IconService
 
 public sealed class ResultIconConverter : System.Windows.Data.IValueConverter
 {
-    public object Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+    public object? Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
     {
-        switch (value)
+        // Image.Source and TextBlock.Text evaluate independently while icons
+        // load in the background. Never let a cached bitmap become text (its
+        // dimensions appear as missing glyphs in the Segoe symbol font), or
+        // let a fallback glyph be parsed as an image URI.
+        if (targetType == typeof(string))
         {
-            case ResultIcon.System system:
-                return IconService.GlyphFor(system.Name);
-            case ResultIcon.Application application:
-                return IconService.IconFor(application.Path) ?? (object)IconService.GlyphFor("app.dashed");
-            case ResultIcon.RegisteredApplication application:
-                return IconService.IconForRegisteredApplication(application.AppUserModelId)
-                    ?? (object)IconService.GlyphFor("app.dashed");
-            case ResultIcon.File file:
-                return IconService.IconFor(file.Path) ?? (object)IconService.GlyphFor("doc.text.magnifyingglass");
-            default:
-                return IconService.GlyphFor("");
+            return value switch
+            {
+                ResultIcon.System system => IconService.GlyphFor(system.Name),
+                ResultIcon.Application or ResultIcon.RegisteredApplication => IconService.GlyphFor("app.dashed"),
+                ResultIcon.File => IconService.GlyphFor("doc.text.magnifyingglass"),
+                _ => IconService.GlyphFor("")
+            };
         }
+
+        return value switch
+        {
+            ResultIcon.Application application => IconService.IconFor(application.Path),
+            ResultIcon.RegisteredApplication application => IconService.IconForRegisteredApplication(application.AppUserModelId),
+            ResultIcon.File file => IconService.IconFor(file.Path),
+            _ => null
+        };
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
