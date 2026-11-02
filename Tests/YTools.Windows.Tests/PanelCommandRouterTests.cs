@@ -16,6 +16,20 @@ public class PanelCommandRouterTests
     }
 
     [Fact]
+    public void ClipboardCopyOnlyAndNumberShortcuts()
+    {
+        Assert.Equal(PanelCommandKind.CopyClipboardItemOnly,
+            _router.Command(new PanelKeyEvent(0x0D, PanelKeyModifiers.Command), PanelInputMode.Clipboard)?.Kind);
+        Assert.Equal(PanelCommandKind.RevealSelected,
+            _router.Command(new PanelKeyEvent(0x0D, PanelKeyModifiers.Command), PanelInputMode.Launcher)?.Kind);
+        Assert.Null(_router.Command(new PanelKeyEvent(0x0D, PanelKeyModifiers.Command | PanelKeyModifiers.Shift), PanelInputMode.Clipboard));
+        Assert.Equal(new PanelCommand(PanelCommandKind.ActivateResult, 0),
+            _router.Command(new PanelKeyEvent(0x31, PanelKeyModifiers.Command), PanelInputMode.Clipboard));
+        Assert.Equal(new PanelCommand(PanelCommandKind.ActivateResult, 8),
+            _router.Command(new PanelKeyEvent(0x39, PanelKeyModifiers.Command), PanelInputMode.Clipboard));
+    }
+
+    [Fact]
     public void Enter_ActivatesSelected()
     {
         var command = _router.Command(

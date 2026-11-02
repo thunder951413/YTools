@@ -39,7 +39,7 @@ scripts/
 - 文件动作必须是本机完整绝对路径；Windows 统一使用 `LocalPathPolicy`，拒绝相对路径、URL、UNC、设备路径与备用数据流。
 - 不动态加载 bundle、dylib、脚本、远程模块或 Everything SDK DLL。
 - Everything 集成仅能通过已运行 Everything 的 `WM_COPYDATA` 本机 IPC 做只读查询；不得联网、读取其数据库或加载第三方搜索代码。
-- 新增网络功能必须先得到用户明确同意。现有坚果云剪贴板同步是唯一例外：用户保存凭据并显式启用后，两端仅可使用固定 `https://dav.jianguoyun.com/dav/` WebDAV 端点；第二个例外是 macOS 可选 AI 翻译（用户明确要求）：默认关闭，用户启用并保存 API Key 后，仅 `AITranslationService.swift` 可向用户配置并经 `TranslationEndpointPolicy` 校验的 HTTPS（本机 http://localhost）接口发送待译文本，禁止重定向与 Cookie。其他 `HttpClient`/`WebClient`/Socket/`URLSession` 调用会被统一安全扫描拒绝。
+- 新增网络功能必须先得到用户明确同意。现有坚果云剪贴板同步是唯一例外：用户保存凭据并显式启用后，两端仅可使用固定 `https://dav.jianguoyun.com/dav/` WebDAV 端点；第二个例外是两端的可选 AI 翻译（用户明确要求）：默认关闭，用户启用并保存 API Key 后，仅 `AITranslationService.swift` 与 `src/YTools.Windows/Services/AITranslationService.cs` 可向用户配置并经 `TranslationEndpointPolicy` 校验的 HTTPS（本机 http://localhost）接口发送待译文本，禁止重定向与 Cookie。其他 `HttpClient`/`WebClient`/Socket/`URLSession` 调用会被统一安全扫描拒绝。
 - 系统命令只允许编译期固定 API（`SHEmptyRecycleBin`、`PostMessage` 固定消息、`ms-settings:` URI、固定 `rundll32 shell32.dll,OpenAs_RunDLL` 参数模板）；不得接受用户输入作为命令、路径或参数。
 - 加密存储失败不得降级写明文，也不得用空数据覆盖不可读密文。
 - 源码模块不是沙箱或安全边界。它们与宿主同进程、同用户权限运行，必须经过代码审查并重新编译；`ModuleResultPolicy` 只约束模块返回的数据和已注册动作。

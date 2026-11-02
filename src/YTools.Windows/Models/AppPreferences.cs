@@ -73,6 +73,9 @@ public sealed class AppPreferences : ObservableObject
     private bool _clipboardCloudSyncEnabled;
     private string _clipboardCloudSyncFolder = "YTools/clipboard-sync";
     private int _clipboardCloudSyncIntervalMinutes = 15;
+    private bool _clipboardPasteToFrontApplication = true;
+    private HotKeyDefinition _translatorHotKey = HotKeyDefinition.TranslatorDefault;
+    private AITranslationSettings _aiTranslation = AITranslationSettings.Default;
     private bool _suppressSave;
     private string? _hotKeyError;
     private string? _launchAtLoginError;
@@ -557,6 +560,48 @@ public sealed class AppPreferences : ObservableObject
         }
     }
 
+    /// <summary>Re-activate the previous window and send Ctrl+V after choosing an item.</summary>
+    public bool ClipboardPasteToFrontApplication
+    {
+        get => _clipboardPasteToFrontApplication;
+        set
+        {
+            if (SetField(ref _clipboardPasteToFrontApplication, value))
+            {
+                Save();
+            }
+        }
+    }
+
+    public HotKeyDefinition TranslatorHotKey
+    {
+        get => _translatorHotKey;
+        set
+        {
+            if (SetField(ref _translatorHotKey, value))
+            {
+                Save();
+                NotifyHotKeyChange();
+            }
+        }
+    }
+
+    /// <summary>Replaced as a whole; the translator hotkey is only registered while enabled.</summary>
+    public AITranslationSettings AITranslation
+    {
+        get => _aiTranslation;
+        set
+        {
+            var normalized = value.Normalized();
+            var enabledChanged = normalized.Enabled != _aiTranslation.Enabled;
+            if (SetField(ref _aiTranslation, normalized))
+            {
+                Save();
+                if (enabledChanged) { NotifyHotKeyChange(); }
+            }
+        }
+    }
+
     public bool ClipboardStoreImages
     {
         get => _clipboardStoreImages;
@@ -908,6 +953,9 @@ public sealed class AppPreferences : ObservableObject
             ClipboardCloudSyncEnabled = false;
             ClipboardCloudSyncFolder = "YTools/clipboard-sync";
             ClipboardCloudSyncIntervalMinutes = 15;
+            ClipboardPasteToFrontApplication = true;
+            TranslatorHotKey = HotKeyDefinition.TranslatorDefault;
+            AITranslation = AITranslationSettings.Default;
         }
         finally
         {
@@ -1020,6 +1068,9 @@ public sealed class AppPreferences : ObservableObject
                 ? "YTools/clipboard-sync"
                 : data.ClipboardCloudSyncFolder.Trim().Replace('\\', '/');
             _clipboardCloudSyncIntervalMinutes = Math.Clamp(data.ClipboardCloudSyncIntervalMinutes ?? 15, 15, 240);
+            _clipboardPasteToFrontApplication = data.ClipboardPasteToFrontApplication ?? true;
+            _translatorHotKey = ValidHotKey(data.TranslatorHotKey, HotKeyDefinition.TranslatorDefault);
+            _aiTranslation = (data.AITranslation ?? AITranslationSettings.Default).Normalized();
             Save();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException or InvalidOperationException)
@@ -1112,7 +1163,10 @@ public sealed class AppPreferences : ObservableObject
             ClipboardIgnoredProcessNames = _clipboardIgnoredProcessNames.ToList(),
             ClipboardCloudSyncEnabled = _clipboardCloudSyncEnabled,
             ClipboardCloudSyncFolder = _clipboardCloudSyncFolder,
-            ClipboardCloudSyncIntervalMinutes = _clipboardCloudSyncIntervalMinutes
+            ClipboardCloudSyncIntervalMinutes = _clipboardCloudSyncIntervalMinutes,
+            ClipboardPasteToFrontApplication = _clipboardPasteToFrontApplication,
+            TranslatorHotKey = _translatorHotKey,
+            AITranslation = _aiTranslation
         };
         var write = _persistence.SaveAsync(data, _preserveUnreadable);
         _latestSave = write;
@@ -1376,5 +1430,11 @@ public sealed class AppPreferences : ObservableObject
         public string? ClipboardCloudSyncFolder { get; set; }
 
         public int? ClipboardCloudSyncIntervalMinutes { get; set; }
+
+        public bool? ClipboardPasteToFrontApplication { get; set; }
+
+        public HotKeyDefinition? TranslatorHotKey { get; set; }
+
+        public AITranslationSettings? AITranslation { get; set; }
     }
 }

@@ -41,6 +41,7 @@ public sealed class MainController
     private ClipboardWindow? _clipboardWindow;
     private SettingsWindow? _settingsWindow;
     private LargeTypeWindow? _largeTypeWindow;
+    private TranslatorWindow? _translatorWindow;
     private TrayIconService? _tray;
     private EventWaitHandle? _showLauncherEvent;
     private HotKeyDefinition? _lastWorkingLauncher;
@@ -69,12 +70,14 @@ public sealed class MainController
             _recentDocuments,
             OpenSettings,
             ShowLargeType,
-            ActivePanel);
+            ActivePanel,
+            text => ShowTranslator(text));
         _launcherWindow.Attach(_launcher, _preferences);
         _launcherWindow.OnOpenSettings = OpenSettings;
         _launcherWindow.OnShowLargeType = ShowLargeType;
-        _clipboardWindow.Attach(_clipboard, _snippets);
+        _clipboardWindow.Attach(_clipboard, _snippets, _preferences);
         _clipboardWindow.OnOpenSettings = OpenSettings;
+        _clipboardWindow.OnNotice = ShowNotice;
 
         _tray = new TrayIconService(_preferences);
         _tray.ShowLauncherRequested += ShowLauncher;
@@ -122,6 +125,7 @@ public sealed class MainController
         _hotKeys?.RemoveAll();
         _launcherWindow?.HidePanel();
         _clipboardWindow?.HidePanel();
+        _translatorWindow?.Close();
         try
         {
             _settingsWindow?.Close();
@@ -179,6 +183,7 @@ public sealed class MainController
             _lastWorkingClipboard = configuredClipboard;
             _preferences.HotKeyError = null;
             UpdateTrayHotKeyTitles(configuredLauncher, configuredClipboard);
+            RegisterTranslatorHotKey();
             return;
         }
 
@@ -235,12 +240,30 @@ public sealed class MainController
                 ? $"新快捷键已被占用，已启用可用组合：{launcherHotKey.DisplayString} / {clipboardHotKey.DisplayString}"
                 : $"默认快捷键被占用，已启用可用组合：{launcherHotKey.DisplayString} / {clipboardHotKey.DisplayString}";
             UpdateTrayHotKeyTitles(launcherHotKey, clipboardHotKey);
+            RegisterTranslatorHotKey();
         }
         else
         {
             _hotKeys.RemoveAll();
             _preferences.HotKeyError = "所有候选快捷键均被其他应用占用，请关闭占用程序或在设置中更换快捷键。";
         }
+    }
+
+    /// <summary>
+    /// The AI translator shortcut is only claimed while the feature is enabled,
+    /// and a conflict is reported without touching the launcher/clipboard keys.
+    /// </summary>
+    private void RegisterTranslatorHotKey()
+    {
+        if (_hotKeys is null || !_preferences.AITranslation.Enabled) { return; }
+        var translator = _preferences.TranslatorHotKey;
+        if (_hotKeys.Register(3, translator, () => ToggleTranslator()))
+        {
+            return;
+        }
+
+        var message = $"AI 翻译快捷键 {translator.DisplayString} 已被其他应用占用，请在设置中更换。";
+        _preferences.HotKeyError = _preferences.HotKeyError is { Length: > 0 } existing ? existing + "\n" + message : message;
     }
 
     private HotKeyDefinition? TryRegisterFirstAvailable(
@@ -295,6 +318,7 @@ public sealed class MainController
             return;
         }
 
+        PasteService.Shared.RememberForegroundWindow();
         _clipboardWindow?.HidePanel();
         _launcherWindow.ShowLauncher();
     }
@@ -312,6 +336,7 @@ public sealed class MainController
             return;
         }
 
+        PasteService.Shared.RememberForegroundWindow();
         _launcherWindow?.HidePanel();
         _clipboardWindow.ShowClipboard();
     }
@@ -350,6 +375,41 @@ public sealed class MainController
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
+    }
+
+    private TranslatorWindow TranslatorWindow()
+    {
+        if (_translatorWindow is null)
+        {
+            var window = new TranslatorWindow(_preferences)
+            {
+                OnOpenSettings = OpenSettings,
+                OnNotice = ShowNotice
+            };
+            window.Closed += (_, _) => _translatorWindow = null;
+            _translatorWindow = window;
+        }
+
+        return _translatorWindow;
+    }
+
+    private void ShowTranslator(string text = "")
+    {
+        var window = TranslatorWindow();
+        if (!window.IsVisible) { PasteService.Shared.RememberForegroundWindow(); }
+        window.ShowTranslator(text);
+    }
+
+    private void ToggleTranslator()
+    {
+        var window = TranslatorWindow();
+        if (!window.IsVisible) { PasteService.Shared.RememberForegroundWindow(); }
+        window.Toggle();
+    }
+
+    private void ShowNotice(string text)
+    {
+        _tray?.ShowNotice(text);
     }
 
     private void ShowLargeType(string text)

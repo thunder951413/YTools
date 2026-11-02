@@ -99,6 +99,9 @@ public abstract record ResultAction
 
     public sealed record OpenSettings : ResultAction;
 
+    /// <summary>Opens the AI translation window with the text filled in.</summary>
+    public sealed record OpenTranslator(string Text) : ResultAction;
+
     public sealed record None : ResultAction;
 }
 
@@ -224,6 +227,8 @@ public sealed class ModuleResultPolicy
             case ResultAction.None:
             case ResultAction.OpenSettings:
                 return true;
+            case ResultAction.OpenTranslator translator:
+                return translator.Text.Length <= TranslationQuery.MaximumCharacters;
             case ResultAction.Open open:
                 return descriptor.Capabilities.Contains(ModuleCapability.LocalFileRead)
                     && LocalPathPolicy.IsValid(open.Path);

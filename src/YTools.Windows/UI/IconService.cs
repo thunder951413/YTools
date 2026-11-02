@@ -60,6 +60,9 @@ public static class IconService
                 "doc.text.magnifyingglass" => "\uE8A5",
                 "app.dashed" => "\uE71B",
                 "gearshape.2" => "\uE713",
+                "character.bubble" => "\uE8C1",
+                "macwindow" => "\uE8A7",
+                "exclamationmark.triangle" => "\uE7BA",
                 _ => DefaultGlyph
             };
         });

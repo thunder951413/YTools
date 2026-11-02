@@ -42,6 +42,7 @@ public partial class SettingsWindow : Window
     private Action<SnippetItem?>? _loadSnippetEditor;
     private HotKeyRecorder? _launcherRecorder;
     private HotKeyRecorder? _clipboardRecorder;
+    private HotKeyRecorder? _translatorRecorder;
     private System.ComponentModel.PropertyChangedEventHandler? _preferenceChanged;
     private System.ComponentModel.PropertyChangedEventHandler? _snippetChanged;
 
@@ -269,6 +270,7 @@ public partial class SettingsWindow : Window
             new NavItem("剪贴板", "\uE8C8", "clipboard"),
             new NavItem("片段", "\uE8FD", "snippets"),
             new NavItem("系统命令", "\uE756", "systemCommands"),
+            new NavItem("AI 翻译", "\uE8C1", "translation"),
             new NavItem("隐私", "\uE72E", "privacy")
         ]);
         NavList.ItemsSource = _navItems;
@@ -281,7 +283,8 @@ public partial class SettingsWindow : Window
         _pages[_navItems[6]] = SafePage("剪贴板", BuildClipboardPage);
         _pages[_navItems[7]] = SafePage("片段", BuildSnippetsPage);
         _pages[_navItems[8]] = SafePage("系统命令", BuildSystemCommandsPage);
-        _pages[_navItems[9]] = SafePage("隐私", BuildPrivacyPage);
+        _pages[_navItems[9]] = SafePage("AI 翻译", BuildTranslationPage);
+        _pages[_navItems[10]] = SafePage("隐私", BuildPrivacyPage);
     }
 
     private UserControl SafePage(string name, Func<UserControl> build)
@@ -644,6 +647,16 @@ public partial class SettingsWindow : Window
         };
         _clipboardRecorder.Bind(_preferences?.ClipboardHotKey ?? HotKeyDefinition.ClipboardDefault);
         stack.Children.Add(RegisterTarget("ClipboardHotKey", _clipboardRecorder));
+        _translatorRecorder = new HotKeyRecorder("AI 翻译窗口快捷键（启用 AI 翻译后生效）");
+        _translatorRecorder.Changed += definition =>
+        {
+            if (_preferences is not null)
+            {
+                _preferences.TranslatorHotKey = definition;
+            }
+        };
+        _translatorRecorder.Bind(_preferences?.TranslatorHotKey ?? HotKeyDefinition.TranslatorDefault);
+        stack.Children.Add(RegisterTarget("TranslatorHotKey", _translatorRecorder));
         var hotKeyError = new TextBlock
         {
             Style = (Style)FindResource("HintText")
@@ -668,6 +681,13 @@ public partial class SettingsWindow : Window
         stack.Children.Add(SliderRow("最大条数", "ClipboardMaximumItems", 50, 1_000, 10));
         stack.Children.Add(SliderRow("单条文本上限（字符）", "ClipboardMaximumTextCharacters", 100, 10_000, 100));
         stack.Children.Add(CheckBox("保存图片", "ClipboardStoreImages", "图片默认关闭，单项限制 5 MB"));
+        stack.Children.Add(CheckBox("选中后直接粘贴到前台应用", "ClipboardPasteToFrontApplication",
+            "回车或单击后切回之前的窗口并发送 Ctrl+V；Ctrl+Enter 仅复制"));
+        stack.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("HintText"),
+            Text = "以管理员身份运行的窗口会拒绝来自普通进程的按键，此时内容仍会复制到剪贴板，请手动粘贴。"
+        });
         stack.Children.Add(SubHeader("忽略的进程"));
         stack.Children.Add(new TextBlock
         {
@@ -763,6 +783,212 @@ public partial class SettingsWindow : Window
         stack.Children.Add(syncStatus);
         page.Content = Scroll(stack);
         return page;
+    }
+
+    private UserControl BuildTranslationPage()
+    {
+        var page = new UserControl();
+        var stack = new StackPanel();
+        var settings = _preferences?.AITranslation ?? AITranslationSettings.Default;
+        void Update(Func<AITranslationSettings, AITranslationSettings> change)
+        {
+            if (_preferences is not null) { _preferences.AITranslation = change(_preferences.AITranslation); }
+        }
+
+        stack.Children.Add(Header("AI 翻译"));
+        stack.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("HintText"),
+            TextWrapping = TextWrapping.Wrap,
+            Text = "默认关闭。启用后，在启动器输入关键词加文字（如 fy hello）或按快捷键打开翻译窗口，"
+                + "待译文本会发送到下方配置的接口（仅 HTTPS；http 只允许本机 localhost 模型）。不跟随重定向、不保存 Cookie，API Key 使用 Windows 数据保护加密保存。"
+        });
+        var enabled = new CheckBox
+        {
+            Content = "启用 AI 翻译",
+            Margin = new Thickness(0, 6, 0, 6),
+            IsChecked = settings.Enabled,
+            ToolTip = "关闭时不会发出任何翻译请求"
+        };
+        enabled.Click += (_, _) => Update(current => current with { Enabled = enabled.IsChecked == true });
+        stack.Children.Add(RegisterTarget("AITranslationEnabled", enabled));
+
+        stack.Children.Add(SubHeader("接口"));
+        var baseUrl = new TextBox { Text = settings.BaseUrl, Margin = new Thickness(0, 2, 0, 4) };
+        var model = new TextBox { Text = settings.Model, Margin = new Thickness(0, 2, 0, 4) };
+        var endpointStatus = new TextBlock { Style = (Style)FindResource("HintText"), TextWrapping = TextWrapping.Wrap };
+        void ValidateEndpoint()
+        {
+            var current = _preferences?.AITranslation ?? settings;
+            var valid = TranslationEndpointPolicy.TryCreateRequestUri(current.BaseUrl, current.Format, out var url, out var rejection);
+            endpointStatus.Text = valid ? $"请求地址：{url}" : rejection.Message();
+            endpointStatus.SetResourceReference(TextBlock.ForegroundProperty, valid ? "TextSecondaryBrush" : "ErrorBrush");
+        }
+
+        var format = new ComboBox
+        {
+            ItemsSource = Enum.GetValues<TranslationApiFormat>()
+                .Select(value => new EnumOption(value == TranslationApiFormat.Anthropic ? "Anthropic" : "OpenAI 兼容", value)).ToList(),
+            DisplayMemberPath = nameof(EnumOption.Title),
+            SelectedValuePath = nameof(EnumOption.Value),
+            SelectedValue = settings.Format
+        };
+        format.SelectionChanged += (_, _) =>
+        {
+            if (format.SelectedValue is TranslationApiFormat value) { Update(current => current with { Format = value }); ValidateEndpoint(); }
+        };
+        var provider = new ComboBox
+        {
+            ItemsSource = Enum.GetValues<AITranslationProvider>().Select(value => new EnumOption(value.Title(), value)).ToList(),
+            DisplayMemberPath = nameof(EnumOption.Title),
+            SelectedValuePath = nameof(EnumOption.Value),
+            SelectedValue = settings.Provider
+        };
+        provider.SelectionChanged += (_, _) =>
+        {
+            if (provider.SelectedValue is not AITranslationProvider value) { return; }
+            // A preset only fills the editable fields; "custom" keeps what is there.
+            if (value != AITranslationProvider.Custom)
+            {
+                baseUrl.Text = value.BaseUrl();
+                model.Text = value.DefaultModel();
+                format.SelectedValue = value.Format();
+            }
+
+            Update(current => value == AITranslationProvider.Custom
+                ? current with { Provider = value }
+                : current with { Provider = value, BaseUrl = value.BaseUrl(), Model = value.DefaultModel(), Format = value.Format() });
+            ValidateEndpoint();
+        };
+        stack.Children.Add(SettingRow("服务商", RegisterTarget("AITranslationProvider", provider)));
+        stack.Children.Add(SettingRow("接口格式", format));
+        baseUrl.LostFocus += (_, _) => { Update(current => current with { BaseUrl = baseUrl.Text }); ValidateEndpoint(); };
+        model.LostFocus += (_, _) => Update(current => current with { Model = model.Text });
+        stack.Children.Add(SettingRow("接口地址", baseUrl));
+        stack.Children.Add(endpointStatus);
+        stack.Children.Add(SettingRow("模型", model));
+        ValidateEndpoint();
+
+        var apiKey = new PasswordBox { Margin = new Thickness(0, 2, 0, 4) };
+        stack.Children.Add(SettingRow("API Key", RegisterTarget("AITranslationAPIKey", apiKey)));
+        var keyStatus = new TextBlock { Style = (Style)FindResource("HintText") };
+        async void RefreshKeyStatus()
+        {
+            // Reading the vault decrypts a file; keep it off the UI thread.
+            var hasKey = await Task.Run(() => AITranslationService.Shared.HasApiKey);
+            keyStatus.Text = hasKey
+                ? "已加密保存 API Key。留空并保存可清除。"
+                : "尚未保存 API Key（本机 Ollama 等无需填写）。";
+        }
+
+        RefreshKeyStatus();
+        var keyButtons = new StackPanel { Orientation = Orientation.Horizontal };
+        keyButtons.Children.Add(Button("加密保存 API Key", async () =>
+        {
+            var error = await AITranslationService.Shared.SaveApiKeyAsync(apiKey.Password);
+            apiKey.Clear();
+            RefreshKeyStatus();
+            if (error is not null)
+            {
+                MessageBox.Show(this, error, "AI 翻译", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }));
+        keyButtons.Children.Add(Button("测试翻译", async () =>
+        {
+            if (_preferences is null) { return; }
+            try
+            {
+                // Uses the saved settings as they are: nothing is sent while the switch is off.
+                var output = await AITranslationService.Shared.TranslateAsync("你好，世界", _preferences.AITranslation);
+                MessageBox.Show(this, $"你好，世界 → {output.Text}", "AI 翻译测试成功", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception exception)
+            {
+                MessageBox.Show(this, exception.Message, "AI 翻译测试失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }));
+        stack.Children.Add(keyButtons);
+        stack.Children.Add(keyStatus);
+
+        stack.Children.Add(SubHeader("语言与使用"));
+        IReadOnlyList<EnumOption> languages = Enum.GetValues<TranslationLanguage>()
+            .Select(value => new EnumOption(value.Title(), value)).ToList();
+        var primary = new ComboBox
+        {
+            ItemsSource = languages,
+            DisplayMemberPath = nameof(EnumOption.Title),
+            SelectedValuePath = nameof(EnumOption.Value),
+            SelectedValue = settings.PrimaryLanguage
+        };
+        primary.SelectionChanged += (_, _) =>
+        {
+            if (primary.SelectedValue is TranslationLanguage value) { Update(current => current with { PrimaryLanguage = value }); }
+        };
+        var secondary = new ComboBox
+        {
+            ItemsSource = languages,
+            DisplayMemberPath = nameof(EnumOption.Title),
+            SelectedValuePath = nameof(EnumOption.Value),
+            SelectedValue = settings.SecondaryLanguage
+        };
+        secondary.SelectionChanged += (_, _) =>
+        {
+            if (secondary.SelectedValue is TranslationLanguage value) { Update(current => current with { SecondaryLanguage = value }); }
+        };
+        stack.Children.Add(SettingRow("母语", RegisterTarget("AITranslationLanguages", primary)));
+        stack.Children.Add(SettingRow("互译语言", secondary));
+        stack.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("HintText"),
+            Text = "自动判断方向：母语文本译成互译语言，其他文本译成母语；翻译窗口中可随时切换方向。"
+        });
+        var keywords = new TextBox { Text = settings.Keywords, Margin = new Thickness(0, 2, 0, 4) };
+        keywords.LostFocus += (_, _) => Update(current => current with { Keywords = keywords.Text });
+        stack.Children.Add(SettingRow("启动器关键词", keywords));
+        var delay = new Slider
+        {
+            Minimum = AITranslationSettings.MinimumLiveDelayMilliseconds,
+            Maximum = AITranslationSettings.MaximumLiveDelayMilliseconds,
+            TickFrequency = 100,
+            IsSnapToTickEnabled = true,
+            Value = settings.LiveDelayMilliseconds,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var delayText = new TextBlock { Style = (Style)FindResource("HintText"), Text = $"输入停顿 {settings.LiveDelayMilliseconds} ms 后发送请求" };
+        delay.ValueChanged += (_, args) =>
+        {
+            var milliseconds = (int)args.NewValue;
+            delayText.Text = $"输入停顿 {milliseconds} ms 后发送请求";
+            Update(current => current with { LiveDelayMilliseconds = milliseconds });
+        };
+        stack.Children.Add(SettingRow("停顿后翻译", delay));
+        stack.Children.Add(delayText);
+        stack.Children.Add(new TextBlock
+        {
+            Style = (Style)FindResource("HintText"),
+            Text = $"翻译窗口快捷键：{(_preferences?.TranslatorHotKey ?? HotKeyDefinition.TranslatorDefault).DisplayString}（可在“快捷键”中更改）。"
+        });
+        page.Content = Scroll(stack);
+        return page;
+    }
+
+    private static Grid SettingRow(string label, FrameworkElement control)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 6, 0, 6) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var labelText = new TextBlock
+        {
+            Text = label,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 13
+        };
+        labelText.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+        grid.Children.Add(labelText);
+        control.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(control, 1);
+        grid.Children.Add(control);
+        return grid;
     }
 
     private UserControl BuildSnippetsPage()

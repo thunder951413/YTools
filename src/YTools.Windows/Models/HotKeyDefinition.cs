@@ -20,6 +20,9 @@ public readonly record struct HotKeyDefinition(int KeyCode, HotKeyModifiers Modi
     public static readonly HotKeyDefinition ClipboardDefault =
         new(0x43, HotKeyModifiers.Alt | HotKeyModifiers.Control);
 
+    public static readonly HotKeyDefinition TranslatorDefault =
+        new(0x54, HotKeyModifiers.Control | HotKeyModifiers.Alt);
+
     public static readonly HotKeyDefinition LauncherFallback =
         new(0x20, HotKeyModifiers.Control | HotKeyModifiers.Alt);
 

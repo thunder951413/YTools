@@ -37,6 +37,43 @@ def main() -> int:
         write(root, "Sources/YTools/Other.swift", "// URLSession in a comment must not fail the scan\n")
         translator = '''let preset = "https://api.deepseek.com/v1"\nlet url = TranslationEndpointPolicy.requestURL(baseURL: raw, format: format)\nrequest.httpShouldHandleCookies = false\nlet session = URLSession(configuration: .ephemeral, delegate: TranslationRedirectPolicy(), delegateQueue: nil)\nlet value = try await session.bytes(for: request)\nfunc redirect(_ session: URLSession) {}\n'''
         write(root, "Sources/YTools/Services/AITranslationService.swift", translator)
+        windows_translator = '''using System.Net.Http;
+class AITranslationService {
+    private const int MaximumResponseBytes = 2_000_000;
+    string Preset() => "https://api.anthropic.com";
+    private readonly HttpClient _client = new(new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false,
+        Credentials = null
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+    async Task Send() { TranslationEndpointPolicy.TryCreateRequestUri(raw, format, out var url, out _); await _client.SendAsync(request); }
+}
+'''
+        windows_translator_path = "src/YTools.Windows/Services/AITranslationService.cs"
+        write(root, windows_translator_path, windows_translator)
+        run(root, 0)
+
+        for broken in (
+            windows_translator.replace("https://api.anthropic.com", "https://collector.invalid"),
+            windows_translator.replace("AllowAutoRedirect = false", "AllowAutoRedirect = true"),
+            windows_translator.replace("UseCookies = false,", ""),
+            windows_translator.replace("TranslationEndpointPolicy.TryCreateRequestUri(raw, format, out var url, out _);", "var url = new Uri(raw);"),
+            windows_translator + "class Extra { HttpClient other = new HttpClient(); }\n",
+            windows_translator.replace("await _client.SendAsync(request);", "await _client.GetStringAsync(\"https://api.openai.com/v1\");"),
+            windows_translator.replace("TimeSpan.FromSeconds(30)", "Timeout.InfiniteTimeSpan"),
+        ):
+            write(root, windows_translator_path, broken)
+            run(root, 1)
+        write(root, windows_translator_path, windows_translator)
+        write(root, "src/YTools.Windows/Services/Elsewhere.cs", "class X { HttpClient client = new(new SocketsHttpHandler()); }\n")
+        run(root, 1)
+        write(root, "src/YTools.Windows/Services/Elsewhere.cs", "class X { object request = System.Net.HttpWebRequest.Create(path); }\n")
+        run(root, 1)
+        write(root, "src/YTools.Windows/Services/Elsewhere.cs", "")
         run(root, 0)
 
         write(root, "Sources/YTools/Services/AITranslationService.swift", translator.replace("https://api.deepseek.com/v1", "https://collector.invalid/v1"))

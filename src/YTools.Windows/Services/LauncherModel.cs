@@ -60,7 +60,8 @@ public sealed class LauncherModel : ObservableObject
         RecentDocumentsManager recentDocuments,
         Action onOpenSettings,
         Action<string> onShowLargeType,
-        Func<System.Windows.Window?> ownerProvider)
+        Func<System.Windows.Window?> ownerProvider,
+        Action<string>? onOpenTranslator = null)
     {
         _preferences = preferences;
         _snippets = snippets;
@@ -73,7 +74,8 @@ public sealed class LauncherModel : ObservableObject
             recentDocuments,
             onOpenSettings,
             onShowLargeType,
-            ownerProvider);
+            ownerProvider,
+            onOpenTranslator);
         _actionDispatcher.BusyStateChanged += (_, _) =>
         {
             RaisePropertyChanged(nameof(IsActionBusy));
@@ -972,7 +974,12 @@ public sealed class LauncherModel : ObservableObject
             new RegisteredSearchModule(
                 new SystemCommandsModule(_preferences.SystemCommandConfiguration),
                 SearchContentType.SystemTools,
-                new ModuleResultPolicy(allowsPrivilegedActions: true))
+                new ModuleResultPolicy(allowsPrivilegedActions: true)),
+            new RegisteredSearchModule(
+                new AITranslationModule(_preferences.AITranslation),
+                SearchContentType.TextTools,
+                new ModuleResultPolicy(),
+                AITranslationModule.SearchBudget)
         ];
     }
 

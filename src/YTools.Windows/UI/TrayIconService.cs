@@ -81,7 +81,7 @@ public sealed class TrayIconService : IDisposable
             {
                 Application.Current.Dispatcher.Invoke(UpdateVisibility);
             }
-            else if (args.PropertyName == nameof(AppPreferences.ClipboardCloudSyncEnabled))
+            else if (args.PropertyName is nameof(AppPreferences.ClipboardCloudSyncEnabled) or nameof(AppPreferences.AITranslation))
             {
                 Application.Current.Dispatcher.Invoke(() => _privacyItem!.Text = PrivacyTitle());
             }
@@ -101,9 +101,20 @@ public sealed class TrayIconService : IDisposable
 
     private string PrivacyTitle()
     {
-        return _preferences.ClipboardCloudSyncEnabled
-            ? "剪贴板同步已开启 · 仅连接坚果云"
-            : "本机模式 · 无网络连接";
+        return (_preferences.ClipboardCloudSyncEnabled, _preferences.AITranslation.Enabled) switch
+        {
+            (true, true) => "已联网：坚果云同步 · AI 翻译接口",
+            (true, false) => "剪贴板同步已开启 · 仅连接坚果云",
+            (false, true) => "AI 翻译已开启 · 仅连接所配置的接口",
+            _ => "本机模式 · 无网络连接"
+        };
+    }
+
+    /// <summary>Short notification, e.g. when a choice could only be copied.</summary>
+    public void ShowNotice(string text)
+    {
+        if (!_notifyIcon.Visible) { return; }
+        _notifyIcon.ShowBalloonTip(3_000, "YTools", text, System.Windows.Forms.ToolTipIcon.Info);
     }
 
     public void UpdatePauseMenu(bool paused)

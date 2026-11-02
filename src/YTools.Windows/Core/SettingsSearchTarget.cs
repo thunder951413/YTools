@@ -44,6 +44,12 @@ public static partial class SettingsSearchCatalog
         new("CloudPassphrase", "clipboard", "clipboard", "同步口令", "", "坚果云 webdav 同步口令 passphrase 加密 密钥 密码"),
         new("LauncherHotKey", "shortcuts", "shortcuts", "启动器快捷键", "显示启动器", "主快捷键 热键 hotkey launcher"),
         new("ClipboardHotKey", "shortcuts", "shortcuts", "剪贴板快捷键", "剪贴板历史", "热键 剪贴板 hotkey"),
+        new("ClipboardPasteToFrontApplication", "clipboard", "clipboard", "直接粘贴到前台应用", "选中后直接粘贴到前台应用", "粘贴 自动 前台 ctrl+v"),
+        new("AITranslationEnabled", "tools", "translation", "AI 翻译", "启用 AI 翻译", "翻译 ai translate api 中英 英文 中文 fy tr"),
+        new("AITranslationProvider", "tools", "translation", "AI 翻译服务商", "服务商", "openai deepseek 通义 千问 kimi moonshot 智谱 glm openrouter claude anthropic ollama"),
+        new("AITranslationAPIKey", "tools", "translation", "AI 翻译 API Key", "API Key", "api key 密钥 令牌 token"),
+        new("AITranslationLanguages", "tools", "translation", "翻译语言对", "语言对", "语言 中文 英文 日语 互译"),
+        new("TranslatorHotKey", "shortcuts", "shortcuts", "AI 翻译窗口快捷键", "AI 翻译窗口", "翻译 快捷键 窗口 弹窗"),
     ];
     public static IReadOnlyList<SettingsSearchTarget> SearchTargets(string query)
     {

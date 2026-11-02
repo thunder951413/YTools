@@ -33,6 +33,8 @@ public enum PanelCommandKind
     DeleteClipboardItem,
     SaveClipboardAsSnippet,
     ToggleClipboardPreview,
+    /// <summary>Ctrl+Enter in the clipboard: copy only, even when pasting is enabled.</summary>
+    CopyClipboardItemOnly,
     TogglePreview,
     ShowLargeType,
     RevealSelected,
@@ -64,7 +66,6 @@ public sealed class PanelCommandRouter
     public PanelCommand? Command(PanelKeyEvent keyEvent, PanelInputMode mode)
     {
         if (keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command)
-            && mode == PanelInputMode.Launcher
             && ResultIndexForNumberKeyCode(keyEvent.KeyCode) is { } index)
         {
             return new PanelCommand(PanelCommandKind.ActivateResult, index);
@@ -74,6 +75,8 @@ public sealed class PanelCommandRouter
         {
             (VkReturn, _) when keyEvent.Modifiers == PanelKeyModifiers.None =>
                 new PanelCommand(PanelCommandKind.ActivateSelected),
+            (VkReturn, PanelInputMode.Clipboard) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
+                new PanelCommand(PanelCommandKind.CopyClipboardItemOnly),
             (VkUp, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Option) =>
                 new PanelCommand(PanelCommandKind.AddSelectedToBuffer, 0),
             (VkDown, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Option) =>

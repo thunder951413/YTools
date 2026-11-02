@@ -33,8 +33,8 @@ v0.3.0 已补齐双端逐步搜索、稳定结果区与选择保留、完整剪�
 - [ ] Authenticode 签名与安装包（Inno Setup/MSIX）
 - [ ] 更多离线词典（英英、专业术语）
 - [ ] 剪贴板忽略规则的 UI 增强（从运行进程选择）
-- [ ] Windows：剪贴板选中后自动粘贴回原窗口（SendInput Ctrl+V）
-- [ ] Windows：移植 AI 翻译（关键词 + 翻译小窗），与 macOS 共用端点策略
+- [x] Windows：剪贴板选中后自动粘贴回原窗口（SendInput Ctrl+V）
+- [x] Windows：移植 AI 翻译（关键词 + 翻译小窗），与 macOS 共用端点策略
 
 ## 明确不做
 

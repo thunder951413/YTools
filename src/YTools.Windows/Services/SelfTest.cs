@@ -94,6 +94,32 @@ public static class SelfTest
                 router.Command(new PanelKeyEvent(0x26, PanelKeyModifiers.Option), PanelInputMode.Launcher)?.Kind
                     == PanelCommandKind.AddSelectedToBuffer);
 
+            Check(
+                "router.clipboardCopyOnlyAndQuickPick",
+                router.Command(new PanelKeyEvent(0x0D, PanelKeyModifiers.Command), PanelInputMode.Clipboard)?.Kind
+                    == PanelCommandKind.CopyClipboardItemOnly
+                && router.Command(new PanelKeyEvent(0x33, PanelKeyModifiers.Command), PanelInputMode.Clipboard)
+                    == new PanelCommand(PanelCommandKind.ActivateResult, 2));
+
+            Check("translation.direction",
+                TranslationDirection.Target("今天天气很好", TranslationLanguage.ChineseSimplified, TranslationLanguage.English) == TranslationLanguage.English
+                && TranslationDirection.Target("good morning", TranslationLanguage.ChineseSimplified, TranslationLanguage.English) == TranslationLanguage.ChineseSimplified);
+            Check("translation.keyword", TranslationQuery.Parse("fy hello", ["fy"]) == "hello" && TranslationQuery.Parse("fyi", ["fy"]) is null);
+            // Built from the audited presets: product sources may not carry other endpoint literals.
+            var deepSeek = AITranslationProvider.DeepSeek.BaseUrl();
+            var remoteHttp = AITranslationProvider.Ollama.BaseUrl().Replace("localhost", "example.com", StringComparison.Ordinal);
+            var withCredentials = new UriBuilder(deepSeek) { UserName = "user", Password = "key" }.Uri.AbsoluteUri;
+            Check("translation.endpointHttpsOnly",
+                TranslationEndpointPolicy.TryCreateRequestUri(deepSeek, TranslationApiFormat.OpenAICompatible, out var translationUrl, out _)
+                && translationUrl.AbsoluteUri == deepSeek + "/chat/completions"
+                && !TranslationEndpointPolicy.TryCreateRequestUri(remoteHttp, TranslationApiFormat.OpenAICompatible, out _, out _)
+                && !TranslationEndpointPolicy.TryCreateRequestUri(withCredentials, TranslationApiFormat.Anthropic, out _, out _));
+            Check("translation.payload", TranslationPayload.Translation(
+                Encoding.UTF8.GetBytes("{\"content\":[{\"type\":\"text\",\"text\":\"你好\"}]}"), TranslationApiFormat.Anthropic).Text == "你好");
+            var disabledTranslation = new AITranslationModule(YTools.Models.AITranslationSettings.Default)
+                .SearchAsync(new ModuleSearchRequest("fy hello")).GetAwaiter().GetResult();
+            Check("translation.offByDefault", disabledTranslation.Count == 1 && disabledTranslation[0].Action is ResultAction.OpenSettings);
+
             var policy = new ModuleResultPolicy();
             var module = new ModuleDescriptor("module", "模块");
             var fileResult = new LauncherResult(

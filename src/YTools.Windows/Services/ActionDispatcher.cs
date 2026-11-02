@@ -43,6 +43,7 @@ public sealed class ActionDispatcher
     private readonly RecentDocumentsManager _recentDocuments;
     private readonly Action _onOpenSettings;
     private readonly Action<string> _onShowLargeType;
+    private readonly Action<string> _onOpenTranslator;
     private readonly Func<Window?> _ownerProvider;
     private int _backgroundOperationActive;
     private Task _pendingOperation = Task.CompletedTask;
@@ -77,12 +78,14 @@ public sealed class ActionDispatcher
         RecentDocumentsManager recentDocuments,
         Action onOpenSettings,
         Action<string> onShowLargeType,
-        Func<Window?> ownerProvider)
+        Func<Window?> ownerProvider,
+        Action<string>? onOpenTranslator = null)
     {
         _snippets = snippets;
         _recentDocuments = recentDocuments;
         _onOpenSettings = onOpenSettings;
         _onShowLargeType = onShowLargeType;
+        _onOpenTranslator = onOpenTranslator ?? (_ => { });
         _ownerProvider = ownerProvider;
     }
 
@@ -143,6 +146,9 @@ public sealed class ActionDispatcher
                 break;
             case ResultAction.OpenSettings:
                 _onOpenSettings();
+                break;
+            case ResultAction.OpenTranslator translator:
+                _onOpenTranslator(translator.Text);
                 break;
             case ResultAction.None:
                 return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);

@@ -22,6 +22,7 @@ SETTINGS_ENDPOINT = Path("src/YTools.Windows/UI/SettingsWindow.xaml.cs")
 MAC_ACTION_DISPATCHER = Path("Sources/YTools/Services/ActionDispatcher.swift")
 ENDPOINT = "https://dav.jianguoyun.com/dav/"
 SWIFT_TRANSLATION = Path("Sources/YTools/Services/AITranslationService.swift")
+WINDOWS_TRANSLATION = Path("src/YTools.Windows/Services/AITranslationService.cs")
 TRANSLATION_PRESETS = {
     "https://api.openai.com/v1",
     "https://api.deepseek.com/v1",
@@ -50,6 +51,10 @@ FORBIDDEN = {
     ),
     ".cs": (
         r"\bHttpClient\b",
+        r"\bSocketsHttpHandler\b",
+        r"\bHttpClientHandler\b",
+        r"\bHttpMessageInvoker\b",
+        r"\b(?:Http|Ftp|File)?WebRequest\b",
         r"\bWebClient\b",
         r"\bTcpClient\b",
         r"\bUdpClient\b",
@@ -156,6 +161,28 @@ def allowed_network(path: Path, text: str) -> list[str]:
             errors.append("Swift translation service may contain exactly one URLSession constructor and one delegate type annotation")
         if any(url not in TRANSLATION_PRESETS for url in url_literals):
             errors.append("Swift translation service contains an endpoint that is not an audited preset")
+    elif path == WINDOWS_TRANSLATION:
+        handler = re.search(r"private readonly HttpClient _client = new\(new SocketsHttpHandler\s*\{(?P<body>[^}]*)\}\)", text)
+        if handler is None:
+            errors.append("Windows translation service must retain its single SocketsHttpHandler-backed HttpClient field")
+        else:
+            body = handler.group("body")
+            for setting in ("AllowAutoRedirect = false", "UseCookies = false", "Credentials = null"):
+                if setting not in body:
+                    errors.append(f"Windows translation handler must keep `{setting}`")
+            if re.search(r"AllowAutoRedirect\s*=\s*true|UseCookies\s*=\s*true", text):
+                errors.append("Windows translation service may not re-enable redirects or cookies")
+        if len(re.findall(r"\bHttpClient\b", text)) != 1 or len(re.findall(r"\bSocketsHttpHandler\b", text)) != 1:
+            errors.append("Windows translation service may contain exactly one HttpClient and one SocketsHttpHandler")
+        if not re.search(r"Timeout = TimeSpan\.FromSeconds\(30\)", text) or "MaximumResponseBytes" not in text:
+            errors.append("Windows translation service must keep its 30 s timeout and response size cap")
+        if "TranslationEndpointPolicy.TryCreateRequestUri(" not in text:
+            errors.append("Windows translation service must validate its endpoint")
+        client_calls = re.findall(r"\b_client\.(\w+)", text)
+        if client_calls != ["SendAsync"]:
+            errors.append("Windows translation service may only send through one _client.SendAsync call")
+        if any(url not in TRANSLATION_PRESETS for url in url_literals):
+            errors.append("Windows translation service contains an endpoint that is not an audited preset")
     elif path == SETTINGS_ENDPOINT:
         # This is descriptive UI text, not a transport. It may name only the
         # same audited endpoint used by the synchronizer.
@@ -195,6 +222,8 @@ def scan(root: Path) -> list[str]:
                     if relative in {SWIFT_SYNC, SWIFT_TRANSLATION} and token == "URLSession":
                         continue
                     if relative == WINDOWS_SYNC and token in {"WebDAVClient", "new Client("}:
+                        continue
+                    if relative == WINDOWS_TRANSLATION and token in {"HttpClient", "SocketsHttpHandler"}:
                         continue
                     if relative == MAC_ACTION_DISPATCHER and (
                         token == "Process(" or token.startswith("process.arguments") or token.startswith("process.executableURL")

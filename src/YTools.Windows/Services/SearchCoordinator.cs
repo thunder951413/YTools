@@ -4,10 +4,16 @@ using YTools.Services.Modules;
 
 namespace YTools.Services;
 
+/// <summary>
+/// <paramref name="Timeout"/> overrides the 2 s budget for a module that waits
+/// on purpose, such as the opt-in AI translator. Other results are published
+/// as soon as they arrive, so a slow module never holds them back.
+/// </summary>
 public sealed record RegisteredSearchModule(
     IYToolsModule Module,
     SearchContentType ContentType,
-    ModuleResultPolicy Policy);
+    ModuleResultPolicy Policy,
+    TimeSpan? Timeout = null);
 
 public sealed record BackgroundSearchRequest(
     string Query,
@@ -115,7 +121,7 @@ public sealed class SearchCoordinator
             }
 
             tasks.Add(Task.Run(
-                () => SearchModule(registration.Module, request.Query, policy, cancellationToken),
+                () => SearchModule(registration.Module, request.Query, policy, registration.Timeout, cancellationToken),
                 cancellationToken));
         }
 
@@ -177,10 +183,11 @@ public sealed class SearchCoordinator
         IYToolsModule module,
         string query,
         ModuleResultPolicy policy,
+        TimeSpan? budget,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(2));
+        timeout.CancelAfter(budget ?? TimeSpan.FromSeconds(2));
         try
         {
             var request = new ModuleSearchRequest(query, 40, timeout.Token);

@@ -18,6 +18,8 @@ public partial class ClipboardWindow : Window
     private readonly ClipboardPreviewController _preview;
     private ClipboardHistoryManager? _manager;
     private SnippetManager? _snippets;
+    private AppPreferences? _preferences;
+    private bool _choosing;
 
     public ClipboardWindow()
     {
@@ -37,10 +39,11 @@ public partial class ClipboardWindow : Window
 
     public event Action? Hidden;
 
-    public void Attach(ClipboardHistoryManager manager, SnippetManager snippets)
+    public void Attach(ClipboardHistoryManager manager, SnippetManager snippets, AppPreferences? preferences = null)
     {
         _manager = manager;
         _snippets = snippets;
+        _preferences = preferences;
         DataContext = manager;
         manager.PropertyChanged += OnManagerPropertyChanged;
     }
@@ -54,6 +57,9 @@ public partial class ClipboardWindow : Window
 
         _manager.PrepareForPresentation();
         FilterAll.IsChecked = true;
+        HintText.Text = PastesOnChoose
+            ? "Enter 粘贴 · Ctrl+Enter 仅复制 · Ctrl+1…9 快速选择 · Ctrl+D 删除 · Ctrl+S 存为片段 · Esc 关闭"
+            : "Enter 复制 · Ctrl+1…9 快速选择 · Ctrl+D 删除 · Ctrl+S 保存为片段 · Esc 关闭";
         Show();
         Activate();
         SearchBox.Focus();
@@ -130,9 +136,16 @@ public partial class ClipboardWindow : Window
         switch (routed.Kind)
         {
             case PanelCommandKind.ActivateSelected:
-                if (await _manager.CopySelectedAsync())
+                await ChooseSelectedAsync(copyOnly: false);
+                break;
+            case PanelCommandKind.CopyClipboardItemOnly:
+                await ChooseSelectedAsync(copyOnly: true);
+                break;
+            case PanelCommandKind.ActivateResult:
+                if (routed.Payload < _manager.FilteredItems.Count)
                 {
-                    HidePanel();
+                    _manager.SelectedIndex = routed.Payload;
+                    await ChooseSelectedAsync(copyOnly: false);
                 }
 
                 break;
@@ -165,6 +178,48 @@ public partial class ClipboardWindow : Window
                 OnOpenSettings?.Invoke();
                 break;
         }
+    }
+
+    private bool PastesOnChoose => _preferences?.ClipboardPasteToFrontApplication == true;
+
+    /// <summary>Shown when a choice could only be copied.</summary>
+    public Action<string>? OnNotice { get; set; }
+
+    /// <summary>
+    /// Copies the selected item, hides the panel and, unless copy-only or the
+    /// preference is off, pastes it into the window that was in front before.
+    /// </summary>
+    private async Task ChooseSelectedAsync(bool copyOnly)
+    {
+        if (_manager is null || _choosing) { return; }
+        _choosing = true;
+        try
+        {
+            if (!await _manager.CopySelectedAsync()) { return; }
+            HidePanel();
+            if (copyOnly || !PastesOnChoose) { return; }
+            if (!await PasteService.Shared.PasteIntoPreviousWindowAsync())
+            {
+                OnNotice?.Invoke("已复制；无法切换回之前的窗口自动粘贴，请手动按 Ctrl+V。");
+            }
+        }
+        finally
+        {
+            _choosing = false;
+        }
+    }
+
+    private async void OnListMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source
+            || ItemsControl.ContainerFromElement(ClipboardList, source) is not ListBoxItem item)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        ClipboardList.SelectedItem = item.DataContext;
+        await ChooseSelectedAsync(copyOnly: false);
     }
 
     private async Task SaveSnippetAsync(SnippetManager snippets, string text)
@@ -245,6 +300,17 @@ public partial class ClipboardWindow : Window
         }
 
         var menu = new ContextMenu();
+        if (PastesOnChoose)
+        {
+            var paste = new MenuItem { Header = "粘贴到前台应用" };
+            paste.Click += async (_, _) =>
+            {
+                ClipboardList.SelectedItem = item;
+                await ChooseSelectedAsync(copyOnly: false);
+            };
+            menu.Items.Add(paste);
+        }
+
         var copy = new MenuItem { Header = "复制" };
         copy.Click += async (_, _) =>
         {

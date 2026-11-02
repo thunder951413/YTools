@@ -38,7 +38,8 @@ ModuleKit（无 UI 的公共边界）
  ├─ ClipboardHistoryStore（增量清单 + 独立记录与缩略图密文）
  ├─ ClipboardPersistenceService（串行化 + 修订号防旧快照覆盖）
  ├─ ClipboardCloudSyncService（可选坚果云 WebDAV，每条变更加密、每设备轻量标记）
- ├─ AITranslationService（macOS，可选 AI 翻译；用户配置的 HTTPS 接口，无重定向/Cookie）
+ ├─ AITranslationService（双端，可选 AI 翻译；用户配置的 HTTPS 接口，无重定向/Cookie）
+ ├─ PasteService（双端，记住前台应用/窗口，选中后切回并发送粘贴键）
  └─ UsageRankingStore（仅存 SHA-256 哈希）
 ```
 
@@ -61,6 +62,8 @@ ModuleKit（无 UI 的公共边界）
 | Finder 清空废纸篓 Apple Event | `SHEmptyRecycleBin`（二次确认） |
 | `/usr/bin/pmset displaysleepnow` | `SendMessage` `SC_MONITORPOWER` |
 | 系统设置面板 URI | `ms-settings:` URI |
+| `CGEvent` ⌘V + `NSRunningApplication.activate` | `SetForegroundWindow` + `SendInput` Ctrl+V（固定按键） |
+| `URLSession`（ephemeral，无重定向） | `HttpClient` + `SocketsHttpHandler`（无重定向、无 Cookie） |
 
 ## 性能与响应性契约
 
@@ -114,7 +117,8 @@ ModuleKit（无 UI 的公共边界）
 - 启动器样式：极简（默认）、经典、现代、玻璃四种原生预设，通过布局令牌与半透明画刷实现，不加载外部主题资源。面板坐标统一换算为 WPF DIP，在高 DPI 和多显示器工作区内钳制；文件预览展开时保留主结果区宽度。
 - 应用图标：结果首帧使用通用字形，Shell/AppsFolder 图标在后台提取并冻结后写入进程缓存；缓存完成只刷新结果图标，不阻塞输入和排序。
 - 系统命令：只允许编译期固定的动作；关键词可在设置中修改或关闭，但永远不会成为 Shell、URL 或可执行参数。清空回收站始终二次确认；不读取受保护目录内容。
-- 网络：主程序默认没有任何网络模块。用户明确开启坚果云剪贴板同步后，唯一允许的外联是固定 `https://dav.jianguoyun.com/dav/` HTTPS WebDAV 端点；同步内容在离开设备前端到端加密。统一安全扫描只对 macOS `ClipboardCloudSyncService` 的受限 `URLSession` 调用和 Windows 同名服务的 `WebDAVClient` 放行，并验证固定端点。macOS 的 AI 翻译是第二个用户明确启用的外联：`AITranslationModule` 只在查询以翻译关键词开头时、在输入停顿后调用 `AITranslationService`；翻译窗口 `TranslatorWindowController` 同样经该服务发送请求。端点校验、方向判断与请求/响应格式是 `YToolsCore/TranslationCore.swift` 中的纯逻辑并有单元测试；扫描只对该服务文件放行受限 `URLSession`，并限制 URL 字面量为审计过的预设。新增 `ResultAction.openTranslator` 只能打开翻译窗口并填入不超过 5,000 字符的文本。
+- 网络：主程序默认没有任何网络模块。用户明确开启坚果云剪贴板同步后，唯一允许的外联是固定 `https://dav.jianguoyun.com/dav/` HTTPS WebDAV 端点；同步内容在离开设备前端到端加密。统一安全扫描只对 macOS `ClipboardCloudSyncService` 的受限 `URLSession` 调用和 Windows 同名服务的 `WebDAVClient` 放行，并验证固定端点。macOS 的 AI 翻译是第二个用户明确启用的外联：`AITranslationModule` 只在查询以翻译关键词开头时、在输入停顿后调用 `AITranslationService`；翻译窗口 `TranslatorWindowController` 同样经该服务发送请求。端点校验、方向判断与请求/响应格式是 `YToolsCore/TranslationCore.swift` 中的纯逻辑并有单元测试；扫描只对该服务文件放行受限 `URLSession`，并限制 URL 字面量为审计过的预设。新增 `ResultAction.openTranslator` 只能打开翻译窗口并填入不超过 5,000 字符的文本。Windows 端同构移植：`Core/TranslationCore.cs`（方向、关键词、`TranslationEndpointPolicy.TryCreateRequestUri`、请求/响应 JSON）有 xUnit 与 `--selftest` 覆盖；`Services/Modules/AITranslationModule.cs` 由 `LauncherModel` 按查询注册，`RegisteredSearchModule.Timeout` 为它单独放宽到 35 秒（其他模块仍为 2 秒，结果逐批发布，不会被它拖住）；`UI/TranslatorWindow` 是置顶小窗；`Services/AITranslationService.cs` 是唯一放行 `HttpClient` 的文件。`ResultAction.OpenTranslator` 经 `ActionDispatcher` 回调打开小窗，同样受 5,000 字符上限约束。
+- 剪贴板粘贴：Windows `PasteService` 在显示启动器/剪贴板/翻译窗前记住非 YTools 的前台 HWND；剪贴板历史选中（Enter、单击、Ctrl+1–9）后先复制、隐藏面板，再 `SetForegroundWindow`（必要时 `AttachThreadInput`）切回、轮询确认前台后以 `SendInput` 发送固定的 Ctrl+V。`PanelCommandRouter` 新增 `CopyClipboardItemOnly`（Ctrl+Enter），数字快选在剪贴板模式同样生效。
 
 ## 沙箱取舍
 
