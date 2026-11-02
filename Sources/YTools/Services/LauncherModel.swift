@@ -109,6 +109,7 @@ final class LauncherModel: ObservableObject {
         recentDocuments: RecentDocumentsManager? = nil,
         onShowLargeType: @escaping (String) -> Void = { _ in },
         onShowQRCode: @escaping (String) -> Void = { _ in },
+        onOpenTranslator: @escaping (String) -> Void = { _ in },
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.preferences = preferences
@@ -122,7 +123,8 @@ final class LauncherModel: ObservableObject {
             recentDocuments: recentModule,
             onOpenSettings: onOpenSettings,
             onShowLargeType: onShowLargeType,
-            onShowQRCode: onShowQRCode
+            onShowQRCode: onShowQRCode,
+            onOpenTranslator: onOpenTranslator
         )
         actionDispatcher.settingsProvider = { [weak preferences] in
             guard let preferences else { return ActionDispatcher.Settings() }
@@ -416,6 +418,11 @@ final class LauncherModel: ObservableObject {
                 SystemCommandsModule(configuration: preferences.systemCommandConfiguration),
                 contentType: .systemTools,
                 allowsPrivilegedActions: true
+            ),
+            RegisteredSearchModule(
+                AITranslationModule(settings: preferences.aiTranslation,
+                                    pastes: preferences.clipboardBehavior.pasteToFrontApplication),
+                contentType: .translation
             )
         ]
     }

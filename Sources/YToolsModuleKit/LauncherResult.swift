@@ -41,6 +41,8 @@ public enum ResultAction: Equatable, Sendable {
     /// Copies the text and, when enabled and permitted, pastes it into the
     /// previously active application.
     case paste(String)
+    /// Opens the AI translation window with the text filled in.
+    case openTranslator(String)
     case none
 }
 

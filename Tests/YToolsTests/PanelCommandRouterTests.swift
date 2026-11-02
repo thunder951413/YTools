@@ -27,6 +27,15 @@ final class PanelCommandRouterTests: XCTestCase {
         )
     }
 
+    func testClipboardCopyOnlyAndNumberShortcuts() {
+        XCTAssertEqual(router.command(for: PanelKeyEvent(keyCode: 36, modifiers: .command), mode: .clipboard),
+                       .copyClipboardItemOnly)
+        XCTAssertEqual(router.command(for: PanelKeyEvent(keyCode: 36, modifiers: .command), mode: .launcher),
+                       .revealSelected)
+        XCTAssertEqual(router.command(for: PanelKeyEvent(keyCode: 18, modifiers: .command), mode: .clipboard),
+                       .activateResult(0))
+    }
+
     func testKeepsLauncherOnlyCommandsOutOfClipboardMode() {
         XCTAssertNil(
             router.command(

@@ -242,6 +242,16 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         return await copy(visible[selectedIndex])
     }
 
+    /// ⌘1…⌘9: copy the n-th visible item.
+    @discardableResult
+    func copyVisible(at index: Int) async -> Bool {
+        ensureFilterIsCurrent()
+        let visible = filteredItems
+        guard visible.indices.contains(index) else { return false }
+        selectedIndex = index
+        return await copy(visible[index])
+    }
+
     @discardableResult
     func copy(_ item: ClipboardHistoryItem) async -> Bool {
         guard !isCopying, !isShuttingDown else { return false }

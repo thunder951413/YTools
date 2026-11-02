@@ -69,6 +69,7 @@ final class ActionDispatcher {
     private let onOpenSettings: () -> Void
     private let onShowLargeType: (String) -> Void
     private let onShowQRCode: (String) -> Void
+    private let onOpenTranslator: (String) -> Void
     struct Settings {
         var behavior = BehaviorSettings()
         var clipboard = ClipboardBehaviorSettings()
@@ -84,6 +85,7 @@ final class ActionDispatcher {
         onOpenSettings: @escaping () -> Void,
         onShowLargeType: @escaping (String) -> Void,
         onShowQRCode: @escaping (String) -> Void = { _ in },
+        onOpenTranslator: @escaping (String) -> Void = { _ in },
         chooseFileDestination: ((FileOperationService.Operation) -> URL?)? = nil
     ) {
         self.snippets = snippets
@@ -91,6 +93,7 @@ final class ActionDispatcher {
         self.onOpenSettings = onOpenSettings
         self.onShowLargeType = onShowLargeType
         self.onShowQRCode = onShowQRCode
+        self.onOpenTranslator = onOpenTranslator
         self.chooseFileDestination = chooseFileDestination ?? Self.pickFileDestination
     }
 
@@ -103,7 +106,7 @@ final class ActionDispatcher {
         case let .paste(text):
             copyText(text)
             if !PasteService.shared.pasteIntoPreviousApplication() {
-                ToastPresenter.show("已复制；在“设置 › 权限”中开启辅助功能后可直接粘贴", systemImage: "doc.on.clipboard")
+                PasteService.shared.reportPasteUnavailable()
             }
         case let .open(url):
             guard url.isFileURL else {
@@ -120,6 +123,8 @@ final class ActionDispatcher {
             return .navigate(text)
         case let .showQRCode(text):
             onShowQRCode(text)
+        case let .openTranslator(text):
+            onOpenTranslator(text)
         case let .hideApplication(bundleID):
             NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).forEach { $0.hide() }
         case let .quitApplication(bundleID):

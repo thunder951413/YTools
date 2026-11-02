@@ -61,7 +61,7 @@ struct PermissionsSettingsView: View {
         VStack(alignment: .leading, spacing: 22) {
             SettingsGroup(title: "可选功能所需权限",
                           footer: "基础启动器、搜索和剪贴板记录不需要任何权限。只有使用对应功能时才会请求；随时可以在系统设置中撤销。") {
-                permissionRow(title: "辅助功能", detail: "直接粘贴到前台应用、Emoji 直接粘贴、锁定屏幕",
+                permissionRow(title: "辅助功能", detail: "剪贴板/片段/译文直接粘贴到前台应用、锁定屏幕。若已勾选却显示未授权，请在系统列表中移除 YTools 后重新添加",
                               target: "AccessibilityPermission", state: accessibility,
                               pane: "Privacy_Accessibility") {
                     PasteService.shared.requestTrust()
@@ -142,9 +142,13 @@ struct PrivacySettingsView: View {
                     SettingsNoteRow("⚠︎ " + error)
                 }
                 SettingsDivider()
-                SettingsRow(title: "网络", detail: "无遥测、心跳、广告或自动更新；仅在启用同步时连接坚果云") {
-                    StatusPill(text: preferences.clipboardCloudSyncEnabled ? "同步已启用" : "本机模式",
-                               tone: preferences.clipboardCloudSyncEnabled ? .neutral : .positive)
+                SettingsRow(title: "网络", detail: "无遥测、心跳、广告或自动更新；仅在启用同步时连接坚果云，启用 AI 翻译时把待译文本发往你配置的接口") {
+                    let networked = preferences.clipboardCloudSyncEnabled || preferences.aiTranslation.enabled
+                    StatusPill(text: networked
+                                   ? [preferences.clipboardCloudSyncEnabled ? "同步" : nil,
+                                      preferences.aiTranslation.enabled ? "AI 翻译" : nil].compactMap { $0 }.joined(separator: " · ") + " 已启用"
+                                   : "本机模式",
+                               tone: networked ? .neutral : .positive)
                 }
                 SettingsDivider()
                 SettingsRow(title: "敏感内容", detail: "忽略 Concealed 类型与常见密码管理器；可在剪贴板中添加更多规则") {

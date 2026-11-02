@@ -60,6 +60,8 @@ public struct ModuleResultPolicy: Sendable {
             return text.count <= 1_000_000
         case .none, .openSettings:
             return true
+        case let .openTranslator(text):
+            return text.count <= 5_000
         case let .open(url), let .reveal(url):
             return descriptor.capabilities.contains(.localFileRead) && url.isFileURL
         case let .navigate(path):

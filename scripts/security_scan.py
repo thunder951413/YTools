@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Reject network, dynamic-code, and shell entry points in product sources.
 
-The one intentionally networked feature is the encrypted Jianguoyun WebDAV
-clipboard synchronizer.  Its allowance is deliberately tied to the two
-implementation files and their fixed endpoint, rather than to a directory.
+Two features are intentionally networked: the encrypted Jianguoyun WebDAV
+clipboard synchronizer and the opt-in AI translator. Each allowance is tied to
+its implementation file (not a directory): the synchronizer to its fixed
+endpoint, the translator to its provider presets and the validated,
+user-configured endpoint.
 """
 
 from __future__ import annotations
@@ -19,6 +21,17 @@ WINDOWS_SYNC = Path("src/YTools.Windows/Services/ClipboardCloudSyncService.cs")
 SETTINGS_ENDPOINT = Path("src/YTools.Windows/UI/SettingsWindow.xaml.cs")
 MAC_ACTION_DISPATCHER = Path("Sources/YTools/Services/ActionDispatcher.swift")
 ENDPOINT = "https://dav.jianguoyun.com/dav/"
+SWIFT_TRANSLATION = Path("Sources/YTools/Services/AITranslationService.swift")
+TRANSLATION_PRESETS = {
+    "https://api.openai.com/v1",
+    "https://api.deepseek.com/v1",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "https://api.moonshot.cn/v1",
+    "https://open.bigmodel.cn/api/paas/v4",
+    "https://openrouter.ai/api/v1",
+    "https://api.anthropic.com",
+    "http://localhost:11434/v1",
+}
 
 # These checks target executable source text. Comments are removed first so a
 # security explanation or a documentation string cannot create a false alarm.
@@ -127,6 +140,22 @@ def allowed_network(path: Path, text: str) -> list[str]:
             errors.append("Windows sync service may contain exactly one WebDAVClient import and one Client construction")
         if any(url != "https://dav.jianguoyun.com" for url in url_literals):
             errors.append("Windows sync service contains a non-fixed HTTPS endpoint")
+    elif path == SWIFT_TRANSLATION:
+        if not re.search(r"URLSession\(configuration:\s*\.ephemeral,\s*delegate:\s*TranslationRedirectPolicy\(\),\s*delegateQueue:\s*nil\)", text):
+            errors.append("Swift translation service must retain its ephemeral no-redirect URLSession")
+        if not re.search(r"session\.bytes\s*\(for:\s*request\)", text):
+            errors.append("Swift translation service may only send its URLRequest through session.bytes(for: request)")
+        if "TranslationEndpointPolicy.requestURL(" not in text or "request.httpShouldHandleCookies = false" not in text:
+            errors.append("Swift translation service must validate its endpoint and disable cookies")
+        session_tokens = list(re.finditer(r"\bURLSession\b", text))
+        constructor_tokens = list(re.finditer(r"\bURLSession\s*\(", text))
+        delegate_tokens = list(re.finditer(r":\s*URLSession\b", text))
+        allowed_starts = {match.start() for match in constructor_tokens}
+        allowed_starts.update(match.start() + match.group(0).rfind("URLSession") for match in delegate_tokens)
+        if len(constructor_tokens) != 1 or len(delegate_tokens) != 1 or {match.start() for match in session_tokens} != allowed_starts:
+            errors.append("Swift translation service may contain exactly one URLSession constructor and one delegate type annotation")
+        if any(url not in TRANSLATION_PRESETS for url in url_literals):
+            errors.append("Swift translation service contains an endpoint that is not an audited preset")
     elif path == SETTINGS_ENDPOINT:
         # This is descriptive UI text, not a transport. It may name only the
         # same audited endpoint used by the synchronizer.
@@ -163,7 +192,7 @@ def scan(root: Path) -> list[str]:
             for pattern in FORBIDDEN[path.suffix]:
                 for match in re.finditer(pattern, code):
                     token = match.group(0)
-                    if relative == SWIFT_SYNC and token == "URLSession":
+                    if relative in {SWIFT_SYNC, SWIFT_TRANSLATION} and token == "URLSession":
                         continue
                     if relative == WINDOWS_SYNC and token in {"WebDAVClient", "new Client("}:
                         continue
@@ -184,7 +213,7 @@ def main() -> int:
         print("Security scan failed:", file=sys.stderr)
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print("Security scan passed: only the fixed Jianguoyun WebDAV synchronizer is network-enabled.")
+    print("Security scan passed: only the Jianguoyun WebDAV synchronizer and the opt-in AI translator are network-enabled.")
     return 0
 
 

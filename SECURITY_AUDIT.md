@@ -26,9 +26,17 @@
 - 文件复制/移动显示真实的开始和最终状态，不估算字节进度，不提供强制取消。正常退出等待工作完成；失败可能留下部分目标，用户可依据提示检查目标目录。同名项目拒绝覆盖。macOS 标准化并解析源/目标符号链接后拒绝递归复制到自身或后代目录。
 - 回归继续使用临时目录、注入密钥与独立命名剪贴板，不读取或覆盖用户历史。固定的可选坚果云端点与现有网络扫描白名单没有扩大。
 
+### AI 翻译外联（未发布，macOS）
+
+- 应用户明确要求新增，默认关闭。只有用户打开“启用 AI 翻译”并保存 API Key（本机 Ollama 可无 Key）后，才会在启动器输入翻译关键词或使用翻译窗口时，把待译文本（最多 5,000 字符）和固定翻译提示发送到用户配置的接口；不发送查询历史、文件名、剪贴板历史或设备信息。
+- 端点由 `TranslationEndpointPolicy` 校验：必须 https，http 仅限 localhost / 127.0.0.1 / ::1；拒绝 URL 中的用户名密码、查询参数和片段。`AITranslationService` 使用唯一的 ephemeral `URLSession`，拒绝所有重定向、不处理 Cookie、30 秒超时、响应最多读取 2 MB。
+- API Key 存于 `SecureCodableStore("ai-translation-credentials")`，AES-GCM 加密，密钥由登录钥匙串保护；设置界面不回显已保存的 Key。
+- `security_scan.py` 只对 `Sources/YTools/Services/AITranslationService.swift` 放行 `URLSession`，并要求无重定向会话、`session.bytes(for: request)`、端点校验与禁用 Cookie；源码中的 URL 字面量只能是审计过的服务商预设。fixture 自测覆盖非预设端点、第二个会话、绕过端点校验和在其他文件构造会话。
+- 风险说明：用户填写的任意 HTTPS 接口会收到待译文本，该行为由用户选择；Windows 端尚未提供此功能。
+
 ## 结论
 
-YTools 两端默认都是离线原生应用：不包含任意 Shell 执行、动态模块加载或遥测。用户没有明确配置并启用坚果云同步时不会联网。数据在磁盘上加密，Windows 使用一个由 DPAPI CurrentUser 保护的主密钥，macOS 密钥由登录钥匙串保护。两端构建流水线都执行 `warnings-as-errors` 和统一的禁止 API 扫描。
+YTools 两端默认都是离线原生应用：不包含任意 Shell 执行、动态模块加载或遥测。用户没有明确配置并启用坚果云同步或（macOS）AI 翻译时不会联网。数据在磁盘上加密，Windows 使用一个由 DPAPI CurrentUser 保护的主密钥，macOS 密钥由登录钥匙串保护。两端构建流水线都执行 `warnings-as-errors` 和统一的禁止 API 扫描。
 
 可配置的输入停止延迟只取消和调度本机搜索任务；连续输入期间不会新增文件、网络或进程访问，查询文本也不会离开本机。
 

@@ -72,7 +72,7 @@ struct ClipboardIgnoreRule: Codable, Equatable, Identifiable, Sendable {
 
 struct ClipboardBehaviorSettings: Codable, Equatable, Sendable {
     /// Re-activate the previous app and send ⌘V after choosing an item.
-    var pasteToFrontApplication = false
+    var pasteToFrontApplication = true
     /// Holding ⇧ while choosing pastes/copies plain text only.
     var shiftPastesPlainText = true
     var sequentialPaste = true
@@ -80,6 +80,10 @@ struct ClipboardBehaviorSettings: Codable, Equatable, Sendable {
     /// Minutes after which text that looks like a one-time code or token is
     /// removed from history; 0 disables the cleanup.
     var sensitiveAutoDeleteMinutes = 60
+    /// Bumped when a default changes so stored settings pick it up once.
+    var defaultsRevision = Self.currentDefaultsRevision
+
+    static let currentDefaultsRevision = 2
 
     init() {}
 
@@ -92,6 +96,11 @@ struct ClipboardBehaviorSettings: Codable, Equatable, Sendable {
         ignoreRules = (try? container.decodeIfPresent([ClipboardIgnoreRule].self, forKey: .ignoreRules)) ?? defaults.ignoreRules
         sensitiveAutoDeleteMinutes = min(max(try container.decodeIfPresent(Int.self, forKey: .sensitiveAutoDeleteMinutes)
             ?? defaults.sensitiveAutoDeleteMinutes, 0), 10_080)
+        let revision = try container.decodeIfPresent(Int.self, forKey: .defaultsRevision) ?? 1
+        // Revision 2 turned "paste after choosing" on by default; earlier
+        // versions shipped it off, which made every choice copy-only.
+        if revision < 2 { pasteToFrontApplication = true }
+        defaultsRevision = Self.currentDefaultsRevision
     }
 }
 
@@ -151,6 +160,7 @@ struct FileActionSettings: Codable, Equatable, Sendable {
 struct ToolHotKeySettings: Codable, Equatable, Sendable {
     var recognizeText: HotKeyDefinition? = HotKeyDefinition(keyCode: 31, modifiers: 0x1000 | 0x0800) // ⌃⌥O
     var sequentialPaste: HotKeyDefinition?
+    var translator: HotKeyDefinition? = HotKeyDefinition(keyCode: 17, modifiers: 0x1000 | 0x0800) // ⌃⌥T
 
     init() {}
 
@@ -158,6 +168,22 @@ struct ToolHotKeySettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         recognizeText = try container.decodeIfPresent(HotKeyDefinition.self, forKey: .recognizeText)
         sequentialPaste = try container.decodeIfPresent(HotKeyDefinition.self, forKey: .sequentialPaste)
+        // Added later: settings saved before it existed get the default.
+        translator = container.contains(.translator)
+            ? try container.decodeIfPresent(HotKeyDefinition.self, forKey: .translator)
+            : ToolHotKeySettings().translator
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case recognizeText, sequentialPaste, translator
+    }
+
+    /// Writes cleared shortcuts as null so "off" is not mistaken for "never set".
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(recognizeText, forKey: .recognizeText)
+        try container.encode(sequentialPaste, forKey: .sequentialPaste)
+        try container.encode(translator, forKey: .translator)
     }
 }
 
@@ -180,5 +206,44 @@ struct CustomHotKey: Codable, Equatable, Identifiable, Sendable {
         case .folder: "打开文件夹"
         case .snippet: "粘贴文本片段"
         }
+    }
+}
+
+/// Optional AI translation through an API the user configures. Off until the
+/// user enables it and saves a key; the key itself lives in an encrypted store.
+struct AITranslationSettings: Codable, Equatable, Sendable {
+    var enabled = false
+    var provider: AITranslationProvider = .openAI
+    var format: TranslationAPIFormat = .openAICompatible
+    var baseURL = AITranslationProvider.openAI.baseURL
+    var model = AITranslationProvider.openAI.defaultModel
+    var primaryLanguage: TranslationLanguage = .chineseSimplified
+    var secondaryLanguage: TranslationLanguage = .english
+    /// Launcher keywords, comma separated: `fy hello`.
+    var keywords = "fy, tr, 翻译"
+    /// Pause after typing before a request is sent.
+    var liveDelayMilliseconds = 600
+
+    init() {}
+
+    init(from decoder: any Decoder) throws {
+        let defaults = AITranslationSettings()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? defaults.enabled
+        provider = (try? container.decodeIfPresent(AITranslationProvider.self, forKey: .provider)) ?? defaults.provider
+        format = (try? container.decodeIfPresent(TranslationAPIFormat.self, forKey: .format)) ?? defaults.format
+        baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? defaults.baseURL
+        model = try container.decodeIfPresent(String.self, forKey: .model) ?? defaults.model
+        primaryLanguage = (try? container.decodeIfPresent(TranslationLanguage.self, forKey: .primaryLanguage)) ?? defaults.primaryLanguage
+        secondaryLanguage = (try? container.decodeIfPresent(TranslationLanguage.self, forKey: .secondaryLanguage)) ?? defaults.secondaryLanguage
+        keywords = try container.decodeIfPresent(String.self, forKey: .keywords) ?? defaults.keywords
+        liveDelayMilliseconds = min(max(try container.decodeIfPresent(Int.self, forKey: .liveDelayMilliseconds)
+            ?? defaults.liveDelayMilliseconds, 200), 3_000)
+    }
+
+    var keywordList: [String] { TranslationQuery.keywords(from: keywords) }
+
+    func target(for text: String) -> TranslationLanguage {
+        TranslationDirection.target(for: text, primary: primaryLanguage, secondary: secondaryLanguage)
     }
 }

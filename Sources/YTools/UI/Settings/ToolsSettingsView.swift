@@ -6,6 +6,8 @@ struct ToolsSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
+            TranslationSettingsGroup(preferences: preferences)
+
             SettingsGroup(title: "文本转换", isNew: true) {
                 SettingsRow(title: "关键词", detail: "输入 tx 或“转换”后接文本；只输入关键词时转换剪贴板内容",
                             target: "TextTransformKeyword") {

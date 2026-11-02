@@ -162,7 +162,8 @@ struct ClipboardHistoryView: View {
             .frame(height: 32)
             HStack(spacing: 14) {
                 Text("↑↓ 选择")
-                Text(preferences.clipboardBehavior.pasteToFrontApplication ? "↩ 粘贴" : "↩ 复制")
+                Text(preferences.clipboardBehavior.pasteToFrontApplication ? "↩ 粘贴 · ⌘↩ 仅复制" : "↩ 复制")
+                Text("⌘1–9 快选")
                 if preferences.clipboardBehavior.sequentialPaste {
                     Text(manager.pasteQueue.isEmpty ? "⌥↩ 加入连续粘贴" : "连续粘贴队列 \(manager.pasteQueue.count) 条")
                 }

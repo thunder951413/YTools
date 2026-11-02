@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let preferences = AppPreferences()
     private var panelController: SearchPanelController?
     private var settingsController: SettingsWindowController?
+    private var translatorController: TranslatorWindowController?
+    private var translatorMenuItem: NSMenuItem?
     private var snippets: SnippetManager?
     private var recentDocuments: RecentDocumentsManager?
     private var clipboard: ClipboardHistoryManager?
@@ -36,16 +38,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snippets: snippets,
             recentDocuments: recentDocuments
         )
+        let translatorController = TranslatorWindowController(
+            preferences: preferences,
+            onOpenSettings: { [weak settingsController] in settingsController?.show() }
+        )
         let panelController = SearchPanelController(
             preferences: preferences,
             clipboard: clipboard,
             snippets: snippets,
             recentDocuments: recentDocuments,
-            onOpenSettings: { [weak settingsController] in settingsController?.show() }
+            onOpenSettings: { [weak settingsController] in settingsController?.show() },
+            onOpenTranslator: { [weak translatorController] text in translatorController?.show(text: text) }
         )
         let hotKeyManager = HotKeyManager()
         self.panelController = panelController
         self.settingsController = settingsController
+        self.translatorController = translatorController
         self.snippets = snippets
         self.recentDocuments = recentDocuments
         self.clipboard = clipboard
@@ -128,6 +136,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            }) {
             unavailable.insert("sequentialPaste")
         }
+        if let shortcut = preferences.toolHotKeys.translator,
+           !hotKeyManager.register(id: 12, keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, action: { [weak self] in
+               self?.translatorController?.toggle()
+           }) {
+            unavailable.insert("translator")
+        }
+        translatorMenuItem?.title = preferences.toolHotKeys.translator.map { "AI 翻译（\($0.displayString)）" } ?? "AI 翻译"
         for (index, custom) in preferences.customHotKeys.prefix(64).enumerated() {
             let registered = hotKeyManager.register(
                 id: UInt32(100 + index), keyCode: custom.hotKey.keyCode, modifiers: custom.hotKey.modifiers
@@ -222,8 +237,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         pauseClipboardMenuItem = pauseItem
+        translatorMenuItem = menu.addItem(
+            withTitle: preferences.toolHotKeys.translator.map { "AI 翻译（\($0.displayString)）" } ?? "AI 翻译",
+            action: #selector(showTranslator),
+            keyEquivalent: ""
+        )
+        menu.addItem(withTitle: "识别屏幕文字（OCR）", action: #selector(recognizeText), keyEquivalent: "")
         menu.addItem(.separator())
-        let privacyItem = menu.addItem(withTitle: "默认本机模式 · 坚果云同步默认关闭", action: nil, keyEquivalent: "")
+        let privacyItem = menu.addItem(withTitle: "默认本机模式 · 联网功能均需手动开启", action: nil, keyEquivalent: "")
         privacyItem.isEnabled = false
         menu.addItem(.separator())
         menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ",")
@@ -241,6 +262,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showLauncher() { panelController?.showLauncher() }
     @objc private func showClipboard() { panelController?.showClipboard() }
     @objc private func showSettings() { settingsController?.show() }
+    @objc private func showTranslator() { translatorController?.show() }
+    @objc private func recognizeText() { TextRecognitionService.shared.start() }
     @objc private func toggleClipboardPause() {
         preferences.clipboardPaused.toggle()
         pauseClipboardMenuItem?.state = preferences.clipboardPaused ? .on : .off
@@ -286,6 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         panelController?.shutdown()
         settingsController?.shutdown()
+        translatorController?.shutdown()
         hotKeyManager?.shutdown()
         themeCancellable?.cancel()
     }

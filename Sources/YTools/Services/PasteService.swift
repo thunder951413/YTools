@@ -29,15 +29,40 @@ final class PasteService {
     /// Re-activates the previous app and sends ⌘V. Returns false when the
     /// permission is missing or there is no app to paste into.
     @discardableResult
-    func pasteIntoPreviousApplication(delay: Duration = .milliseconds(80)) -> Bool {
+    func pasteIntoPreviousApplication(delay: Duration = .milliseconds(60)) -> Bool {
         guard isTrusted, let application = previousApplication, !application.isTerminated else { return false }
         Task { @MainActor in
             try? await Task.sleep(for: delay)
+            // Hand activation over explicitly; macOS 14 ignores a plain
+            // activate() request coming from an app that is not frontmost.
+            NSApp.yieldActivation(to: application)
             application.activate()
-            try? await Task.sleep(for: .milliseconds(120))
+            // Send ⌘V only once the target owns the keyboard, otherwise the
+            // keystroke lands in YTools or nowhere.
+            for _ in 0..<40 where NSWorkspace.shared.frontmostApplication?.processIdentifier != application.processIdentifier {
+                try? await Task.sleep(for: .milliseconds(15))
+            }
+            try? await Task.sleep(for: .milliseconds(40))
             Self.postKeyStroke(CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
         }
         return true
+    }
+
+    private var promptedThisSession = false
+
+    /// Explains why a choice was only copied. The first time in a session it
+    /// also opens the system permission prompt.
+    func reportPasteUnavailable() {
+        guard !isTrusted else {
+            ToastPresenter.show("已复制；没有可粘贴的目标应用", systemImage: "doc.on.clipboard")
+            return
+        }
+        ToastPresenter.show("已复制。自动粘贴需要“辅助功能”权限；若列表里已勾选 YTools，请移除后重新添加",
+                            systemImage: "hand.raised.fill", duration: .seconds(4))
+        if !promptedThisSession {
+            promptedThisSession = true
+            requestTrust()
+        }
     }
 
     nonisolated static func postKeyStroke(_ key: CGKeyCode, flags: CGEventFlags) {

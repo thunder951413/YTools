@@ -35,6 +35,14 @@ struct ShortcutSettingsView: View {
                     target: "SequentialPasteHotKey", unavailableID: "sequentialPaste",
                     hotKey: $preferences.toolHotKeys.sequentialPaste
                 )
+                SettingsDivider()
+                optionalHotKeyRow(
+                    title: "AI 翻译窗口", detail: preferences.aiTranslation.enabled
+                        ? "弹出翻译小窗，边输入边翻译"
+                        : "需先在“内置工具 › AI 翻译”中配置并开启",
+                    target: "TranslatorHotKey", unavailableID: "translator",
+                    hotKey: $preferences.toolHotKeys.translator
+                )
             }
 
             SettingsGroup(title: "自定义快捷键", isNew: true) {
@@ -229,6 +237,7 @@ private struct AddCustomHotKeySheet: View {
         if hotKey == preferences.clipboardHotKey { return "⚠︎ 与“剪贴板历史”冲突" }
         if hotKey == preferences.toolHotKeys.recognizeText { return "⚠︎ 与“截图识别文字”冲突" }
         if hotKey == preferences.toolHotKeys.sequentialPaste { return "⚠︎ 与“连续粘贴”冲突" }
+        if hotKey == preferences.toolHotKeys.translator { return "⚠︎ 与“AI 翻译窗口”冲突" }
         if let existing = preferences.customHotKeys.first(where: { $0.hotKey == hotKey }) {
             return "⚠︎ 与“\(existing.title)”冲突"
         }

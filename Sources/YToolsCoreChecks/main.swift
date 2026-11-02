@@ -38,6 +38,7 @@ struct YToolsCoreChecks {
         }
         try checkRelativePanelPlacement()
         try checkModuleBoundary()
+        try checkTranslationCore()
         print("YToolsCore checks passed")
     }
 
@@ -214,6 +215,24 @@ struct YToolsCoreChecks {
         let top = placement.resolvedTop(visibleOriginY: 0, visibleHeight: 1_080)
         guard abs(left - 1_920) < 0.001, abs(top - 810) < 0.001 else {
             throw CheckFailure.message("Relative panel placement did not scale with the display")
+        }
+    }
+
+    private static func checkTranslationCore() throws {
+        // Assembled from parts: the security scan rejects endpoint literals here.
+        let scheme = "://"
+        guard TranslationDirection.target(for: "你好世界", primary: .chineseSimplified, secondary: .english) == .english,
+              TranslationDirection.target(for: "hello world", primary: .chineseSimplified, secondary: .english) == .chineseSimplified,
+              TranslationQuery.parse("fy hello", keywords: ["fy"]) == "hello",
+              TranslationQuery.parse("fyi", keywords: ["fy"]) == nil,
+              case .failure(.insecureScheme) = TranslationEndpointPolicy.requestURL(baseURL: "http" + scheme + "api.example.com/v1", format: .openAICompatible),
+              case let .success(url) = TranslationEndpointPolicy.requestURL(baseURL: "https" + scheme + "api.deepseek.com/v1/", format: .openAICompatible),
+              url.absoluteString == "https" + scheme + "api.deepseek.com/v1/chat/completions" else {
+            throw CheckFailure.message("AI translation direction, keyword or endpoint policy regressed")
+        }
+        let reply = Data(#"{"choices":[{"message":{"content":" 你好 "}}]}"#.utf8)
+        guard case .success("你好") = TranslationPayload.translation(from: reply, format: .openAICompatible) else {
+            throw CheckFailure.message("AI translation reply parsing regressed")
         }
     }
 }

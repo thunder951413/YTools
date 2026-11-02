@@ -35,7 +35,20 @@ def main() -> int:
         write(root, "src/YTools.Windows/Services/ClipboardCloudSyncService.cs", '''using WebDAVClient;\nclass Sync { const string Server = "https://dav.jianguoyun.com"; void Configure() { BasePath = "/dav/"; var first = new Client(); } }\n''')
         write(root, "Sources/YTools/Services/ActionDispatcher.swift", '''let executable = "/usr/bin/pmset"\nlet process = Process()\nprocess.executableURL = URL(fileURLWithPath: executable)\nprocess.arguments = ["displaysleepnow"]\n''')
         write(root, "Sources/YTools/Other.swift", "// URLSession in a comment must not fail the scan\n")
+        translator = '''let preset = "https://api.deepseek.com/v1"\nlet url = TranslationEndpointPolicy.requestURL(baseURL: raw, format: format)\nrequest.httpShouldHandleCookies = false\nlet session = URLSession(configuration: .ephemeral, delegate: TranslationRedirectPolicy(), delegateQueue: nil)\nlet value = try await session.bytes(for: request)\nfunc redirect(_ session: URLSession) {}\n'''
+        write(root, "Sources/YTools/Services/AITranslationService.swift", translator)
         run(root, 0)
+
+        write(root, "Sources/YTools/Services/AITranslationService.swift", translator.replace("https://api.deepseek.com/v1", "https://collector.invalid/v1"))
+        run(root, 1)
+        write(root, "Sources/YTools/Services/AITranslationService.swift", translator + "let bypass = URLSession.shared\n")
+        run(root, 1)
+        write(root, "Sources/YTools/Services/AITranslationService.swift", translator.replace("TranslationEndpointPolicy.requestURL(baseURL: raw, format: format)", "URL(string: raw)"))
+        run(root, 1)
+        write(root, "Sources/YTools/Services/AITranslationService.swift", translator)
+        write(root, "Sources/YTools/Services/Elsewhere.swift", "let session = URLSession(configuration: .ephemeral, delegate: TranslationRedirectPolicy(), delegateQueue: nil)\n")
+        run(root, 1)
+        write(root, "Sources/YTools/Services/Elsewhere.swift", "")
 
         write(root, "Sources/YTools/Other.swift", "let client = URLSession.shared\n")
         run(root, 1)

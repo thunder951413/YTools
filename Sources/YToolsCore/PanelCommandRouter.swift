@@ -42,6 +42,8 @@ public enum PanelCommand: Equatable, Sendable {
     case toggleClipboardPreview
     /// ⌥↩ in the clipboard: append the selection to the sequential-paste queue.
     case queueClipboardItem
+    /// ⌘↩ in the clipboard: copy only, even when pasting is enabled.
+    case copyClipboardItemOnly
     case togglePreview
     case showLargeType
     case revealSelected
@@ -69,7 +71,7 @@ public struct PanelCommandRouter: Sendable {
     public init() {}
 
     public func command(for event: PanelKeyEvent, mode: PanelInputMode) -> PanelCommand? {
-        if event.modifiers.contains(.command), mode == .launcher,
+        if event.modifiers.contains(.command),
            let index = resultIndex(forNumberKeyCode: event.keyCode) {
             return .activateResult(index)
         }
@@ -79,6 +81,8 @@ public struct PanelCommandRouter: Sendable {
             return .activateSelected
         case (KeyCode.returnKey, .clipboard) where event.modifiers == .option:
             return .queueClipboardItem
+        case (KeyCode.returnKey, .clipboard) where event.modifiers == .command:
+            return .copyClipboardItemOnly
         case (KeyCode.upArrow, .launcher) where event.modifiers.contains(.option):
             return .addSelectedToBuffer(moveToNext: false)
         case (KeyCode.downArrow, .launcher) where event.modifiers.contains(.option):

@@ -176,6 +176,7 @@ enum SearchContentType: String, Codable, CaseIterable, Identifiable, Sendable {
     case generators
     case emoji
     case runningApplications
+    case translation
 
     var id: String { rawValue }
 
@@ -194,6 +195,7 @@ enum SearchContentType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .generators: "生成工具"
         case .emoji: "Emoji 与符号"
         case .runningApplications: "运行中的应用"
+        case .translation: "AI 翻译"
         }
     }
 
@@ -212,6 +214,7 @@ enum SearchContentType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .generators: "密码、UUID、二维码与颜色换算"
         case .emoji: "emoji / 表情 / 符号 关键词，支持拼音"
         case .runningApplications: "切换、隐藏或退出正在运行的应用"
+        case .translation: "fy / tr 关键词，通过你配置的 API 中英互译"
         }
     }
 
@@ -230,6 +233,7 @@ enum SearchContentType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .generators: "wand.and.stars"
         case .emoji: "face.smiling"
         case .runningApplications: "macwindow.on.rectangle"
+        case .translation: "character.bubble"
         }
     }
 }
@@ -282,6 +286,9 @@ final class AppPreferences: ObservableObject {
         didSet { saveSettings(clipboardBehavior, forKey: Keys.clipboardBehavior) }
     }
     @Published var fileActions: FileActionSettings { didSet { saveSettings(fileActions, forKey: Keys.fileActions) } }
+    @Published var aiTranslation: AITranslationSettings {
+        didSet { saveSettings(aiTranslation, forKey: Keys.aiTranslation) }
+    }
     @Published var toolHotKeys: ToolHotKeySettings {
         didSet { saveSettings(toolHotKeys, forKey: Keys.toolHotKeys); notifyHotKeyChange() }
     }
@@ -404,6 +411,8 @@ final class AppPreferences: ObservableObject {
         self.clipboardBehavior = Self.loadSettings(ClipboardBehaviorSettings.self, from: defaults, forKey: Keys.clipboardBehavior)
             ?? ClipboardBehaviorSettings()
         self.fileActions = Self.loadSettings(FileActionSettings.self, from: defaults, forKey: Keys.fileActions) ?? FileActionSettings()
+        self.aiTranslation = Self.loadSettings(AITranslationSettings.self, from: defaults, forKey: Keys.aiTranslation)
+            ?? AITranslationSettings()
         self.toolHotKeys = Self.loadSettings(ToolHotKeySettings.self, from: defaults, forKey: Keys.toolHotKeys) ?? ToolHotKeySettings()
         self.customHotKeys = Self.loadSettings([CustomHotKey].self, from: defaults, forKey: Keys.customHotKeys) ?? []
         if defaults.object(forKey: Keys.enabledSystemCommands) == nil {
@@ -493,6 +502,7 @@ final class AppPreferences: ObservableObject {
         behavior = BehaviorSettings()
         clipboardBehavior = ClipboardBehaviorSettings()
         fileActions = FileActionSettings()
+        aiTranslation = AITranslationSettings()
         toolHotKeys = ToolHotKeySettings()
         includeFilesInDefaultResults = true
         includeAutomaticDictionary = true
@@ -809,6 +819,7 @@ final class AppPreferences: ObservableObject {
         static let behavior = "preferences.behavior.settings"
         static let clipboardBehavior = "preferences.clipboard.behavior"
         static let fileActions = "preferences.files.actions"
+        static let aiTranslation = "preferences.tools.aiTranslation"
         static let toolHotKeys = "preferences.hotkey.tools"
         static let customHotKeys = "preferences.hotkey.custom"
         static let knownSystemCommands = "preferences.systemCommands.known"

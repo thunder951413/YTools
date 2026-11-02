@@ -29,7 +29,8 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
         clipboard: ClipboardHistoryManager,
         snippets: SnippetManager,
         recentDocuments: RecentDocumentsManager,
-        onOpenSettings: @escaping () -> Void
+        onOpenSettings: @escaping () -> Void,
+        onOpenTranslator: @escaping (String) -> Void = { _ in }
     ) {
         let largeTypeController = LargeTypeWindowController()
         self.largeTypeController = largeTypeController
@@ -43,6 +44,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             recentDocuments: recentDocuments,
             onShowLargeType: { [weak largeTypeController] text in largeTypeController?.show(text: text) },
             onShowQRCode: { [weak largeTypeController] text in largeTypeController?.show(qrCode: text) },
+            onOpenTranslator: onOpenTranslator,
             onOpenSettings: onOpenSettings
         )
         let panel = LauncherPanel(
@@ -192,9 +194,16 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
     /// app when "paste directly" is on and Accessibility is granted.
     func finishClipboardActivation() {
         hide()
-        if preferences.clipboardBehavior.pasteToFrontApplication {
-            PasteService.shared.pasteIntoPreviousApplication()
+        if preferences.clipboardBehavior.pasteToFrontApplication,
+           !PasteService.shared.pasteIntoPreviousApplication() {
+            PasteService.shared.reportPasteUnavailable()
         }
+    }
+
+    /// ⌘↩ in the clipboard history: copy the item and close, never paste.
+    func finishClipboardCopyOnly() {
+        hide()
+        ToastPresenter.show("已复制", systemImage: "doc.on.clipboard")
     }
 
     func clearUsageLearning() {
@@ -409,8 +418,20 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
             }
             hide()
         case let .activateResult(index):
+            if state.mode == .clipboard {
+                Task { [weak self] in
+                    guard let self, await self.clipboard.copyVisible(at: index) else { return }
+                    self.finishClipboardActivation()
+                }
+                return true
+            }
             guard launcher.activateResult(at: index) else { return false }
             hide()
+        case .copyClipboardItemOnly:
+            Task { [weak self] in
+                guard let self, await self.clipboard.copySelected() else { return }
+                self.finishClipboardCopyOnly()
+            }
         case let .addSelectedToBuffer(moveToNext):
             return launcher.addSelectedToBuffer(moveToNext: moveToNext)
         case .removeLastBufferedItem:
