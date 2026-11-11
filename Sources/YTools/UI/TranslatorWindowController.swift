@@ -181,7 +181,8 @@ private struct TranslatorView: View {
                 Text(model.directionTitle).font(.headline)
                 Button { model.swapDirection() } label: { Image(systemName: "arrow.left.arrow.right") }
                     .buttonStyle(.borderless)
-                    .help("切换翻译方向")
+                    .keyboardShortcut("r", modifiers: .command)
+                    .help("切换翻译方向（⌘R）")
                     .disabled(model.input.isEmpty)
                 Spacer()
                 if model.isTranslating { ProgressView().controlSize(.small) }

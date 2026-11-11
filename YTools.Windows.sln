@@ -7,9 +7,9 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{3C652512-74F
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YTools.Windows", "src\YTools.Windows\YTools.Windows.csproj", "{9B8FF54F-AACD-4233-9E57-94444EC89521}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{35A69B7A-7A39-44A1-A7EC-31513A83FEA8}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{35A69B7A-7A39-44A1-A7EC-31513A83FEA8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YTools.Windows.Tests", "tests\YTools.Windows.Tests\YTools.Windows.Tests.csproj", "{1DC5118F-6BDF-4992-86E9-05BDA2E7E573}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YTools.Windows.Tests", "Tests\YTools.Windows.Tests\YTools.Windows.Tests.csproj", "{1DC5118F-6BDF-4992-86E9-05BDA2E7E573}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

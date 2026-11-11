@@ -86,6 +86,7 @@ public class ExpressionCalculatorTests
         Assert.Throws<CalculatorException>(() => ExpressionCalculator.Evaluate(new string('(', 100) + "1" + new string(')', 100)));
         Assert.Throws<CalculatorException>(() => ExpressionCalculator.Evaluate(string.Concat(Enumerable.Repeat("abs(", 200)) + "1" + new string(')', 200)));
         Assert.Throws<CalculatorException>(() => ExpressionCalculator.Evaluate(new string('-', 600) + "1"));
+        Assert.Throws<CalculatorException>(() => ExpressionCalculator.Evaluate(string.Join('^', Enumerable.Repeat("2", 70))));
         Assert.Equal(1, ExpressionCalculator.Evaluate(new string('(', 30) + "1" + new string(')', 30)));
     }
 

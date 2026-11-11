@@ -125,6 +125,8 @@ public struct ExpressionCalculator: Sendable {
         private mutating func parsePower() throws -> Double {
             let base = try parsePrimary()
             guard consume("^") else { return base }
+            try enter()
+            defer { depth -= 1 }
             let exponent = try parseUnary()
             return try checked(pow(base, exponent))
         }

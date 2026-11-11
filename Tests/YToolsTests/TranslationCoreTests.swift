@@ -12,6 +12,9 @@ final class TranslationCoreTests: XCTestCase {
         // A third language goes to the primary language.
         XCTAssertEqual(TranslationDirection.target(for: "Привет", primary: .chineseSimplified, secondary: .english), .chineseSimplified)
         XCTAssertEqual(TranslationDirection.target(for: "こんにちは世界", primary: .english, secondary: .japanese), .english)
+        XCTAssertEqual(TranslationDirection.target(for: "国際連合安全保障理事会の決議", primary: .chineseSimplified, secondary: .japanese), .chineseSimplified)
+        XCTAssertEqual(TranslationDirection.target(for: "這是一個繁體中文測試", primary: .chineseSimplified, secondary: .chineseTraditional), .chineseSimplified)
+        XCTAssertEqual(TranslationDirection.target(for: "这是一个简体中文测试", primary: .chineseSimplified, secondary: .chineseTraditional), .chineseTraditional)
         XCTAssertEqual(TranslationDirection.target(for: "1234 !!", primary: .chineseSimplified, secondary: .english), .english)
     }
 

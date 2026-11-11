@@ -297,6 +297,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
     func delete(_ item: ClipboardHistoryItem) {
         guard !isClearing else { return }
         items.removeAll { $0.id == item.id }
+        pasteQueue.removeAll { $0 == item.id }
         selectedIndex = min(selectedIndex, max(filteredItems.count - 1, 0))
         persistCurrent(deletedIDs: [item.id])
     }
@@ -374,10 +375,12 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
         guard storageReady, !isClearing else { return }
         isClearing = true
         let previous = items
+        let previousPasteQueue = pasteQueue
         let deletedIDs = previous.map(\.id)
         let deletedAt = Date()
         deletedIDs.forEach { localDeletedForSync[$0] = deletedAt }
         items.removeAll()
+        pasteQueue.removeAll()
         selectedIndex = 0
         persistenceRevision += 1
         let revision = persistenceRevision
@@ -398,6 +401,7 @@ final class ClipboardHistoryManager: NSObject, ObservableObject {
             } catch {
                 guard let self, self.persistenceRevision == revision else { return }
                 self.items = previous
+                self.pasteQueue = previousPasteQueue
                 self.persistenceWritable = false
                 self.storageError = "无法清除剪贴板密文：\(error.localizedDescription)"
             }

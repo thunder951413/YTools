@@ -19,22 +19,34 @@ final class ResultAggregator {
         spotlight: [LauncherResult],
         query: String,
         previousResults: [LauncherResult],
-        selectedIndex: Int
+        selectedIndex: Int,
+        preserveOrder: Bool = false
     ) -> AggregatedResults {
         let selectedID = previousResults.indices.contains(selectedIndex)
             ? previousResults[selectedIndex].id
             : nil
-        let results = (background + spotlight)
-            .map { result in
-                result.withScore(result.score + usage.boost(for: result.id, query: query))
-            }
-            .sorted {
-                if $0.score != $1.score { return $0.score > $1.score }
-                let leftTieCount = $0.moduleID == "applications" ? usage.count(for: $0.id) : 0
-                let rightTieCount = $1.moduleID == "applications" ? usage.count(for: $1.id) : 0
-                if leftTieCount != rightTieCount { return leftTieCount > rightTieCount }
-                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
-            }
+        let combined = background + spotlight
+        let results: [LauncherResult]
+        if preserveOrder {
+            results = combined
+        } else {
+            let queryHash = usage.normalizedQueryHash(for: query)
+            let now = Date()
+            results = combined
+                .map { result -> (result: LauncherResult, tieCount: Int) in
+                    let stats = usage.boostAndCount(for: result.id, queryHash: queryHash, now: now)
+                    return (
+                        result.withScore(result.score + stats.boost),
+                        result.moduleID == "applications" ? stats.count : 0
+                    )
+                }
+                .sorted {
+                    if $0.result.score != $1.result.score { return $0.result.score > $1.result.score }
+                    if $0.tieCount != $1.tieCount { return $0.tieCount > $1.tieCount }
+                    return $0.result.title.localizedStandardCompare($1.result.title) == .orderedAscending
+                }
+                .map(\.result)
+        }
         let nextIndex: Int
         if let selectedID, let retained = results.firstIndex(where: { $0.id == selectedID }) {
             nextIndex = retained

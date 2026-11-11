@@ -116,6 +116,9 @@ struct ActionRegistry {
                 actions.append(action("copy", "复制", "复制结果到剪贴板", "doc.on.doc", .copyText(text)))
                 actions.append(action("large-type", "大字显示", "全屏清晰显示文本", "textformat.size.larger", .largeType(text)))
                 actions.append(action("save-snippet", "保存为文本片段", "加密保存到默认分类", "text.badge.plus", .saveSnippet(text)))
+            case let .copyConcealed(text):
+                actions.append(action("copy-concealed", "复制（不写入历史）", "标记为敏感内容，剪贴板历史自动忽略", "key", .perform(.copyConcealed(text))))
+                actions.append(action("large-type", "大字显示", "全屏清晰显示文本", "textformat.size.larger", .largeType(text)))
             case .openSettings:
                 actions.append(action("settings", "打开设置", result.subtitle, "gearshape", .perform(.openSettings)))
             default:

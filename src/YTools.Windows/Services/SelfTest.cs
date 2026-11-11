@@ -43,6 +43,7 @@ public static class SelfTest
             Check("calculator.exponentResult", ExpressionCalculator.Evaluate("sqrt(1e-10)") > 0);
             Check("calculator.largeInteger", ExpressionCalculator.Format(ExpressionCalculator.Evaluate("2^63")) == "9.22337203685e+18");
             Check("calculator.divisionByZero", Throws<CalculatorException>(() => ExpressionCalculator.Evaluate("1/0")));
+            Check("calculator.powerDepth", Throws<CalculatorException>(() => ExpressionCalculator.Evaluate(string.Join('^', Enumerable.Repeat("2", 70)))));
             Check("calculator.format", ExpressionCalculator.Format(3.14159265358979) == "3.14159265359");
 
             Check("paths.rejectDriveRelative", !LocalPathPolicy.IsValid(@"C:notes.txt"));
@@ -70,15 +71,18 @@ public static class SelfTest
             var normalizer = new SearchTextNormalizer();
             var forms = normalizer.Forms("微信");
             Check("normalizer.pinyin", forms.Transliteration == "weixin" && forms.TransliterationInitials == "wx");
+            Check("normalizer.mixedAsciiCjk", normalizer.Forms("B站客户端").TransliterationInitials == "bzkhd");
             Check("normalizer.abbreviation", normalizer.Forms("Visual Studio Code").Abbreviation == "vsc");
             Check("normalizer.fuzzy", normalizer.FuzzyScore("slk", "Slack") is { } fuzzy && fuzzy is >= 1 and <= 99);
 
             Check("settings.specificTarget", SettingsSearchCatalog.SearchTargets("WEBDAV 同步口令").Select(target => target.Id).SequenceEqual(["CloudPassphrase"]));
             Check("files.byteProgress", new FileTransferProgress(32, 64, FileTransferPhase.Copying).Percentage == 50);
             Check("diagnostics.rejectVersionContent", !LocalDiagnosticReport.Text("private-text", DiagnosticPlatform.Windows, DiagnosticFileBackend.FileNameScan,
-                0, 0, 0, true, true, true, true, false).Contains("private-text", StringComparison.Ordinal));
+                0, 0, 0, true, true, true, true, false, true).Contains("private-text", StringComparison.Ordinal));
             var router = new PanelCommandRouter();
             Check("router.clipboardPreview", router.Command(new PanelKeyEvent(0x50, PanelKeyModifiers.Command), PanelInputMode.Clipboard)?.Kind == PanelCommandKind.ToggleClipboardPreview);
+            Check("router.exactModifiers", router.Command(new PanelKeyEvent(0x25, PanelKeyModifiers.Shift), PanelInputMode.Launcher) is null
+                && router.Command(new PanelKeyEvent(0x31, PanelKeyModifiers.Command | PanelKeyModifiers.Option), PanelInputMode.Launcher) is null);
             Check(
                 "router.enter",
                 router.Command(new PanelKeyEvent(0x0D, PanelKeyModifiers.None), PanelInputMode.Launcher)?.Kind

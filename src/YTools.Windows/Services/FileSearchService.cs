@@ -37,7 +37,7 @@ public sealed class FileSearchService : IDisposable
         bool enableEverything,
         Func<IReadOnlyList<string>, CancellationToken, IReadOnlyList<string>>? fallbackIndexBuilder = null)
     {
-        _everything = enableEverything ? EverythingClient.TryCreate() : null;
+        _everything = enableEverything ? EverythingClient.CreateLazy() : null;
         _fallbackIndexBuilder = fallbackIndexBuilder;
     }
 

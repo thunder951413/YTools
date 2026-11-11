@@ -1,6 +1,7 @@
 import AppKit
 import Carbon
 import Combine
+import YToolsCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -21,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastWorkingClipboardHotKey: HotKeyDefinition?
     private var themeCancellable: AnyCancellable?
     private var sequentialPasteCancellable: AnyCancellable?
+    private var aiTranslationCancellable: AnyCancellable?
+    private var clipboardPausedCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -64,6 +67,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] _ in self?.configureHotKeys() }
+        aiTranslationCancellable = preferences.$aiTranslation
+            .map(\.enabled)
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.configureHotKeys() }
+        clipboardPausedCancellable = preferences.$clipboardPaused
+            .removeDuplicates()
+            .sink { [weak self] paused in self?.updatePauseClipboardMenuItem(paused: paused) }
         preferences.menuBarVisibilityDidChange = { [weak self] in self?.updateStatusItemVisibility() }
         preferences.clearUsageLearningHandler = { [weak panelController] in
             panelController?.clearUsageLearning()
@@ -136,13 +147,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            }) {
             unavailable.insert("sequentialPaste")
         }
-        if let shortcut = preferences.toolHotKeys.translator,
+        if preferences.aiTranslation.enabled,
+           let shortcut = preferences.toolHotKeys.translator,
            !hotKeyManager.register(id: 12, keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, action: { [weak self] in
                self?.translatorController?.toggle()
            }) {
             unavailable.insert("translator")
         }
-        translatorMenuItem?.title = preferences.toolHotKeys.translator.map { "AI 翻译（\($0.displayString)）" } ?? "AI 翻译"
+        translatorMenuItem?.title = preferences.aiTranslation.enabled
+            ? (preferences.toolHotKeys.translator.map { "AI 翻译（\($0.displayString)）" } ?? "AI 翻译")
+            : "AI 翻译"
         for (index, custom) in preferences.customHotKeys.prefix(64).enumerated() {
             let registered = hotKeyManager.register(
                 id: UInt32(100 + index), keyCode: custom.hotKey.keyCode, modifiers: custom.hotKey.modifiers
@@ -157,18 +171,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func perform(_ shortcut: CustomHotKey) {
         switch shortcut.target {
         case let .application(path):
-            let url = URL(fileURLWithPath: path)
-            guard FileManager.default.fileExists(atPath: path) else {
-                ToastPresenter.show("找不到应用：\(url.lastPathComponent)", systemImage: "exclamationmark.triangle.fill")
+            guard let canonicalPath = MacApplicationPathPolicy.normalize(path: path, requireExistingBundle: true) else {
+                let name = URL(fileURLWithPath: path).lastPathComponent
+                ToastPresenter.show("找不到有效应用：\(name)", systemImage: "exclamationmark.triangle.fill")
                 return
             }
+            let url = URL(fileURLWithPath: canonicalPath, isDirectory: true)
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         case let .folder(path):
-            guard FileManager.default.fileExists(atPath: path) else {
+            let canonicalURL = URL(fileURLWithPath: path, isDirectory: true)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: canonicalURL.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
                 ToastPresenter.show("找不到文件夹：\(path)", systemImage: "exclamationmark.triangle.fill")
                 return
             }
-            NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true))
+            NSWorkspace.shared.open(canonicalURL)
         case let .snippet(id):
             guard let text = snippets?.expandedContent(for: id) else {
                 ToastPresenter.show("文本片段已被删除", systemImage: "exclamationmark.triangle.fill")
@@ -237,6 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         pauseClipboardMenuItem = pauseItem
+        updatePauseClipboardMenuItem(paused: preferences.clipboardPaused)
         translatorMenuItem = menu.addItem(
             withTitle: preferences.toolHotKeys.translator.map { "AI 翻译（\($0.displayString)）" } ?? "AI 翻译",
             action: #selector(showTranslator),
@@ -266,8 +288,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func recognizeText() { TextRecognitionService.shared.start() }
     @objc private func toggleClipboardPause() {
         preferences.clipboardPaused.toggle()
-        pauseClipboardMenuItem?.state = preferences.clipboardPaused ? .on : .off
-        pauseClipboardMenuItem?.title = preferences.clipboardPaused
+        updatePauseClipboardMenuItem(paused: preferences.clipboardPaused)
+    }
+
+    private func updatePauseClipboardMenuItem(paused: Bool) {
+        pauseClipboardMenuItem?.state = paused ? .on : .off
+        pauseClipboardMenuItem?.title = paused
             ? "继续剪贴板记录"
             : "暂停剪贴板记录"
     }

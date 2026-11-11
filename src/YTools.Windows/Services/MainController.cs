@@ -44,6 +44,7 @@ public sealed class MainController
     private TranslatorWindow? _translatorWindow;
     private TrayIconService? _tray;
     private EventWaitHandle? _showLauncherEvent;
+    private RegisteredWaitHandle? _showLauncherWaitRegistration;
     private HotKeyDefinition? _lastWorkingLauncher;
     private HotKeyDefinition? _lastWorkingClipboard;
     private bool _shutdownRequested;
@@ -84,7 +85,7 @@ public sealed class MainController
         _tray.ShowClipboardRequested += ShowClipboard;
         _tray.TogglePauseRequested += ToggleClipboardPause;
         _tray.ShowSettingsRequested += OpenSettings;
-        _tray.QuitRequested += async () => await RequestShutdownAsync();
+        _tray.QuitRequested += () => _ = SafeRequestShutdownAsync();
 
         _preferences.HotKeysChanged += ConfigureHotKeys;
         _preferences.ClearUsageLearningRequested += () => _launcher?.ClearUsageLearning();
@@ -95,7 +96,20 @@ public sealed class MainController
             false,
             EventResetMode.AutoReset,
             ShowLauncherEventName);
-        _ = WaitForShowSignalAsync();
+        _showLauncherWaitRegistration = ThreadPool.RegisterWaitForSingleObject(
+            _showLauncherEvent,
+            (_, timedOut) =>
+            {
+                if (timedOut || _shutdownRequested) { return; }
+                var dispatcher = Application.Current?.Dispatcher;
+                if (dispatcher is not null && !dispatcher.HasShutdownStarted && !dispatcher.HasShutdownFinished)
+                {
+                    _ = dispatcher.BeginInvoke(ShowLauncher);
+                }
+            },
+            state: null,
+            millisecondsTimeOutInterval: Timeout.Infinite,
+            executeOnlyOnce: false);
 
         _launcherWindow.ShowLauncher();
     }
@@ -110,12 +124,27 @@ public sealed class MainController
         _launcher?.Dispose();
         _clipboard?.Dispose();
         _tray?.Dispose();
+        _showLauncherWaitRegistration?.Unregister(null);
+        _showLauncherWaitRegistration = null;
         _showLauncherEvent?.Dispose();
         _showLauncherEvent = null;
         _hotKeys?.Dispose();
         _clipboardMonitor?.Dispose();
         _messages?.Dispose();
         _messages = null;
+    }
+
+    private async Task SafeRequestShutdownAsync()
+    {
+        try
+        {
+            await RequestShutdownAsync();
+        }
+        catch (Exception exception)
+        {
+            AppPaths.LogException(exception);
+            Application.Current?.Shutdown();
+        }
     }
 
     private async Task RequestShutdownAsync()
@@ -430,30 +459,5 @@ public sealed class MainController
         }
 
         return _settingsWindow;
-    }
-
-    private async Task WaitForShowSignalAsync()
-    {
-        while (_showLauncherEvent is not null)
-        {
-            try
-            {
-                await Task.Run(() => _showLauncherEvent.WaitOne());
-            }
-            catch
-            {
-                return;
-            }
-
-            try
-            {
-                Application.Current.Dispatcher.Invoke(ShowLauncher);
-            }
-            catch
-            {
-                // Dispatcher may be shutting down; stop waiting.
-                return;
-            }
-        }
     }
 }

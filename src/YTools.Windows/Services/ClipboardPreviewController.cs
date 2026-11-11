@@ -70,6 +70,7 @@ public sealed class ClipboardPreviewController(Func<Guid, Task<byte[]?>> loadIma
             Error = "无法读取或解码图片原件；未使用缩略图替代。";
         }
     }
+    private const long MaximumImagePixels = 50_000_000L;
     private sealed record DecodedImage(BitmapSource Bitmap, int Width, int Height);
     private static DecodedImage Decode(byte[] data)
     {
@@ -77,6 +78,11 @@ public sealed class ClipboardPreviewController(Func<Guid, Task<byte[]?>> loadIma
         var source = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.OnDemand);
         var width = source.Frames[0].PixelWidth;
         var height = source.Frames[0].PixelHeight;
+        if (width <= 0 || height <= 0 || (long)width * height > MaximumImagePixels)
+        {
+            throw new InvalidDataException("图片像素尺寸超出安全上限。");
+        }
+
         stream.Position = 0;
         var bitmap = new BitmapImage();
         bitmap.BeginInit();

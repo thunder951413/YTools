@@ -14,6 +14,7 @@ struct CapturedImage: @unchecked Sendable {
 final class TextRecognitionService {
     static let shared = TextRecognitionService()
     private var selectionWindow: RegionSelectionWindow?
+    private var isCapturing = false
 
     var hasScreenRecordingPermission: Bool { CGPreflightScreenCaptureAccess() }
 
@@ -22,7 +23,7 @@ final class TextRecognitionService {
     }
 
     func start() {
-        guard selectionWindow == nil else { return }
+        guard selectionWindow == nil, !isCapturing else { return }
         guard CGPreflightScreenCaptureAccess() else {
             _ = CGRequestScreenCaptureAccess()
             ToastPresenter.show("截图识别文字需要“屏幕与系统录音”权限", systemImage: "exclamationmark.triangle.fill", duration: .seconds(3))
@@ -35,7 +36,9 @@ final class TextRecognitionService {
         let width = Int(screen.frame.width * screen.backingScaleFactor)
         let height = Int(screen.frame.height * screen.backingScaleFactor)
         let processID = ProcessInfo.processInfo.processIdentifier
+        isCapturing = true
         Task { @MainActor in
+            defer { self.isCapturing = false }
             do {
                 let captured = try await Self.captureDisplay(displayID, width: width, height: height, excludingProcess: processID)
                 self.presentSelection(captured, on: screen)

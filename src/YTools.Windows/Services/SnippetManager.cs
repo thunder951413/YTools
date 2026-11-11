@@ -276,7 +276,7 @@ public sealed class SnippetManager : ObservableObject
             StorageError = success ? null : failureMessage;
             HasPendingChanges = !success;
             RaisePropertyChanged(nameof(StorageStatus));
-        }, synchronous: true);
+        }, synchronous: false);
         return success;
     }
 
@@ -299,6 +299,7 @@ public sealed class SnippetManager : ObservableObject
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher is not null && !dispatcher.CheckAccess())
         {
+            if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished) { return; }
             if (synchronous) { dispatcher.Invoke(action); }
             else { _ = dispatcher.BeginInvoke(action); }
         }
@@ -385,15 +386,62 @@ public sealed class SnippetSearchModule : IYToolsModule
         return null;
     }
 
+    public string ExpandedText(string content) => Expand(content);
+
     private string Expand(string content)
     {
-        var date = _now.ToLocalTime().ToString("yyyy/M/d", CultureInfo.InvariantCulture);
-        var time = _now.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture);
-        return content
-            .Replace("{date}", date)
-            .Replace("{time}", time)
-            .Replace("{clipboard}", _clipboardText)
-            .Replace("{cursor}", "");
+        if (!content.Contains('{', StringComparison.Ordinal))
+        {
+            return content;
+        }
+
+        var localNow = _now.ToLocalTime();
+        var date = localNow.ToString("yyyy/M/d", CultureInfo.InvariantCulture);
+        var time = localNow.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+        var builder = new System.Text.StringBuilder(content.Length);
+        var index = 0;
+        while (index < content.Length)
+        {
+            var brace = content.IndexOf('{', index);
+            if (brace < 0)
+            {
+                builder.Append(content, index, content.Length - index);
+                break;
+            }
+
+            if (brace > index)
+            {
+                builder.Append(content, index, brace - index);
+            }
+
+            var remaining = content.AsSpan(brace);
+            if (remaining.StartsWith("{date}", StringComparison.Ordinal))
+            {
+                builder.Append(date);
+                index = brace + 6;
+            }
+            else if (remaining.StartsWith("{time}", StringComparison.Ordinal))
+            {
+                builder.Append(time);
+                index = brace + 6;
+            }
+            else if (remaining.StartsWith("{clipboard}", StringComparison.Ordinal))
+            {
+                builder.Append(_clipboardText);
+                index = brace + 11;
+            }
+            else if (remaining.StartsWith("{cursor}", StringComparison.Ordinal))
+            {
+                index = brace + 8;
+            }
+            else
+            {
+                builder.Append('{');
+                index = brace + 1;
+            }
+        }
+
+        return builder.ToString();
     }
 
     private static string Preview(string text, int limit = 72)

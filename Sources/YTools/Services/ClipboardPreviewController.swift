@@ -9,18 +9,25 @@ struct ClipboardPreviewImage: Sendable {
 }
 
 actor ClipboardPreviewDecoder {
+    private static let maximumImagePixels = 50_000_000
+
     func decode(_ data: Data) -> ClipboardPreviewImage? {
         guard data.count <= 5_000_000,
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
-              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else { return nil }
+        let w = width.intValue
+        let h = height.intValue
+        guard w > 0, h > 0 else { return nil }
+        let (pixels, overflow) = w.multipliedReportingOverflow(by: h)
+        guard !overflow, pixels <= Self.maximumImagePixels,
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceThumbnailMaxPixelSize: 1024
               ] as CFDictionary) else { return nil }
-        return ClipboardPreviewImage(image: image, width: width.intValue, height: height.intValue)
+        return ClipboardPreviewImage(image: image, width: w, height: h)
     }
 }
 

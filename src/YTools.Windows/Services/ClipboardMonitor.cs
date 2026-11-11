@@ -27,6 +27,13 @@ public sealed class ClipboardMonitor : IDisposable
 
     public event Action? Changed;
 
+    public void PollIfChanged() => Poll();
+
+    public void SyncSequenceNumber()
+    {
+        _lastSequence = MessageWindowService.GetClipboardSequenceNumber();
+    }
+
     public void Dispose()
     {
         _messages.ClipboardUpdated -= OnClipboardUpdated;

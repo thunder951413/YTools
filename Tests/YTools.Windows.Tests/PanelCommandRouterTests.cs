@@ -104,4 +104,14 @@ public class PanelCommandRouterTests
             PanelCommandKind.Escape,
             _router.Command(new PanelKeyEvent(0x1B, PanelKeyModifiers.None), PanelInputMode.Clipboard)?.Kind);
     }
+
+    [Fact]
+    public void ExactModifiers_DoNotHijackSelectionOrAltGr()
+    {
+        Assert.Null(_router.Command(new PanelKeyEvent(0x25, PanelKeyModifiers.Shift), PanelInputMode.Launcher));
+        Assert.Null(_router.Command(new PanelKeyEvent(0x27, PanelKeyModifiers.Shift), PanelInputMode.Launcher));
+        Assert.Null(_router.Command(new PanelKeyEvent(0x28, PanelKeyModifiers.Shift), PanelInputMode.Launcher));
+        Assert.Null(_router.Command(new PanelKeyEvent(0x31, PanelKeyModifiers.Command | PanelKeyModifiers.Option), PanelInputMode.Launcher));
+        Assert.Null(_router.Command(new PanelKeyEvent(0x26, PanelKeyModifiers.Command | PanelKeyModifiers.Option), PanelInputMode.Launcher));
+    }
 }

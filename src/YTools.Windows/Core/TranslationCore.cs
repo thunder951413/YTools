@@ -75,12 +75,42 @@ public static class TranslationLanguageInfo
 /// </summary>
 public static class TranslationDirection
 {
+    private static readonly HashSet<int> TraditionalMarkers = new(
+        "體國學語機電網書車門開關東風長時會見發經現實點頭後裡與為無專業愛義樂話說讀寫聽買賣錢價張陳劉楊黃趙吳週鄭謝蘇馬馮葉鐘蔣韓鄧許蕭曾潘蔡韋薛閻盧體驗際應設數統處變條問議導認識響護標證際權環節優選備際"
+            .EnumerateRunes().Select(rune => rune.Value));
+
+    private static readonly HashSet<int> SimplifiedMarkers = new(
+        "体国学语机电网书车门开关东风长时不见发经现实点头后里与为无专业爱义乐话说读写听买卖钱价张陈刘杨黄赵吴周郑谢苏马冯叶钟蒋韩邓许萧曾潘蔡韦薛阎卢体验际应设数统处变条问议导认识响护标证际权环节优选备"
+            .EnumerateRunes().Select(rune => rune.Value));
+
     public static TranslationLanguage Target(string text, TranslationLanguage primary, TranslationLanguage secondary)
     {
         if (DominantScript(text) is not { } script) { return secondary; }
+        if (script == TranslationScript.Han
+            && ((primary == TranslationLanguage.ChineseSimplified && secondary == TranslationLanguage.ChineseTraditional)
+                || (primary == TranslationLanguage.ChineseTraditional && secondary == TranslationLanguage.ChineseSimplified)))
+        {
+            var detected = PrefersTraditionalChinese(text)
+                ? TranslationLanguage.ChineseTraditional
+                : TranslationLanguage.ChineseSimplified;
+            return detected == primary ? secondary : primary;
+        }
+
         if (script == primary.Script()) { return secondary; }
         if (script == secondary.Script()) { return primary; }
         return primary;
+    }
+
+    private static bool PrefersTraditionalChinese(string text)
+    {
+        int traditional = 0, simplified = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (TraditionalMarkers.Contains(rune.Value)) { traditional++; }
+            if (SimplifiedMarkers.Contains(rune.Value)) { simplified++; }
+        }
+
+        return traditional > simplified;
     }
 
     internal static TranslationScript? DominantScript(string text)
@@ -116,8 +146,8 @@ public static class TranslationDirection
             }
         }
 
-        // Any kana marks Japanese even when Han characters outnumber it.
-        if (kana > 0 && kana * 5 >= han) { return TranslationScript.Kana; }
+        // Any kana marks Japanese even in kanji-dense sentences (e.g. 13 kanji + 1 particle).
+        if (kana > 0 && kana * 15 >= han) { return TranslationScript.Kana; }
         // CJK characters carry more meaning per character than Latin letters.
         (TranslationScript Script, int Weight)[] candidates =
         [

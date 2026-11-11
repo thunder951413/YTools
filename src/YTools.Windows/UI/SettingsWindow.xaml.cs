@@ -1139,7 +1139,8 @@ public partial class SettingsWindow : Window
                 DiagnosticPlatform.Windows, backend?.IsAvailable == true ? DiagnosticFileBackend.Everything : DiagnosticFileBackend.FileNameScan,
                 _clipboard?.Items.Count ?? 0, _clipboard?.Items.Count(item => item.IsPinned) ?? 0, _snippets?.Items.Count ?? 0,
                 _preferences?.StorageError is null, _clipboard?.StorageError is null, _snippets?.StorageError is null,
-                _recentDocuments?.StorageError is null, _preferences?.ClipboardCloudSyncEnabled == true);
+                _recentDocuments?.StorageError is null, _preferences?.ClipboardCloudSyncEnabled == true,
+                _preferences?.AITranslation.Enabled == true);
             try { System.Windows.Clipboard.SetText(report); }
             catch (ExternalException) { MessageBox.Show(this, "剪贴板暂时被占用，请稍后重试。", "本机诊断"); }
         }));
@@ -1147,7 +1148,7 @@ public partial class SettingsWindow : Window
         stack.Children.Add(new TextBlock
         {
             Style = (Style)FindResource("HintText"),
-            Text = "YTools 默认完全离线。仅当你明确启用坚果云剪贴板同步时，程序才会向固定的坚果云 WebDAV 地址发送经端到端加密的剪贴板变更记录。"
+            Text = "YTools 默认完全离线。仅当你明确启用坚果云剪贴板同步或 AI 翻译时，程序才会分别向固定的坚果云 WebDAV 地址发送端到端加密记录，或向你配置的翻译接口发送待译文本。"
         });
         stack.Children.Add(SubHeader("加密存储状态"));
         var clipboardError = new TextBlock

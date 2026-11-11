@@ -112,8 +112,8 @@ struct GeneratorModule: YToolsModule {
                 return LauncherResult(
                     id: "generators:password:\(index)", moduleID: descriptor.id,
                     title: password,
-                    subtitle: "\(length) 位随机密码\(settings.passwordIncludesSymbols ? "（含符号）" : "") · 本机生成 · 回车复制",
-                    icon: .system("key"), score: 1_040 - index, action: .copy(password)
+                    subtitle: "\(length) 位随机密码\(settings.passwordIncludesSymbols ? "（含符号）" : "") · 本机生成 · 回车复制（不写入历史）",
+                    icon: .system("key"), score: 1_040 - index, action: .copyConcealed(password)
                 )
             }
         }

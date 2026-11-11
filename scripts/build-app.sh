@@ -12,6 +12,11 @@ MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
 cd "${NATIVE_DIR}"
+
+if [[ -z "${DEVELOPER_DIR:-}" && "$(xcode-select -p 2>/dev/null || true)" == "/Library/Developer/CommandLineTools" && -d "/Applications/Xcode.app/Contents/Developer" ]]; then
+    export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+fi
+
 swift_args=(-c release)
 if [[ -n "${YTOOLS_BUILD_PATH:-}" ]]; then
     swift_args+=(--scratch-path "${YTOOLS_BUILD_PATH}")

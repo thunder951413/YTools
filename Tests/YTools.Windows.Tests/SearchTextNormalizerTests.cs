@@ -18,6 +18,17 @@ public class SearchTextNormalizerTests
     }
 
     [Fact]
+    public void Forms_MixedAsciiAndChinese_PreservesCjkInitialBoundaries()
+    {
+        var bilibili = _normalizer.Forms("B站客户端");
+        Assert.Equal("bzkhd", bilibili.TransliterationInitials);
+        Assert.Equal("bzkhd", bilibili.Abbreviation);
+
+        var qqMusic = _normalizer.Forms("QQ音乐");
+        Assert.Equal("qqyl", qqMusic.TransliterationInitials);
+    }
+
+    [Fact]
     public void Forms_LatinMultiWord_ProducesInitials()
     {
         var forms = _normalizer.Forms("Visual Studio Code");

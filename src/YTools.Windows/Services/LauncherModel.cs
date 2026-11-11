@@ -52,6 +52,7 @@ public sealed class LauncherModel : ObservableObject
     // Enter was pressed before the first batch arrived; activate the top
     // result as soon as it does instead of swallowing the key.
     private bool _activateWhenReady;
+    private bool _searchWasCancelledWhileHidden;
     public int LayoutRowCount => IsShowingActions ? Actions.Count : _presentation.ReservedRows;
 
     public LauncherModel(
@@ -92,7 +93,16 @@ public sealed class LauncherModel : ObservableObject
                 case nameof(AppPreferences.EnabledSearchContentTypes):
                 case nameof(AppPreferences.ApplicationAliases):
                 case nameof(AppPreferences.CustomApplicationPaths):
+                case nameof(AppPreferences.IncludeFilesInDefaultResults):
+                case nameof(AppPreferences.MaximumSearchResults):
+                case nameof(AppPreferences.SearchScopePaths):
                     RefreshImmediately();
+                    break;
+                case nameof(AppPreferences.FileNavigationShowsHiddenFiles):
+                case nameof(AppPreferences.FileNavigationSort):
+                case nameof(AppPreferences.FileNavigationSortAscending):
+                case nameof(AppPreferences.FileNavigationFoldersFirst):
+                    if (IsFileNavigationActive) { RefreshImmediately(); }
                     break;
                 case nameof(AppPreferences.ShowSubtitles):
                 case nameof(AppPreferences.ShowNumberShortcuts):
@@ -120,9 +130,32 @@ public sealed class LauncherModel : ObservableObject
     /// <summary>Searches a query restored from the previous session once the panel is shown.</summary>
     public void RefreshForPresentation()
     {
-        if (_results.Count == 0 && !IsSearchPending && !string.IsNullOrWhiteSpace(Query))
+        if ((_results.Count == 0 || _searchWasCancelledWhileHidden)
+            && !IsSearchPending
+            && !string.IsNullOrWhiteSpace(Query))
         {
             RefreshImmediately();
+        }
+    }
+
+    public void CancelActiveSearch()
+    {
+        var hadPendingSearch = IsSearchPending || _backgroundPending || _filePending || _awaitingFirstBatch;
+        Interlocked.Increment(ref _searchGeneration);
+        _fileSearchDebouncer.Cancel();
+        _searchCancellation?.Cancel();
+        _backgroundPending = false;
+        _filePending = false;
+        _awaitingFirstBatch = false;
+        _activateWhenReady = false;
+        if (hadPendingSearch)
+        {
+            _searchWasCancelledWhileHidden = true;
+        }
+
+        if (IsSearchPending)
+        {
+            IsSearchPending = false;
         }
     }
 
@@ -706,6 +739,7 @@ public sealed class LauncherModel : ObservableObject
             IsSearchPending = true;
         }
 
+        _searchWasCancelledWhileHidden = false;
         _fileResults = [];
         _backgroundResults = [];
         _presentation.BeginQuery();
@@ -900,6 +934,7 @@ public sealed class LauncherModel : ObservableObject
     private void ResetForEmptyQuery()
     {
         _presentation.Reset();
+        _searchWasCancelledWhileHidden = false;
         _backgroundPending = false;
         _filePending = false;
         _awaitingFirstBatch = false;
@@ -932,7 +967,8 @@ public sealed class LauncherModel : ObservableObject
             _fileResults,
             Query,
             _presentation.PreservesSelection ? _results : [],
-            _presentation.PreservesSelection ? _selectedIndex : 0);
+            _presentation.PreservesSelection ? _selectedIndex : 0,
+            preserveOrder: IsFileNavigationActive);
         _applyingResults = true;
         _results = aggregated.Results.ToList();
         RaisePropertyChanged(nameof(Results));

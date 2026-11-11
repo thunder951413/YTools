@@ -64,7 +64,7 @@ public static class AITranslationProviderInfo
         AITranslationProvider.Moonshot => "moonshot-v1-8k",
         AITranslationProvider.Zhipu => "glm-4-flash",
         AITranslationProvider.OpenRouter => "openai/gpt-4o-mini",
-        AITranslationProvider.Anthropic => "claude-haiku-5-5",
+        AITranslationProvider.Anthropic => "claude-haiku-4-5",
         AITranslationProvider.Ollama => "qwen2.5:7b",
         _ => ""
     };

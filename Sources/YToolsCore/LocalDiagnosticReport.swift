@@ -6,7 +6,7 @@ public struct LocalDiagnosticReport: Sendable {
     public enum Backend: String, Sendable { case spotlight = "Spotlight", everything = "Everything", fileNameScan = "本机文件名扫描" }
     public static func text(version: String, platform: Platform, backend: Backend, historyCount: Int, pinnedCount: Int,
                             snippetCount: Int, preferencesHealthy: Bool, clipboardHealthy: Bool, snippetsHealthy: Bool,
-                            recentDocumentsHealthy: Bool, cloudEnabled: Bool) -> String {
+                            recentDocumentsHealthy: Bool, cloudEnabled: Bool, aiTranslationEnabled: Bool = false) -> String {
         let safeVersion = !version.isEmpty && version.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }) ? version : "开发版"
         return """
         YTools 本机诊断
@@ -20,6 +20,7 @@ public struct LocalDiagnosticReport: Sendable {
         片段存储：\(snippetsHealthy ? "正常" : "需处理")
         最近文档存储：\(recentDocumentsHealthy ? "正常" : "需处理")
         坚果云同步：\(cloudEnabled ? "已启用" : "已关闭")
+        AI 翻译：\(aiTranslationEnabled ? "已启用" : "已关闭")
         此报告不含路径、查询、剪贴板内容、应用名称或凭据。
         """
     }

@@ -119,11 +119,20 @@ struct SettingsRootView: View {
             }
 
             Divider()
+            let networked = preferences.clipboardCloudSyncEnabled || preferences.aiTranslation.enabled
+            let networkSummary: String = {
+                switch (preferences.clipboardCloudSyncEnabled, preferences.aiTranslation.enabled) {
+                case (true, true): return "同步 · AI 翻译已启用"
+                case (true, false): return "坚果云同步已启用"
+                case (false, true): return "AI 翻译已启用"
+                case (false, false): return "本机模式 · 联网关闭"
+                }
+            }()
             HStack(spacing: 6) {
                 Circle()
-                    .fill(preferences.clipboardCloudSyncEnabled ? Color.green : Color.secondary.opacity(0.6))
+                    .fill(networked ? Color.green : Color.secondary.opacity(0.6))
                     .frame(width: 6, height: 6)
-                Text(preferences.clipboardCloudSyncEnabled ? "坚果云同步已启用" : "本机模式 · 同步已关闭")
+                Text(networkSummary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(appVersion == "开发版" ? appVersion : "YTools " + appVersion)
@@ -214,13 +223,19 @@ struct SettingsRootView: View {
         case .permissions:
             PermissionsSettingsView()
         case .privacy:
-            PrivacySettingsView(preferences: preferences, recentDocuments: recentDocuments) {
+            PrivacySettingsView(
+                preferences: preferences,
+                clipboardManager: clipboardManager,
+                snippets: snippets,
+                recentDocuments: recentDocuments
+            ) {
                 LocalDiagnosticReport.text(version: appVersion,
                     platform: .macOS, backend: .spotlight, historyCount: clipboardManager.items.count,
                     pinnedCount: clipboardManager.items.filter(\.pinned).count, snippetCount: snippets.items.count,
                     preferencesHealthy: true, clipboardHealthy: clipboardManager.storageError == nil,
                     snippetsHealthy: snippets.storageError == nil, recentDocumentsHealthy: recentDocuments.storageError == nil,
-                    cloudEnabled: preferences.clipboardCloudSyncEnabled)
+                    cloudEnabled: preferences.clipboardCloudSyncEnabled,
+                    aiTranslationEnabled: preferences.aiTranslation.enabled)
             }
         }
     }

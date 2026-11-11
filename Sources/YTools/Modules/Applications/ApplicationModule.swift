@@ -4,11 +4,16 @@ import YToolsCore
 actor ApplicationModule {
     let id = "applications"
 
+    private struct CandidateName {
+        let raw: String
+        let forms: SearchTextForms
+    }
+
     private struct Application {
         let name: String
         let url: URL
         let canonicalPath: String
-        let searchForms: SearchTextForms
+        let candidates: [CandidateName]
         let isCustom: Bool
     }
 
@@ -165,14 +170,78 @@ actor ApplicationModule {
             requireExistingBundle: false
         ) ?? url.standardizedFileURL.path
         let applicationURL = URL(fileURLWithPath: canonicalPath, isDirectory: true)
-        let name = applicationURL.deletingPathExtension().lastPathComponent
+        let stem = applicationURL.deletingPathExtension().lastPathComponent
+        let rawNames = Self.collectCandidateNames(for: applicationURL, canonicalPath: canonicalPath, stem: stem)
+        let displayTitle = rawNames.first ?? stem
+        var seen = Set<String>()
+        var candidates: [CandidateName] = []
+        for raw in rawNames where !raw.isEmpty {
+            let key = raw.lowercased()
+            if seen.insert(key).inserted {
+                candidates.append(CandidateName(raw: raw, forms: normalizer.forms(for: raw)))
+            }
+        }
         return Application(
-            name: name,
+            name: displayTitle,
             url: applicationURL,
             canonicalPath: canonicalPath,
-            searchForms: normalizer.forms(for: name),
+            candidates: candidates,
             isCustom: isCustom
         )
+    }
+
+    private static func collectCandidateNames(
+        for applicationURL: URL,
+        canonicalPath: String,
+        stem: String
+    ) -> [String] {
+        var names: [String] = []
+        let bundle = Bundle(url: applicationURL)
+        if let localized = bundle?.localizedInfoDictionary {
+            if let display = localized["CFBundleDisplayName"] as? String { names.append(stripAppSuffix(display)) }
+            if let name = localized["CFBundleName"] as? String { names.append(stripAppSuffix(name)) }
+        }
+        let finderDisplay = stripAppSuffix(FileManager.default.displayName(atPath: canonicalPath))
+        if !finderDisplay.isEmpty {
+            names.append(finderDisplay)
+        }
+        names.append(stem)
+        if let info = bundle?.infoDictionary {
+            if let display = info["CFBundleDisplayName"] as? String { names.append(stripAppSuffix(display)) }
+            if let name = info["CFBundleName"] as? String { names.append(stripAppSuffix(name)) }
+        }
+        let resourcesURL = applicationURL.appendingPathComponent("Contents/Resources", isDirectory: true)
+        for localeDir in ["zh-Hans.lproj", "zh_CN.lproj", "en.lproj"] {
+            let stringsURL = resourcesURL
+                .appendingPathComponent(localeDir, isDirectory: true)
+                .appendingPathComponent("InfoPlist.strings")
+            if let data = try? Data(contentsOf: stringsURL),
+               let dict = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] {
+                if let display = dict["CFBundleDisplayName"] as? String { names.append(stripAppSuffix(display)) }
+                if let name = dict["CFBundleName"] as? String { names.append(stripAppSuffix(name)) }
+            }
+        }
+        let loctableURL = resourcesURL.appendingPathComponent("InfoPlist.loctable")
+        if let data = try? Data(contentsOf: loctableURL),
+           let root = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] {
+            for localeKey in ["zh_CN", "zh_Hans", "zh-Hans", "zh-CN", "en"] {
+                if let dict = root[localeKey] as? [String: Any] {
+                    if let display = dict["CFBundleDisplayName"] as? String { names.append(stripAppSuffix(display)) }
+                    if let name = dict["CFBundleName"] as? String { names.append(stripAppSuffix(name)) }
+                }
+            }
+        }
+        return names
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func stripAppSuffix(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasSuffix(".app"), trimmed.count > 4 {
+            return String(trimmed.dropLast(4))
+        }
+        return trimmed
     }
 
     private static func scanApplicationURLs(roots: [URL]) -> [URL] {
@@ -196,10 +265,25 @@ actor ApplicationModule {
         term: String,
         forms: SearchTextForms
     ) -> Int? {
-        if application.name.compare(term, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+        var best: Int?
+        for candidate in application.candidates {
+            if let score = scoreCandidate(candidate, term: term, forms: forms) {
+                best = max(best ?? score, score)
+                if best == 900 { return 900 }
+            }
+        }
+        return best
+    }
+
+    private func scoreCandidate(
+        _ candidateInfo: CandidateName,
+        term: String,
+        forms: SearchTextForms
+    ) -> Int? {
+        if candidateInfo.raw.compare(term, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
             return 900
         }
-        let candidate = application.searchForms
+        let candidate = candidateInfo.forms
         if candidate.normalized.hasPrefix(forms.normalized) { return 760 }
         if candidate.normalized.contains(forms.normalized) { return 560 }
         if candidate.abbreviation.hasPrefix(forms.normalized) { return 500 }

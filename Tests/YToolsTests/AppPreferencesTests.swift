@@ -1,3 +1,4 @@
+import Carbon
 import Foundation
 import XCTest
 @testable import YTools
@@ -65,6 +66,50 @@ final class AppPreferencesTests: XCTestCase {
         let reloaded = AppPreferences(defaults: fixture.defaults, launchAtLoginService: StubLaunchAtLoginService())
 
         XCTAssertEqual(reloaded.lastLauncherQuery, "微信")
+    }
+
+    func testRestoreDefaultsResetsSwappedHotKeysCustomHotKeysAndLastQuery() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let preferences = AppPreferences(defaults: fixture.defaults, launchAtLoginService: StubLaunchAtLoginService())
+        let originalLauncher = preferences.launcherHotKey
+        let originalClipboard = preferences.clipboardHotKey
+        let spare = HotKeyDefinition(keyCode: 11, modifiers: UInt32(cmdKey | optionKey)) // ⌥⌘B
+        preferences.launcherHotKey = spare
+        preferences.clipboardHotKey = originalLauncher
+        preferences.launcherHotKey = originalClipboard
+        preferences.lastLauncherQuery = "draft query"
+        preferences.customHotKeys = [
+            CustomHotKey(
+                hotKey: HotKeyDefinition(keyCode: 14, modifiers: UInt32(cmdKey | optionKey)),
+                target: .snippet(id: UUID()),
+                title: "Sig"
+            )
+        ]
+
+        preferences.restoreDefaults()
+
+        XCTAssertEqual(preferences.launcherHotKey, originalLauncher)
+        XCTAssertEqual(preferences.clipboardHotKey, originalClipboard)
+        XCTAssertTrue(preferences.customHotKeys.isEmpty)
+        XCTAssertEqual(preferences.lastLauncherQuery, "")
+    }
+
+    func testOversizedPNGDimensionsAreRejectedBeforeDecode() async {
+        // Minimal PNG signature + IHDR declaring 10000 x 10000 (100M pixels > 50M cap).
+        var png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        png.append(contentsOf: [0x00, 0x00, 0x00, 0x0D]) // IHDR length 13
+        png.append(contentsOf: Array("IHDR".utf8))
+        png.append(contentsOf: [0x00, 0x00, 0x27, 0x10]) // width = 10_000
+        png.append(contentsOf: [0x00, 0x00, 0x27, 0x10]) // height = 10_000
+        png.append(contentsOf: [0x08, 0x06, 0x00, 0x00, 0x00]) // 8-bit RGBA
+        png.append(contentsOf: [0x00, 0x00, 0x00, 0x00]) // dummy CRC
+
+        let processor = ClipboardCaptureProcessor()
+        let captured = await processor.process(
+            .image(data: png, isPNG: true, sourceApplication: "Test", createdAt: Date())
+        )
+        XCTAssertNil(captured)
     }
 
     private func makeFixture() throws -> Fixture {

@@ -20,6 +20,9 @@ public sealed class TranslationCoreTests
     // A third language goes to the primary language.
     [InlineData("Привет", TranslationLanguage.ChineseSimplified, TranslationLanguage.English, TranslationLanguage.ChineseSimplified)]
     [InlineData("こんにちは世界", TranslationLanguage.English, TranslationLanguage.Japanese, TranslationLanguage.English)]
+    [InlineData("国際連合安全保障理事会の決議", TranslationLanguage.ChineseSimplified, TranslationLanguage.Japanese, TranslationLanguage.ChineseSimplified)]
+    [InlineData("這是一個繁體中文測試", TranslationLanguage.ChineseSimplified, TranslationLanguage.ChineseTraditional, TranslationLanguage.ChineseSimplified)]
+    [InlineData("这是一个简体中文测试", TranslationLanguage.ChineseSimplified, TranslationLanguage.ChineseTraditional, TranslationLanguage.ChineseTraditional)]
     [InlineData("1234 !!", TranslationLanguage.ChineseSimplified, TranslationLanguage.English, TranslationLanguage.English)]
     public void DirectionFollowsLanguagePair(string text, TranslationLanguage primary, TranslationLanguage secondary, TranslationLanguage expected)
     {

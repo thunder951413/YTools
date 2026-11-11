@@ -475,6 +475,7 @@ final class AppPreferences: ObservableObject {
     }
 
     func restoreDefaults() {
+        suppressHotKeyNotification = true
         launchAtLogin = false
         launcherHotKey = .launcherDefault
         clipboardHotKey = .clipboardDefault
@@ -493,6 +494,7 @@ final class AppPreferences: ObservableObject {
         searchInputDelay = 0.15
         previewSelectionDelay = 0.3
         resultExpansionDuration = 0.15
+        lastLauncherQuery = ""
         enabledSearchContentTypes = Set(SearchContentType.allCases)
         enabledSystemCommands = Set(SystemCommandID.allCases)
         systemCommandKeywords = Dictionary(uniqueKeysWithValues: SystemCommandID.allCases.map {
@@ -504,6 +506,9 @@ final class AppPreferences: ObservableObject {
         fileActions = FileActionSettings()
         aiTranslation = AITranslationSettings()
         toolHotKeys = ToolHotKeySettings()
+        customHotKeys = []
+        unavailableHotKeyIDs = []
+        hotKeyError = nil
         includeFilesInDefaultResults = true
         includeAutomaticDictionary = true
         maximumSearchResults = 8
@@ -524,6 +529,8 @@ final class AppPreferences: ObservableObject {
         clipboardCloudSyncEnabled = false
         clipboardCloudSyncFolder = "YTools/clipboard-sync"
         clipboardCloudSyncIntervalMinutes = 15
+        suppressHotKeyNotification = false
+        notifyHotKeyChange()
     }
 
     func savePanelPosition(

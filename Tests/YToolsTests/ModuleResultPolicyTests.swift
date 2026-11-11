@@ -89,6 +89,31 @@ final class ModuleResultPolicyTests: XCTestCase {
         XCTAssertNil(ModuleResultPolicy().sanitize(result, from: descriptor))
     }
 
+    func testPermitsBoundedConcealedCopyWithoutCapabilities() {
+        let descriptor = ModuleDescriptor(id: "password", name: "Password")
+        let valid = LauncherResult(
+            id: "pwd",
+            moduleID: descriptor.id,
+            title: "secret",
+            subtitle: "",
+            icon: .system("key.fill"),
+            score: 1,
+            action: .copyConcealed("s3cr3t!")
+        )
+        XCTAssertEqual(ModuleResultPolicy().sanitize(valid, from: descriptor)?.action, .copyConcealed("s3cr3t!"))
+
+        let oversized = LauncherResult(
+            id: "pwd:huge",
+            moduleID: descriptor.id,
+            title: "secret",
+            subtitle: "",
+            icon: .system("key.fill"),
+            score: 1,
+            action: .copyConcealed(String(repeating: "x", count: 1_000_001))
+        )
+        XCTAssertNil(ModuleResultPolicy().sanitize(oversized, from: descriptor))
+    }
+
     func testEditQueryNeedsNoFileCapabilitySoCalculatorContinuationSurvives() {
         let descriptor = ModuleDescriptor(id: "calculator", name: "计算器")
         let result = LauncherResult(

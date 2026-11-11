@@ -25,6 +25,28 @@ final class PanelCommandRouterTests: XCTestCase {
             ),
             .activateResult(8)
         )
+        XCTAssertEqual(
+            router.command(
+                for: PanelKeyEvent(keyCode: 29, modifiers: .command),
+                mode: .launcher
+            ),
+            .activateResult(9)
+        )
+        XCTAssertEqual(
+            router.command(
+                for: PanelKeyEvent(keyCode: 29, modifiers: .command),
+                mode: .clipboard
+            ),
+            .activateResult(9)
+        )
+    }
+
+    func testExactModifierMatchingDoesNotHijackSelectionOrCombinedModifiers() {
+        XCTAssertNil(router.command(for: PanelKeyEvent(keyCode: 123, modifiers: .shift), mode: .launcher))
+        XCTAssertNil(router.command(for: PanelKeyEvent(keyCode: 124, modifiers: .shift), mode: .launcher))
+        XCTAssertNil(router.command(for: PanelKeyEvent(keyCode: 125, modifiers: .shift), mode: .launcher))
+        XCTAssertNil(router.command(for: PanelKeyEvent(keyCode: 18, modifiers: [.command, .option]), mode: .launcher))
+        XCTAssertNil(router.command(for: PanelKeyEvent(keyCode: 125, modifiers: [.command, .option]), mode: .launcher))
     }
 
     func testClipboardCopyOnlyAndNumberShortcuts() {

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using YTools.Core;
 
 namespace YTools.Services;
 
@@ -106,6 +107,8 @@ public sealed class EverythingClient : IDisposable
             ? null
             : new EverythingClient();
     }
+
+    internal static EverythingClient CreateLazy() => new();
 
     public bool Query(string search, int limit, out List<string> paths)
     {
@@ -308,9 +311,9 @@ public sealed class EverythingClient : IDisposable
             }
 
             var path = Encoding.Unicode.GetString(buffer, textOffset, (int)byteCount);
-            if (!string.IsNullOrWhiteSpace(path) && Path.IsPathRooted(path))
+            if (!string.IsNullOrWhiteSpace(path) && LocalPathPolicy.TryNormalize(path, out var normalizedPath))
             {
-                paths.Add(path);
+                paths.Add(normalizedPath);
             }
         }
 
@@ -523,8 +526,14 @@ public sealed class EverythingClient : IDisposable
             if (cancellationToken.IsCancellationRequested)
             {
                 cancelled = true;
-                // The unmanaged query buffer is owned by the caller. Wait for
-                // the bounded native call to finish before it is freed.
+                // The unmanaged query buffer is owned by the caller. Keep pumping
+                // the reply window while the bounded native call finishes so a
+                // synchronous WM_COPYDATA reply from Everything cannot deadlock.
+                while (!sendTask.Wait(TimeSpan.FromMilliseconds(10)))
+                {
+                    PumpMessages(replyWindow);
+                }
+
                 _ = sendTask.GetAwaiter().GetResult();
                 return false;
             }

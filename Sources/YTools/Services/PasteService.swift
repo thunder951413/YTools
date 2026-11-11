@@ -39,8 +39,14 @@ final class PasteService {
             application.activate()
             // Send ⌘V only once the target owns the keyboard, otherwise the
             // keystroke lands in YTools or nowhere.
-            for _ in 0..<40 where NSWorkspace.shared.frontmostApplication?.processIdentifier != application.processIdentifier {
+            for _ in 0..<40 where !application.isTerminated
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier != application.processIdentifier {
                 try? await Task.sleep(for: .milliseconds(15))
+            }
+            guard !application.isTerminated,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == application.processIdentifier else {
+                ToastPresenter.show("已复制；目标应用未获得焦点，未自动粘贴", systemImage: "doc.on.clipboard")
+                return
             }
             try? await Task.sleep(for: .milliseconds(40))
             Self.postKeyStroke(CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
@@ -66,7 +72,7 @@ final class PasteService {
     }
 
     nonisolated static func postKeyStroke(_ key: CGKeyCode, flags: CGEventFlags) {
-        let source = CGEventSource(stateID: .combinedSessionState)
+        let source = CGEventSource(stateID: .privateState)
         let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)
         let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
         down?.flags = flags

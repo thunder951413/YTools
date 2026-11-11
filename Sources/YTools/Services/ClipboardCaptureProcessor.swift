@@ -48,17 +48,16 @@ actor ClipboardCaptureProcessor {
             return ProcessedClipboardCapture(item: item, originalImage: nil)
 
         case let .image(data, isPNG, sourceApplication, createdAt):
-            // Reject oversized sources from their header before decoding and
-            // re-encoding a huge TIFF into PNG only to discard it afterwards.
-            // The header check is cheap and catches decompression bombs; PNG
-            // input is not re-encoded, so it keeps the original behaviour.
-            if !isPNG {
-                guard let sourceDimensions = imageDimensions(data),
-                      sourceDimensions.width * sourceDimensions.height <= Self.maximumImagePixels else { return nil }
+            // Reject oversized sources from their header before decoding or
+            // thumbnailing (including PNG decompression bombs).
+            guard let sourceDimensions = imageDimensions(data),
+                  Self.isWithinPixelBudget(width: sourceDimensions.width, height: sourceDimensions.height) else {
+                return nil
             }
             guard let normalized = isPNG ? data : normalizedPNGData(from: data),
                   normalized.count <= maximumImageBytes,
-                  let dimensions = imageDimensions(normalized) else { return nil }
+                  let dimensions = imageDimensions(normalized),
+                  Self.isWithinPixelBudget(width: dimensions.width, height: dimensions.height) else { return nil }
             let thumbnail = makeThumbnail(from: normalized)
             let item = ClipboardHistoryItem(
                 id: UUID(),
@@ -71,6 +70,12 @@ actor ClipboardCaptureProcessor {
             )
             return ProcessedClipboardCapture(item: item, originalImage: normalized)
         }
+    }
+
+    private static func isWithinPixelBudget(width: Int, height: Int) -> Bool {
+        guard width > 0, height > 0 else { return false }
+        let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
+        return !overflow && pixels <= maximumImagePixels
     }
 
     private func normalizedPNGData(from data: Data) -> Data? {
@@ -117,7 +122,16 @@ actor ClipboardCaptureProcessor {
         hash(Data("\(kind.rawValue)\0\(payload.joined(separator: "\0"))".utf8))
     }
 
+    private static let hexDigits: [UInt8] = Array("0123456789abcdef".utf8)
+
     private func hash(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let digest = SHA256.hash(data: data)
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(64)
+        for byte in digest {
+            bytes.append(Self.hexDigits[Int(byte >> 4)])
+            bytes.append(Self.hexDigits[Int(byte & 0x0F)])
+        }
+        return String(decoding: bytes, as: UTF8.self)
     }
 }

@@ -35,8 +35,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
         super.init(window: window)
         window.delegate = self
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard window.isKeyWindow else { return event }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
+            guard let window, window.isKeyWindow else { return event }
             if let recorder = window.firstResponder as? RecorderView, recorder.isRecording {
                 recorder.keyDown(with: event)
                 return nil

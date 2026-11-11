@@ -126,19 +126,27 @@ struct PermissionsSettingsView: View {
 
 struct PrivacySettingsView: View {
     @ObservedObject var preferences: AppPreferences
+    @ObservedObject var clipboardManager: ClipboardHistoryManager
+    @ObservedObject var snippets: SnippetManager
     @ObservedObject var recentDocuments: RecentDocumentsManager
     var diagnosticReport: () -> String = { "YTools 本机诊断" }
     @State private var diagnosticCopied = false
     @State private var confirmingRestore = false
 
+    private var storageErrors: [String] {
+        [clipboardManager.storageError, snippets.storageError, recentDocuments.storageError]
+            .compactMap { $0 }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             SettingsGroup(title: "本机数据") {
+                let allEncryptedHealthy = storageErrors.isEmpty
                 SettingsRow(title: "剪贴板、片段与最近文档", detail: "AES-GCM 加密，密钥保存在 macOS 登录钥匙串") {
-                    StatusPill(text: recentDocuments.storageError == nil ? "已加密" : "需要注意",
-                               tone: recentDocuments.storageError == nil ? .positive : .warning)
+                    StatusPill(text: allEncryptedHealthy ? "已加密" : "需要注意",
+                               tone: allEncryptedHealthy ? .positive : .warning)
                 }
-                if let error = recentDocuments.storageError {
+                ForEach(storageErrors, id: \.self) { error in
                     SettingsNoteRow("⚠︎ " + error)
                 }
                 SettingsDivider()

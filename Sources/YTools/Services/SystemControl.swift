@@ -80,6 +80,22 @@ enum PowerAction {
     /// chance to save and quit.
     func perform() throws {
         let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.loginwindow")
+        if let targetDescriptor = target.aeDesc {
+            let permission = AEDeterminePermissionToAutomateTarget(
+                targetDescriptor,
+                Self.coreEventClass,
+                eventID,
+                true
+            )
+            if permission != noErr {
+                let message = permission == errAEEventNotPermitted
+                    ? "请在“系统设置 → 隐私与安全性 → 自动化”中允许 YTools 控制 loginwindow。"
+                    : "系统自动化请求失败（错误 \(permission)）。"
+                throw NSError(domain: NSOSStatusErrorDomain, code: Int(permission), userInfo: [
+                    NSLocalizedDescriptionKey: message
+                ])
+            }
+        }
         let event = NSAppleEventDescriptor(
             eventClass: Self.coreEventClass,
             eventID: eventID,
@@ -87,7 +103,7 @@ enum PowerAction {
             returnID: AEReturnID(kAutoGenerateReturnID),
             transactionID: AETransactionID(kAnyTransactionID)
         )
-        _ = try event.sendEvent(options: [.noReply], timeout: 10)
+        _ = try event.sendEvent(options: [.noReply, .canInteract], timeout: 10)
     }
 }
 

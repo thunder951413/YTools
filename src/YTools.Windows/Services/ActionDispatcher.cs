@@ -366,12 +366,22 @@ public sealed class ActionDispatcher
         }
 
         var owner = _ownerProvider();
-        var confirmation = MessageBox.Show(
-            owner,
-            $"将“{Path.GetFileName(normalizedPath)}”移入回收站？\n\nYTools 不会永久删除项目。你仍可从回收站恢复。",
-            "移入回收站",
-            MessageBoxButton.OKCancel,
-            MessageBoxImage.Warning);
+        MessageBoxResult confirmation;
+        IsChoosingDestination = true;
+        try
+        {
+            confirmation = MessageBox.Show(
+                owner,
+                $"将“{Path.GetFileName(normalizedPath)}”移入回收站？\n\nYTools 不会永久删除项目。你仍可从回收站恢复。",
+                "移入回收站",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsChoosingDestination = false;
+        }
+
         if (confirmation != MessageBoxResult.OK)
         {
             return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);
@@ -395,29 +405,40 @@ public sealed class ActionDispatcher
     private ActionExecutionResult EmptyTrash()
     {
         var owner = _ownerProvider();
-        var confirmation = MessageBox.Show(
-            owner,
-            "永久清空回收站？\n\n系统将永久删除回收站中的项目，此操作无法撤销。",
-            "清空回收站",
-            MessageBoxButton.OKCancel,
-            MessageBoxImage.Warning);
+        MessageBoxResult confirmation;
+        IsChoosingDestination = true;
+        try
+        {
+            confirmation = MessageBox.Show(
+                owner,
+                "永久清空回收站？\n\n系统将永久删除回收站中的项目，此操作无法撤销。",
+                "清空回收站",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsChoosingDestination = false;
+        }
+
         if (confirmation != MessageBoxResult.OK)
         {
             return new ActionExecutionResult(ActionExecutionOutcome.KeepPanel);
         }
 
-        return BeginBackgroundOperation(() =>
+        return BeginBackgroundOperation(() => RunSta(() =>
         {
+            const uint noConfirmation = 0x0001;
             const uint noProgressUi = 0x0002;
             const uint noSound = 0x0004;
-            var result = SHEmptyRecycleBin(IntPtr.Zero, null, noProgressUi | noSound);
-            return result == 0
+            var result = SHEmptyRecycleBin(IntPtr.Zero, null, noConfirmation | noProgressUi | noSound);
+            return result == 0 || result == unchecked((int)0x8000FFFF)
                 ? new ActionExecutionResult(ActionExecutionOutcome.HidePanel)
                 : new ActionExecutionResult(
                     ActionExecutionOutcome.KeepPanel,
                     ErrorTitle: "无法清空回收站",
                     ErrorMessage: $"系统返回错误 {result}。");
-        });
+        }));
     }
 
     private ActionExecutionResult OpenMany(IReadOnlyList<string> paths)
@@ -541,7 +562,9 @@ public sealed class ActionDispatcher
     {
         try
         {
-            var arguments = Directory.Exists(path)
+            var isRootDirectory = Directory.Exists(path)
+                && string.Equals(Path.GetPathRoot(path), path, StringComparison.OrdinalIgnoreCase);
+            var arguments = isRootDirectory
                 ? $"\"{path}\""
                 : $"/select,\"{path}\"";
             Process.Start(

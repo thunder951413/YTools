@@ -95,10 +95,20 @@ final class UsageRankingStore {
     }
 
     func boost(for identifier: String, query: String) -> Int {
+        boostAndCount(for: identifier, queryHash: normalizedQueryHash(for: query)).boost
+    }
+
+    func normalizedQueryHash(for query: String) -> String? {
+        let normalizedQuery = normalize(query)
+        return normalizedQuery.isEmpty ? nil : hash(normalizedQuery)
+    }
+
+    func boostAndCount(for identifier: String, queryHash: String?, now: Date = Date()) -> (boost: Int, count: Int) {
         let resultHash = hash(identifier)
         let entry = entries[resultHash]
+        let count = entry?.count ?? 0
         let frequency = entry.map { Int(log2(Double($0.count + 1)) * 24) } ?? 0
-        let age = entry.map { Date().timeIntervalSince($0.lastUsed) } ?? .greatestFiniteMagnitude
+        let age = entry.map { now.timeIntervalSince($0.lastUsed) } ?? .greatestFiniteMagnitude
         let recency: Int
         switch age {
         case ..<3_600: recency = 45
@@ -106,17 +116,16 @@ final class UsageRankingStore {
         case ..<(7 * 86_400): recency = 15
         default: recency = 0
         }
-        let normalizedQuery = normalize(query)
         let latchBoost: Int
-        if !normalizedQuery.isEmpty,
-           let latch = latches[hash(normalizedQuery)],
+        if let queryHash,
+           let latch = latches[queryHash],
            latch.resultHash == resultHash,
-           Date().timeIntervalSince(latch.lastUsed) < 28 * 86_400 {
+           now.timeIntervalSince(latch.lastUsed) < 28 * 86_400 {
             latchBoost = min(180, 55 + latch.confirmations * 25)
         } else {
             latchBoost = 0
         }
-        return frequency + recency + latchBoost
+        return (frequency + recency + latchBoost, count)
     }
 
     func count(for identifier: String) -> Int {
@@ -135,8 +144,17 @@ final class UsageRankingStore {
         persistenceQueue.sync {}
     }
 
+    private static let hexDigits: [UInt8] = Array("0123456789abcdef".utf8)
+
     private func hash(_ value: String) -> String {
-        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+        let digest = SHA256.hash(data: Data(value.utf8))
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(64)
+        for byte in digest {
+            bytes.append(Self.hexDigits[Int(byte >> 4)])
+            bytes.append(Self.hexDigits[Int(byte & 0x0F)])
+        }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private func normalize(_ query: String) -> String {

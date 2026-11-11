@@ -73,6 +73,8 @@ final class LauncherModel: ObservableObject {
     /// Return was pressed before the first batch arrived; activate the top
     /// result as soon as it does instead of swallowing the key.
     private var activateWhenReady = false
+    private var searchWasCancelledWhileHidden = false
+    private var cachedRunningApplicationPaths: Set<String> = []
     var onDeferredActivation: (() -> Void)?
 
     var isChoosingActionDestination: Bool { actionDispatcher.isChoosingDestination }
@@ -160,10 +162,31 @@ final class LauncherModel: ObservableObject {
         .dropFirst()
         .sink { [weak self] _ in self?.refreshImmediately() }
         .store(in: &cancellables)
+        Publishers.CombineLatest4(
+            preferences.$fileNavigationShowsHiddenFiles,
+            preferences.$fileNavigationSort,
+            preferences.$fileNavigationSortAscending,
+            preferences.$fileNavigationFoldersFirst
+        )
+        .dropFirst()
+        .sink { [weak self] _ in
+            guard let self, self.isFileNavigationActive else { return }
+            self.refreshImmediately()
+        }
+        .store(in: &cancellables)
         preferences.$previewSelectionDelay
             .dropFirst()
             .sink { [weak self] _ in self?.schedulePreviewUpdate() }
             .store(in: &cancellables)
+        refreshCachedRunningApplicationPaths()
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        Publishers.Merge(
+            workspaceCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification),
+            workspaceCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in self?.refreshCachedRunningApplicationPaths() }
+        .store(in: &cancellables)
         Task { [searchCoordinator] in await searchCoordinator.prepare() }
 
         // Restore the previous session's query so the panel opens with it
@@ -227,13 +250,34 @@ final class LauncherModel: ObservableObject {
     /// property's `didSet` when it is assigned inside the type's own `init`,
     /// so the restored text may have no results behind it.
     func refreshForPresentation() {
-        guard results.isEmpty, !isSearchPending,
+        guard (results.isEmpty || searchWasCancelledWhileHidden), !isSearchPending,
               !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         refreshImmediately()
     }
 
+    func cancelActiveSearch() {
+        let hadPendingSearch = isSearchPending || backgroundPending || spotlightPending || awaitingFirstBatch
+        searchGeneration += 1
+        spotlightDebouncer.cancel()
+        searchTask?.cancel()
+        searchTask = nil
+        spotlight.cancel()
+        backgroundPending = false
+        spotlightPending = false
+        awaitingFirstBatch = false
+        activateWhenReady = false
+        if hadPendingSearch { searchWasCancelledWhileHidden = true }
+        if isSearchPending { isSearchPending = false }
+    }
+
     func cancelDeferredActivation() {
         activateWhenReady = false
+    }
+
+    private func refreshCachedRunningApplicationPaths() {
+        cachedRunningApplicationPaths = Set(
+            NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path }
+        )
     }
 
     private func resolveDeferredActivation() {
@@ -262,6 +306,7 @@ final class LauncherModel: ObservableObject {
             return
         }
         if !isSearchPending { isSearchPending = true }
+        searchWasCancelledWhileHidden = false
         searchGeneration += 1
         let generation = searchGeneration
         presentation.beginQuery()
@@ -283,7 +328,7 @@ final class LauncherModel: ObservableObject {
             requestModules: makeRequestModules(for: requestedQuery),
             runningApplicationPaths: preferences.behavior.markRunningApplications
                 && preferences.isSearchContentEnabled(.applications)
-                ? Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
+                ? cachedRunningApplicationPaths
                 : [],
             disabledModuleIDs: disabledToolModuleIDs
         )
@@ -309,6 +354,7 @@ final class LauncherModel: ObservableObject {
 
     private func resetForEmptyQuery() {
         presentation.reset()
+        searchWasCancelledWhileHidden = false
         backgroundPending = false
         spotlightPending = false
         awaitingFirstBatch = false
@@ -363,7 +409,8 @@ final class LauncherModel: ObservableObject {
             spotlight: spotlightResults,
             query: query,
             previousResults: presentation.preservesSelection ? results : [],
-            selectedIndex: presentation.preservesSelection ? selectedIndex : 0
+            selectedIndex: presentation.preservesSelection ? selectedIndex : 0,
+            preserveOrder: isFileNavigationActive
         )
         applyingResults = true
         results = aggregated.results
@@ -621,6 +668,7 @@ final class LauncherModel: ObservableObject {
     func addSelectedToBuffer(moveToNext: Bool) -> Bool {
         presentation.userSelected()
         guard !isShowingActions,
+              !awaitingFirstBatch,
               results.indices.contains(selectedIndex),
               let url = results[selectedIndex].resourceURL else { return false }
         fileBufferStore.add(url)
@@ -690,8 +738,12 @@ final class LauncherModel: ObservableObject {
     var selectedLargeTypeText: String? {
         guard !isShowingActions, !awaitingFirstBatch, results.indices.contains(selectedIndex) else { return nil }
         let result = results[selectedIndex]
-        if case let .copy(text) = result.action { return text }
-        return result.title.isEmpty ? nil : result.title
+        switch result.action {
+        case let .copy(text), let .copyConcealed(text), let .paste(text):
+            return text
+        default:
+            return result.title.isEmpty ? nil : result.title
+        }
     }
 
     private func apply(_ outcome: ActionExecutionOutcome) -> Bool {

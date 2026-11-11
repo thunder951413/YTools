@@ -1,7 +1,11 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
 using YTools.Core;
 using YTools.Models;
 using YTools.Services;
@@ -233,11 +237,38 @@ public partial class TranslatorWindow : Window
 
     private void OnHeaderMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ButtonState == MouseButtonState.Pressed && e.OriginalSource is not Button) { DragMove(); }
+        if (e.ChangedButton == MouseButton.Left
+            && e.ButtonState == MouseButtonState.Pressed
+            && (e.OriginalSource is not DependencyObject source || !HasButtonAncestor(source)))
+        {
+            DragMove();
+        }
+    }
+
+    private static bool HasButtonAncestor(DependencyObject? current)
+    {
+        while (current is not null)
+        {
+            if (current is ButtonBase)
+            {
+                return true;
+            }
+
+            current = current is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(current)
+                : LogicalTreeHelper.GetParent(current);
+        }
+
+        return false;
     }
 
     private async void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.ImeProcessed || IsComposingIme())
+        {
+            return;
+        }
+
         var modifiers = Keyboard.Modifiers;
         switch (e.Key)
         {
@@ -263,4 +294,34 @@ public partial class TranslatorWindow : Window
                 break;
         }
     }
+
+    private bool IsComposingIme()
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        var context = ImmGetContext(handle);
+        if (context == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            return ImmGetCompositionString(context, GcsCompStr, IntPtr.Zero, 0) > 0;
+        }
+        finally
+        {
+            _ = ImmReleaseContext(handle, context);
+        }
+    }
+
+    private const int GcsCompStr = 0x0008;
+
+    [DllImport("imm32.dll")]
+    private static extern IntPtr ImmGetContext(IntPtr hWnd);
+
+    [DllImport("imm32.dll")]
+    private static extern int ImmGetCompositionString(IntPtr hImc, int index, IntPtr buffer, int bufferLength);
+
+    [DllImport("imm32.dll")]
+    private static extern bool ImmReleaseContext(IntPtr hWnd, IntPtr hImc);
 }

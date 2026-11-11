@@ -413,6 +413,7 @@ actor ClipboardCloudSyncService {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 45
+        request.httpShouldHandleCookies = false
         request.setValue("Basic " + Data("\(credentials.username):\(credentials.appPassword)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
         request.setValue("YTools", forHTTPHeaderField: "User-Agent")
         if let depth { request.setValue(depth, forHTTPHeaderField: "Depth") }
@@ -512,26 +513,27 @@ actor ClipboardCloudSyncService {
     private func eventName(_ sequence: Int64) -> String { String(format: "%020lld.enc", sequence) }
     private func deviceDirectoryName(_ deviceID: UUID) -> String { deviceID.uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
     private func headName(_ deviceID: UUID) -> String { deviceDirectoryName(deviceID) + ".head" }
+    private static let isoFractionalStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let isoPlainStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: false)
+
     private func isZeroDeviceID(_ deviceID: UUID) -> Bool { deviceID.uuidString == "00000000-0000-0000-0000-000000000000" }
     private func encoded<Value: Encodable>(_ value: Value) throws -> Data {
+        let style = Self.isoFractionalStyle
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .custom { date, encoder in
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             var container = encoder.singleValueContainer()
-            try container.encode(formatter.string(from: date))
+            try container.encode(style.format(date))
         }
         return try encoder.encode(value)
     }
     private func decoded<Value: Decodable>(_ type: Value.Type, from data: Data) throws -> Value {
+        let fractional = Self.isoFractionalStyle
+        let plain = Self.isoPlainStyle
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { value in
             let container = try value.singleValueContainer()
             let string = try container.decode(String.self)
-            let fractional = ISO8601DateFormatter()
-            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let plain = ISO8601DateFormatter()
-            if let date = fractional.date(from: string) ?? plain.date(from: string) {
+            if let date = (try? fractional.parse(string)) ?? (try? plain.parse(string)) {
                 return date
             }
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ISO-8601 date.")

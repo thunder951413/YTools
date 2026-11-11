@@ -21,17 +21,36 @@ public sealed class ResultAggregator
         IReadOnlyList<LauncherResult> fileResults,
         string query,
         IReadOnlyList<LauncherResult> previousResults,
-        int selectedIndex)
+        int selectedIndex,
+        bool preserveOrder = false)
     {
         var selectedId = previousResults.Count > selectedIndex && selectedIndex >= 0
             ? previousResults[selectedIndex].Id
             : null;
-        var results = background.Concat(fileResults)
-            .Select(result => result.WithScore(result.Score + _usage.Boost(result.Id, query)))
-            .OrderByDescending(result => result.Score)
-            .ThenByDescending(result => result.ModuleId == "applications" ? _usage.Count(result.Id) : 0)
-            .ThenBy(result => result.Title, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        List<LauncherResult> results;
+        if (preserveOrder)
+        {
+            results = new List<LauncherResult>(background.Count + fileResults.Count);
+            results.AddRange(background);
+            results.AddRange(fileResults);
+        }
+        else
+        {
+            var queryHash = _usage.NormalizedQueryHash(query);
+            results = background.Concat(fileResults)
+                .Select(result =>
+                {
+                    var (boost, count) = _usage.BoostAndCount(result.Id, queryHash);
+                    return (
+                        Result: result.WithScore(result.Score + boost),
+                        TieCount: result.ModuleId == "applications" ? count : 0);
+                })
+                .OrderByDescending(entry => entry.Result.Score)
+                .ThenByDescending(entry => entry.TieCount)
+                .ThenBy(entry => entry.Result.Title, StringComparer.OrdinalIgnoreCase)
+                .Select(entry => entry.Result)
+                .ToList();
+        }
 
         int nextIndex;
         if (selectedId is not null

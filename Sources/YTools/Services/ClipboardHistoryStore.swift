@@ -174,7 +174,15 @@ final class ClipboardHistoryStore {
 
                 var normalized = item
                 if item.kind == .image, let originalImage {
-                    let thumbnail = makeThumbnail(from: originalImage) ?? Data()
+                    let thumbnail: Data
+                    if let existingThumb = item.binaryData,
+                       !existingThumb.isEmpty,
+                       existingThumb.count <= Self.thumbnailByteCeiling,
+                       existingThumb != originalImage {
+                        thumbnail = existingThumb
+                    } else {
+                        thumbnail = makeThumbnail(from: originalImage) ?? Data()
+                    }
                     if !thumbnail.isEmpty {
                         try writeProtected(try seal(thumbnail, key: key), to: thumbnailURL(item.id))
                     }
@@ -293,7 +301,10 @@ final class ClipboardHistoryStore {
                 let thumbnail: Data?
                 switch entry.kind {
                 case .image:
-                    _ = try JSONDecoder().decode(Record.self, from: open(Data(contentsOf: recordURL(entry.id)), key: key))
+                    let clear = try open(Data(contentsOf: recordURL(entry.id)), key: key)
+                    guard clear.first == UInt8(ascii: "{") else {
+                        throw CocoaError(.coderReadCorrupt)
+                    }
                     payload = [entry.displayText]
                     thumbnail = try loadThumbnail(entry.id, key: key)
                 case .text, .files:

@@ -56,7 +56,7 @@ public struct ModuleResultPolicy: Sendable {
 
     private func permits(_ action: ResultAction, descriptor: ModuleDescriptor) -> Bool {
         switch action {
-        case let .copy(text), let .paste(text):
+        case let .copy(text), let .copyConcealed(text), let .paste(text):
             return text.count <= 1_000_000
         case .none, .openSettings:
             return true

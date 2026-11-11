@@ -68,11 +68,29 @@ public enum TranslationDirection {
         secondary: TranslationLanguage
     ) -> TranslationLanguage {
         guard let script = dominantScript(of: text) else { return secondary }
+        if script == .han,
+           (primary == .chineseSimplified && secondary == .chineseTraditional)
+            || (primary == .chineseTraditional && secondary == .chineseSimplified) {
+            let detected: TranslationLanguage = prefersTraditionalChinese(text) ? .chineseTraditional : .chineseSimplified
+            return detected == primary ? secondary : primary
+        }
         if script == primary.script { return secondary }
         if script == secondary.script { return primary }
         // Japanese text mixes kana with Han; treat Han-only input as Chinese.
         if script == .kana, primary.script == .han { return primary }
         return primary
+    }
+
+    private static let traditionalMarkers = Set("體國學語機電網書車門開關東風長時會見發經現實點頭後裡與為無專業愛義樂話說讀寫聽買賣錢價張陳劉楊黃趙吳週鄭謝蘇馬馮葉鐘蔣韓鄧許蕭曾潘蔡韋薛閻盧體驗際應設數統處變條問議導認識響護標證際權環節優選備際".unicodeScalars)
+    private static let simplifiedMarkers = Set("体国学语机电网书车门开关东风长时不见发经现实点头后里与为无专业爱义乐话说读写听买卖钱价张陈刘杨黄赵吴周郑谢苏马冯叶钟蒋韩邓许萧曾潘蔡韦薛阎卢体验际应设数统处变条问议导认识响护标证际权环节优选备".unicodeScalars)
+
+    private static func prefersTraditionalChinese(_ text: String) -> Bool {
+        var traditional = 0, simplified = 0
+        for scalar in text.unicodeScalars {
+            if traditionalMarkers.contains(scalar) { traditional += 1 }
+            if simplifiedMarkers.contains(scalar) { simplified += 1 }
+        }
+        return traditional > simplified
     }
 
     static func dominantScript(of text: String) -> TranslationScript? {
@@ -87,8 +105,8 @@ public enum TranslationDirection {
             default: break
             }
         }
-        // Any kana marks Japanese even when Han characters outnumber it.
-        if kana > 0, kana * 5 >= han { return .kana }
+        // Any kana marks Japanese even in kanji-dense sentences (e.g. 13 kanji + 1 particle).
+        if kana > 0, kana * 15 >= han { return .kana }
         // CJK characters carry more meaning per character than Latin letters.
         let candidates: [(TranslationScript, Int)] = [
             (.han, han * 3), (.hangul, hangul * 3), (.cyrillic, cyrillic), (.latin, latin)

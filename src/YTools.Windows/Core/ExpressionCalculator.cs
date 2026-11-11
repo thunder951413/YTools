@@ -202,8 +202,16 @@ public static class ExpressionCalculator
                 return baseValue;
             }
 
-            var exponent = ParseUnary();
-            return Checked(Math.Pow(baseValue, exponent));
+            Enter();
+            try
+            {
+                var exponent = ParseUnary();
+                return Checked(Math.Pow(baseValue, exponent));
+            }
+            finally
+            {
+                _depth -= 1;
+            }
         }
 
         private double ParsePrimary()

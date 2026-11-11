@@ -20,33 +20,61 @@ public sealed class SearchTextNormalizer
     public SearchTextForms Forms(string value)
     {
         var normalizedValue = Normalized(value);
+        var containsNonAscii = false;
+        foreach (var ch in value)
+        {
+            if (ch > 127)
+            {
+                containsNonAscii = true;
+                break;
+            }
+        }
+
+        if (!containsNonAscii)
+        {
+            var asciiInitials = ExtractAsciiAbbreviation(value);
+            return new SearchTextForms(
+                normalizedValue,
+                asciiInitials,
+                normalizedValue,
+                ExtractWordInitials(value));
+        }
+
         var latin = ToLatin(value);
-        var latinWords = SplitWords(latin);
-        var latinInitials = Normalized(string.Concat(latinWords.Select(word => word[0])));
-        var nativeWords = SplitWords(value);
-        var wordInitials = nativeWords.Select(word => word[0]);
-
-        string nativeAbbreviation;
-        if (nativeWords.Count > 1)
-        {
-            nativeAbbreviation = Normalized(string.Concat(wordInitials));
-        }
-        else
-        {
-            nativeAbbreviation = Normalized(string.Concat(
-                value.Select((character, index) => char.IsUpper(character) || index == 0 ? character.ToString() : "")));
-        }
-
-        var containsNonASCII = value.Any(character => character > 127);
+        var latinInitials = ExtractWordInitials(latin);
         return new SearchTextForms(
             normalizedValue,
-            containsNonASCII ? latinInitials : nativeAbbreviation,
+            latinInitials,
             Normalized(latin),
             latinInitials);
     }
 
     public string Normalized(string value)
     {
+        var allAscii = true;
+        foreach (var ch in value)
+        {
+            if (ch > 127)
+            {
+                allAscii = false;
+                break;
+            }
+        }
+
+        if (allAscii)
+        {
+            var asciiBuilder = new StringBuilder(value.Length);
+            foreach (var ch in value)
+            {
+                if (char.IsAsciiLetterOrDigit(ch))
+                {
+                    asciiBuilder.Append(char.ToLowerInvariant(ch));
+                }
+            }
+
+            return asciiBuilder.ToString();
+        }
+
         var decomposed = value.Normalize(NormalizationForm.FormD);
         var builder = new StringBuilder(decomposed.Length);
         foreach (var character in decomposed)
@@ -71,8 +99,11 @@ public sealed class SearchTextNormalizer
     /// </summary>
     public int? FuzzyScore(string query, string candidate)
     {
-        var queryCharacters = Normalized(query).ToCharArray();
-        var candidateCharacters = Normalized(candidate).ToCharArray();
+        return FuzzyScoreNormalized(Normalized(query), Normalized(candidate));
+    }
+
+    public int? FuzzyScoreNormalized(ReadOnlySpan<char> queryCharacters, ReadOnlySpan<char> candidateCharacters)
+    {
         if (queryCharacters.Length == 0 || queryCharacters.Length > candidateCharacters.Length)
         {
             return null;
@@ -85,12 +116,13 @@ public sealed class SearchTextNormalizer
 
         foreach (var character in queryCharacters)
         {
-            var match = Array.IndexOf(candidateCharacters, character, searchStart);
-            if (match < 0)
+            var relative = candidateCharacters[searchStart..].IndexOf(character);
+            if (relative < 0)
             {
                 return null;
             }
 
+            var match = searchStart + relative;
             firstMatch ??= match;
             score += 12;
             if (previousMatch is { } previous)
@@ -108,29 +140,67 @@ public sealed class SearchTextNormalizer
         return Math.Max(1, Math.Min(99, score + coverage - startPenalty));
     }
 
-    private static List<string> SplitWords(string value)
+    private string ExtractWordInitials(string value)
     {
-        var words = new List<string>();
-        var current = new StringBuilder();
-        foreach (var character in value)
+        var initials = new StringBuilder(8);
+        var inWord = false;
+        foreach (var ch in value)
         {
-            if (char.IsLetterOrDigit(character))
+            if (char.IsLetterOrDigit(ch))
             {
-                current.Append(character);
+                if (!inWord)
+                {
+                    initials.Append(ch);
+                    inWord = true;
+                }
             }
-            else if (current.Length > 0)
+            else
             {
-                words.Add(current.ToString());
-                current.Clear();
+                inWord = false;
             }
         }
 
-        if (current.Length > 0)
+        return Normalized(initials.ToString());
+    }
+
+    private string ExtractAsciiAbbreviation(string value)
+    {
+        var wordInitials = new StringBuilder(8);
+        var wordCount = 0;
+        var inWord = false;
+        foreach (var ch in value)
         {
-            words.Add(current.ToString());
+            if (char.IsLetterOrDigit(ch))
+            {
+                if (!inWord)
+                {
+                    wordInitials.Append(char.ToLowerInvariant(ch));
+                    wordCount++;
+                    inWord = true;
+                }
+            }
+            else
+            {
+                inWord = false;
+            }
         }
 
-        return words;
+        if (wordCount > 1)
+        {
+            return wordInitials.ToString();
+        }
+
+        var camel = new StringBuilder(8);
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if ((char.IsUpper(ch) || i == 0) && char.IsLetterOrDigit(ch))
+            {
+                camel.Append(char.ToLowerInvariant(ch));
+            }
+        }
+
+        return camel.ToString();
     }
 
     private static string ToLatin(string value)
@@ -157,6 +227,11 @@ public sealed class SearchTextNormalizer
                 var pinyin = PinyinHelper.GetPinyin(character);
                 if (!string.IsNullOrEmpty(pinyin))
                 {
+                    if (builder.Length > 0 && builder[^1] != ' ')
+                    {
+                        builder.Append(' ');
+                    }
+
                     builder.Append(pinyin);
                     builder.Append(' ');
                 }

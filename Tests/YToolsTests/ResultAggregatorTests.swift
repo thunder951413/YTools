@@ -131,6 +131,38 @@ final class ResultAggregatorTests: XCTestCase {
     }
 
     @MainActor
+    func testPreserveOrderSkipsUsageReSortingWhileRetainingSelectedIdentity() {
+        let temporaryFile = temporaryRankingFile()
+        let store = UsageRankingStore(fileURL: temporaryFile.fileURL)
+        defer { removeTemporaryRankingFile(temporaryFile, afterFlushing: store) }
+        let first = result(id: "file:zulu", moduleID: "file-navigation", title: "Zulu")
+        let second = result(id: "file:alpha", moduleID: "file-navigation", title: "Alpha")
+        record(second, count: 40, in: store)
+
+        let aggregated = ResultAggregator(usage: store).aggregate(
+            background: [first, second],
+            spotlight: [],
+            query: "~/Documents",
+            previousResults: [first, second],
+            selectedIndex: 1,
+            preserveOrder: true
+        )
+
+        XCTAssertEqual(aggregated.results.map(\.id), [first.id, second.id])
+        XCTAssertEqual(aggregated.selectedIndex, 1)
+    }
+
+    func testSnippetPlaceholderExpansionIsSinglePass() {
+        let module = SnippetSearchModule(
+            items: [],
+            clipboardText: "literal {cursor} and {date}",
+            now: Date(timeIntervalSince1970: 1_760_000_000)
+        )
+        let expanded = module.expandedText("prefix {clipboard}{cursor} suffix")
+        XCTAssertEqual(expanded, "prefix literal {cursor} and {date} suffix")
+    }
+
+    @MainActor
     private func application(id: String, title: String) -> LauncherResult {
         LauncherResult(
             id: id,

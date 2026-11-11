@@ -103,6 +103,20 @@ class AITranslationService {
 
         write(root, "src/YTools.Windows/Services/ClipboardCloudSyncService.cs", '''using WebDAVClient;\nclass Sync { const string Server = "https://dav.jianguoyun.com"; void Configure() { BasePath = "/dav/"; var first = new Client(); var second = new Client(); } }\n''')
         run(root, 1)
+        write(root, "src/YTools.Windows/Services/ClipboardCloudSyncService.cs", '''using WebDAVClient;\nclass Sync { const string Server = "https://dav.jianguoyun.com"; void Configure() { BasePath = "/dav/"; var first = new Client(); } }\n''')
+
+        # Process.Start is restricted to ActionDispatcher.cs; verbatim/raw strings cannot smuggle fake comments.
+        write(root, "src/YTools.Windows/Services/ActionDispatcher.cs", "class D { void Run() { Process.Start(new ProcessStartInfo(\"explorer.exe\")); } }\n")
+        run(root, 0)
+        write(root, "src/YTools.Windows/Services/Elsewhere.cs", "class X { void Run() { Process.Start(\"notepad.exe\"); } }\n")
+        run(root, 1)
+        write(root, "src/YTools.Windows/Services/Elsewhere.cs", 'class X { string a = @"C:\\"; string b = "/*"; HttpClient c = new(); string d = "*/"; }\n')
+        run(root, 1)
+        write(root, "src/YTools.Windows/Services/Elsewhere.cs", "")
+        write(root, "Sources/YTools/Other.swift", 'let a = #"\\"#\nlet b = "/*"\nlet c = URLSession.shared\nlet d = "*/"\n')
+        run(root, 1)
+        write(root, "Sources/YTools/Other.swift", "")
+        run(root, 0)
     print("security_scan fixture tests passed")
     return 0
 

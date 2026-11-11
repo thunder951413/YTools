@@ -7,3 +7,5 @@ xcuserdata/
 *.log
 **/bin/
 **/obj/
+/.tmp-home/
+/.claude/

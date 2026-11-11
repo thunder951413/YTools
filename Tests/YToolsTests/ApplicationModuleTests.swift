@@ -114,6 +114,30 @@ final class ApplicationModuleTests: XCTestCase {
         XCTAssertEqual(refreshedResults.map(\.title), ["New Tool"])
     }
 
+    func testIndexesLocalizedChineseDisplayNameAndEnglishBundleStem() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let application = try makeApplicationBundle(in: directory, name: "Notes")
+        let zhLproj = application.appendingPathComponent("Contents/Resources/zh-Hans.lproj", isDirectory: true)
+        try FileManager.default.createDirectory(at: zhLproj, withIntermediateDirectories: true)
+        let stringsData = try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleDisplayName": "备忘录"],
+            format: .xml,
+            options: 0
+        )
+        try stringsData.write(to: zhLproj.appendingPathComponent("InfoPlist.strings"))
+
+        let module = ApplicationModule(roots: [directory])
+        let byChinese = await module.results(for: "备忘录")
+        let byPinyin = await module.results(for: "bwl")
+        let byEnglish = await module.results(for: "notes")
+
+        XCTAssertEqual(byChinese.count, 1)
+        XCTAssertEqual(byPinyin.count, 1)
+        XCTAssertEqual(byEnglish.count, 1)
+        XCTAssertEqual(byChinese.first?.action, byEnglish.first?.action)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

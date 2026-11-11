@@ -295,7 +295,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
         // loaded since the last presentation.
         _filterDebouncer.Cancel();
         RebuildFilteredItems();
-        PollPasteboard();
+        _monitor.PollIfChanged();
     }
 
     public bool ClearQuery()
@@ -344,6 +344,7 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
                 CopyError = "无法读取原件或写入系统剪贴板，请稍后重试。";
                 return false;
             }
+            _monitor.SyncSequenceNumber();
             if (_isShuttingDown) { return false; }
             PromoteToTop(item);
             return true;
@@ -751,7 +752,10 @@ public sealed class ClipboardHistoryManager : ObservableObject, IDisposable
                         ContentHash: Hash([capture.Value])),
                     null);
             case ClipboardCaptureKind.Image:
-                if (capture.ImageSource is null)
+                if (capture.ImageSource is null
+                    || capture.ImageSource.PixelWidth <= 0
+                    || capture.ImageSource.PixelHeight <= 0
+                    || (long)capture.ImageSource.PixelWidth * capture.ImageSource.PixelHeight > 50_000_000L)
                 {
                     return null;
                 }

@@ -20,9 +20,11 @@ namespace YTools.UI;
 public static class IconService
 {
     private static readonly ConcurrentDictionary<string, string> GlyphCache = new();
-    private static readonly ConcurrentDictionary<string, ImageSource> IconCache = new();
-    private static readonly ConcurrentDictionary<string, byte> PendingIconKeys = new();
-    private static readonly ConcurrentDictionary<string, byte> UnavailableIconKeys = new();
+    private static readonly ConcurrentDictionary<string, ImageSource> IconCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, byte> PendingIconKeys = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, byte> UnavailableIconKeys = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly BlockingCollection<Action> ExtractionQueue = new();
+    private static int _workerStarted;
     private static readonly string DefaultGlyph = "\uE8A5";
 
     /// <summary>Raised on the UI dispatcher after a background icon is cached.</summary>
@@ -113,8 +115,8 @@ public static class IconService
     {
         var key = icon switch
         {
-            ResultIcon.Application application => application.Path,
-            ResultIcon.File file => file.Path,
+            ResultIcon.Application application => LocalPathPolicy.TryNormalize(application.Path, out var appPath) ? appPath : "",
+            ResultIcon.File file => LocalPathPolicy.TryNormalize(file.Path, out var filePath) ? filePath : "",
             ResultIcon.RegisteredApplication application => $"registered:{application.AppUserModelId}",
             _ => ""
         };
@@ -140,6 +142,29 @@ public static class IconService
         }
     }
 
+    private static void EnsureWorkerStarted()
+    {
+        if (Interlocked.CompareExchange(ref _workerStarted, 1, 0) != 0)
+        {
+            return;
+        }
+
+        var thread = new Thread(() =>
+        {
+            InitializeCom();
+            foreach (var work in ExtractionQueue.GetConsumingEnumerable())
+            {
+                work();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "YTools Icon STA Worker"
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+    }
+
     private static void QueueIconExtraction(
         string cacheKey,
         string shellPath,
@@ -151,12 +176,12 @@ public static class IconService
             return;
         }
 
-        _ = Task.Run(() =>
+        EnsureWorkerStarted();
+        ExtractionQueue.Add(() =>
         {
             ImageSource? source = null;
             try
             {
-                InitializeCom();
                 var preferredPath = preferredPathFactory?.Invoke();
                 source = preferredPath is not null
                     ? LoadImageSource(preferredPath)

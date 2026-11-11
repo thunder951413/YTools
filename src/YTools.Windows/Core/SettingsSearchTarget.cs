@@ -50,6 +50,14 @@ public static partial class SettingsSearchCatalog
         new("AITranslationAPIKey", "tools", "translation", "AI 翻译 API Key", "API Key", "api key 密钥 令牌 token"),
         new("AITranslationLanguages", "tools", "translation", "翻译语言对", "语言对", "语言 中文 英文 日语 互译"),
         new("TranslatorHotKey", "shortcuts", "shortcuts", "AI 翻译窗口快捷键", "AI 翻译窗口", "翻译 快捷键 窗口 弹窗"),
+        new("IncludeAutomaticDictionary", "search", "search", "自动显示单词释义", "自动显示单词释义", "词典 释义 单词"),
+        new("CustomApplications", "apps", "search", "自定义应用", "", "应用 程序 添加 exe 路径"),
+        new("ApplicationAliases", "apps", "search", "应用别名", "", "应用 别名 简称 拼音 alias"),
+        new("SystemCommandKeywords", "system", "system", "系统命令关键词", "", "系统 命令 关键词 锁屏 休眠 回收站 暗色 专注"),
+        new("LocalDiagnostics", "privacy", "privacy", "复制本机诊断", "复制本机诊断", "诊断 版本 日志 反馈"),
+        new("ClearUsageLearning", "privacy", "privacy", "清除使用学习", "清除使用学习", "清除 学习 排序 哈希"),
+        new("ClearRecentDocuments", "privacy", "privacy", "清除最近文档", "清除最近文档", "清除 最近 文档 记录"),
+        new("RestoreDefaults", "privacy", "general", "恢复默认设置", "恢复默认设置", "恢复 默认 重置 reset"),
     ];
     public static IReadOnlyList<SettingsSearchTarget> SearchTargets(string query)
     {

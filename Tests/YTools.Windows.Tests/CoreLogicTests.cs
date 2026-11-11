@@ -489,11 +489,42 @@ public class ResultAggregatorTests
 
             Assert.Equal(frequent.Id, results.Results[0].Id);
             Assert.Equal(2, usage.Count(frequent.Id));
+
+            var preserved = new YTools.Services.ResultAggregator(usage).Aggregate(
+                [rare, frequent],
+                [],
+                "C:\\",
+                [rare, frequent],
+                1,
+                preserveOrder: true);
+            Assert.Equal([rare.Id, frequent.Id], preserved.Results.Select(item => item.Id));
+            Assert.Equal(1, preserved.SelectedIndex);
         }
         finally
         {
             File.Delete(path);
         }
+    }
+
+    [Fact]
+    public async Task SnippetPlaceholderExpansion_IsSinglePass()
+    {
+        var item = new SnippetItem(
+            Guid.NewGuid(),
+            "Clip",
+            "clip",
+            "prefix {clipboard}{cursor} suffix",
+            "默认",
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        var module = new YTools.Services.SnippetSearchModule(
+            [item],
+            "literal {cursor} and {date}",
+            DateTimeOffset.FromUnixTimeSeconds(1_760_000_000));
+
+        var results = await module.SearchAsync(new ModuleSearchRequest("snip clip", 5));
+        var copy = Assert.IsType<ResultAction.Copy>(Assert.Single(results).Action);
+        Assert.Equal("prefix literal {cursor} and {date} suffix", copy.Text);
     }
 }
 

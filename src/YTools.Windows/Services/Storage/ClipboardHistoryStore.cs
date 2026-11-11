@@ -42,6 +42,7 @@ public sealed record ClipboardStoreLoadResult(
 public sealed class ClipboardHistoryStore
 {
     private const int MaximumEncryptedBytes = 200 * 1024 * 1024;
+    private const int ThumbnailByteCeiling = 256 * 1024;
 
     private bool _writeLocked;
     private readonly string _vaultDirectory;
@@ -108,8 +109,12 @@ public sealed class ClipboardHistoryStore
                 switch (entry.Kind)
                 {
                     case ClipboardItemKind.Image:
-                        _ = JsonSerializer.Deserialize<Record>(AesGcmBox.Open(File.ReadAllBytes(RecordFile(entry.Id)), key))
-                            ?? throw new InvalidDataException("图片原记录为空");
+                        var clearImage = AesGcmBox.Open(File.ReadAllBytes(RecordFile(entry.Id)), key);
+                        if (clearImage.Length == 0 || clearImage[0] != (byte)'{')
+                        {
+                            throw new InvalidDataException("图片原记录为空或损坏");
+                        }
+
                         payload = [entry.DisplayText];
                         thumbnail = LoadThumbnail(entry.Id, key);
                         break;
@@ -155,7 +160,9 @@ public sealed class ClipboardHistoryStore
         if (_writeLocked) { throw new SecureStorageException("存在不可读记录，原保险库保持只读。"); }
         var key = DpapiKeyAccessor.Key(createIfMissing: !File.Exists(_manifestFile));
         var existing = CurrentManifest(key);
-        var existingById = existing.Entries.ToDictionary(entry => entry.Id);
+        var existingById = existing.Entries
+            .GroupBy(entry => entry.Id)
+            .ToDictionary(group => group.Key, group => group.First());
         var candidateEntries = new List<Entry>();
         var normalizedById = new Dictionary<Guid, ClipboardHistoryItem>();
         var newlyWrittenIds = new HashSet<Guid>();
@@ -177,7 +184,10 @@ public sealed class ClipboardHistoryStore
                         item.IsPinned,
                         item.UpdatedAt ?? old.UpdatedAt,
                         Math.Max(1, item.CopyCount)));
-                    normalizedById[item.Id] = item;
+                    normalizedById[item.Id] = item.Kind == ClipboardItemKind.Image
+                        && item.BinaryData is { Length: > ThumbnailByteCeiling } fullImage
+                        ? item with { BinaryData = MakeThumbnail(fullImage) }
+                        : item;
                     continue;
                 }
 
@@ -191,10 +201,12 @@ public sealed class ClipboardHistoryStore
                 newlyWrittenIds.Add(item.Id);
 
                 var normalized = item;
-                byte[]? thumbnail = null;
                 if (item.Kind == ClipboardItemKind.Image && originalImage is not null)
                 {
-                    thumbnail = MakeThumbnail(originalImage);
+                    var thumbnail = item.BinaryData is { Length: > 0 and <= ThumbnailByteCeiling } existingThumb
+                        && !ReferenceEquals(existingThumb, originalImage)
+                        ? existingThumb
+                        : MakeThumbnail(originalImage);
                     if (thumbnail is { Length: > 0 })
                     {
                         WriteProtected(AesGcmBox.Seal(thumbnail, key), ThumbnailFile(item.Id));

@@ -65,7 +65,7 @@ public sealed class PanelCommandRouter
 
     public PanelCommand? Command(PanelKeyEvent keyEvent, PanelInputMode mode)
     {
-        if (keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command)
+        if (keyEvent.Modifiers == PanelKeyModifiers.Command
             && ResultIndexForNumberKeyCode(keyEvent.KeyCode) is { } index)
         {
             return new PanelCommand(PanelCommandKind.ActivateResult, index);
@@ -77,34 +77,39 @@ public sealed class PanelCommandRouter
                 new PanelCommand(PanelCommandKind.ActivateSelected),
             (VkReturn, PanelInputMode.Clipboard) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
                 new PanelCommand(PanelCommandKind.CopyClipboardItemOnly),
-            (VkUp, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Option) =>
+            (VkUp, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.Option =>
                 new PanelCommand(PanelCommandKind.AddSelectedToBuffer, 0),
-            (VkDown, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Option) =>
+            (VkDown, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.Option =>
                 new PanelCommand(PanelCommandKind.AddSelectedToBuffer, 1),
-            (VkLeft, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Option) =>
+            (VkLeft, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.Option =>
                 new PanelCommand(PanelCommandKind.RemoveLastBufferedItem),
-            (VkRight, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Option) =>
+            (VkRight, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.Option =>
                 new PanelCommand(PanelCommandKind.ShowFileBufferActions),
-            (VkBack, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Option) =>
+            (VkBack, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.Option =>
                 new PanelCommand(PanelCommandKind.ClearFileBuffer),
-            (VkEscape, _) => new PanelCommand(PanelCommandKind.Escape),
-            (VkDown, _) => new PanelCommand(PanelCommandKind.MoveSelection, 1),
-            (VkUp, _) => new PanelCommand(PanelCommandKind.MoveSelection, -1),
-            (VkRight, PanelInputMode.Launcher) => new PanelCommand(PanelCommandKind.ShowActions),
-            (VkLeft, PanelInputMode.Launcher) => new PanelCommand(PanelCommandKind.NavigateBack),
-            (VkD, PanelInputMode.Clipboard) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command) =>
+            (VkEscape, _) when keyEvent.Modifiers == PanelKeyModifiers.None =>
+                new PanelCommand(PanelCommandKind.Escape),
+            (VkDown, _) when keyEvent.Modifiers == PanelKeyModifiers.None =>
+                new PanelCommand(PanelCommandKind.MoveSelection, 1),
+            (VkUp, _) when keyEvent.Modifiers == PanelKeyModifiers.None =>
+                new PanelCommand(PanelCommandKind.MoveSelection, -1),
+            (VkRight, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.None =>
+                new PanelCommand(PanelCommandKind.ShowActions),
+            (VkLeft, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.None =>
+                new PanelCommand(PanelCommandKind.NavigateBack),
+            (VkD, PanelInputMode.Clipboard) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
                 new PanelCommand(PanelCommandKind.DeleteClipboardItem),
-            (VkS, PanelInputMode.Clipboard) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command) =>
+            (VkS, PanelInputMode.Clipboard) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
                 new PanelCommand(PanelCommandKind.SaveClipboardAsSnippet),
             (VkP, PanelInputMode.Clipboard) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
                 new PanelCommand(PanelCommandKind.ToggleClipboardPreview),
-            (VkY, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command) =>
+            (VkY, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
                 new PanelCommand(PanelCommandKind.TogglePreview),
-            (VkL, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command) =>
+            (VkL, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
                 new PanelCommand(PanelCommandKind.ShowLargeType),
-            (VkReturn, PanelInputMode.Launcher) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command) =>
+            (VkReturn, PanelInputMode.Launcher) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
                 new PanelCommand(PanelCommandKind.RevealSelected),
-            (VkOemComma, _) when keyEvent.Modifiers.HasFlag(PanelKeyModifiers.Command) =>
+            (VkOemComma, _) when keyEvent.Modifiers == PanelKeyModifiers.Command =>
                 new PanelCommand(PanelCommandKind.OpenSettings),
             _ => null
         };

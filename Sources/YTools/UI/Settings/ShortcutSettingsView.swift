@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import YToolsCore
 
 struct ShortcutSettingsView: View {
     @ObservedObject var preferences: AppPreferences
@@ -256,7 +257,18 @@ private struct AddCustomHotKeySheet: View {
         }
         panel.prompt = "选择"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        path = url.standardizedFileURL.path
+        switch kind {
+        case .application:
+            path = MacApplicationPathPolicy.normalize(url: url, requireExistingBundle: true)
+        case .folder:
+            let canonical = url.standardizedFileURL.resolvingSymlinksInPath().standardizedFileURL
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: canonical.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                path = canonical.path
+            }
+        case .snippet:
+            break
+        }
     }
 
     private func add() {

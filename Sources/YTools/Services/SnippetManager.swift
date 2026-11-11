@@ -272,6 +272,7 @@ struct SnippetSearchModule: YToolsModule {
     func expandedText(_ content: String) -> String { expand(content) }
 
     private func expand(_ content: String) -> String {
+        guard content.contains("{") else { return content }
         let formatter = DateFormatter()
         formatter.locale = .current
         formatter.dateStyle = .medium
@@ -279,11 +280,36 @@ struct SnippetSearchModule: YToolsModule {
         formatter.dateStyle = .none
         formatter.timeStyle = .medium
         let time = formatter.string(from: now)
-        return content
-            .replacingOccurrences(of: "{date}", with: date)
-            .replacingOccurrences(of: "{time}", with: time)
-            .replacingOccurrences(of: "{clipboard}", with: clipboardText)
-            .replacingOccurrences(of: "{cursor}", with: "")
+
+        var output = ""
+        output.reserveCapacity(content.count)
+        var index = content.startIndex
+        while index < content.endIndex {
+            guard let brace = content[index...].firstIndex(of: "{") else {
+                output.append(contentsOf: content[index...])
+                break
+            }
+            if brace > index {
+                output.append(contentsOf: content[index..<brace])
+            }
+            let remaining = content[brace...]
+            if remaining.hasPrefix("{date}") {
+                output.append(date)
+                index = content.index(brace, offsetBy: 6)
+            } else if remaining.hasPrefix("{time}") {
+                output.append(time)
+                index = content.index(brace, offsetBy: 6)
+            } else if remaining.hasPrefix("{clipboard}") {
+                output.append(clipboardText)
+                index = content.index(brace, offsetBy: 11)
+            } else if remaining.hasPrefix("{cursor}") {
+                index = content.index(brace, offsetBy: 8)
+            } else {
+                output.append("{")
+                index = content.index(after: brace)
+            }
+        }
+        return output
     }
 
     private func preview(_ text: String, limit: Int = 72) -> String {

@@ -14,6 +14,9 @@ public enum ResultIcon: Equatable, Sendable {
 /// excludes arbitrary shell commands, scripts, dynamic code and URL opening.
 public enum ResultAction: Equatable, Sendable {
     case copy(String)
+    /// Copies sensitive generated text (e.g. a random password) with pasteboard
+    /// concealed/auto-generated markers so clipboard history and sync skip it.
+    case copyConcealed(String)
     case open(URL)
     case reveal(URL)
     case navigate(String)

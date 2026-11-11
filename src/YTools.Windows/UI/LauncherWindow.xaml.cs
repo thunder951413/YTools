@@ -79,8 +79,8 @@ public partial class LauncherWindow : Window
     public void HidePanel()
     {
         _shiftPreviewTimer?.Stop();
-        _model?.CancelDeferredActivation();
-        _model?.EndMomentaryPreview();
+        _model?.CancelActiveSearch();
+        _model?.EndPreviewSession();
         _model?.PersistLastQuery();
         Hide();
     }
@@ -207,6 +207,16 @@ public partial class LauncherWindow : Window
         _shiftPreviewTimer?.Stop();
 
         if (ShouldIgnoreWhileComposing(e.Key))
+        {
+            return;
+        }
+
+        if (e.Key == Key.Right
+            && Keyboard.Modifiers == ModifierKeys.None
+            && !_model.IsShowingActions
+            && SearchBox.IsKeyboardFocusWithin
+            && SearchBox.SelectionLength == 0
+            && SearchBox.CaretIndex < SearchBox.Text.Length)
         {
             return;
         }

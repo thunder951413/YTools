@@ -20,6 +20,7 @@ SWIFT_SYNC = Path("Sources/YTools/Services/ClipboardCloudSyncService.swift")
 WINDOWS_SYNC = Path("src/YTools.Windows/Services/ClipboardCloudSyncService.cs")
 SETTINGS_ENDPOINT = Path("src/YTools.Windows/UI/SettingsWindow.xaml.cs")
 MAC_ACTION_DISPATCHER = Path("Sources/YTools/Services/ActionDispatcher.swift")
+WINDOWS_ACTION_DISPATCHER = Path("src/YTools.Windows/Services/ActionDispatcher.cs")
 ENDPOINT = "https://dav.jianguoyun.com/dav/"
 SWIFT_TRANSLATION = Path("Sources/YTools/Services/AITranslationService.swift")
 WINDOWS_TRANSLATION = Path("src/YTools.Windows/Services/AITranslationService.cs")
@@ -65,6 +66,8 @@ FORBIDDEN = {
         r"\bAssembly\.Load(?:From|File)?\s*\(",
         r"\bActivator\.CreateInstance\s*\(",
         r"\bAppDomain\.(?:CurrentDomain\.Load|CreateDomain)\s*\(",
+        r"\bProcess\s*\.\s*Start\b",
+        r"\bProcessStartInfo\b",
         r"(?:cmd|powershell)\.exe",
         r"/bin/(?:sh|bash|zsh)",
     ),
@@ -75,25 +78,92 @@ def without_comments(text: str, suffix: str) -> str:
     """Keep string literals, but mask comments while preserving line numbers."""
     result: list[str] = []
     index = 0
-    quote: str | None = None
-    while index < len(text):
+    length = len(text)
+    while index < length:
         current = text[index]
-        following = text[index + 1] if index + 1 < len(text) else ""
-        if quote is not None:
-            result.append(current)
-            if current == "\\" and index + 1 < len(text):
-                result.append(text[index + 1])
-                index += 2
+        following = text[index + 1] if index + 1 < length else ""
+
+        # C# verbatim string literals: @"...", $@"...", @$"..." ("" escapes a quote).
+        if suffix == ".cs":
+            verbatim_prefix = 0
+            if current == "@" and following == '"':
+                verbatim_prefix = 2
+            elif current in {"@", "$"} and following in {"@", "$"} and current != following and index + 2 < length and text[index + 2] == '"':
+                verbatim_prefix = 3
+            if verbatim_prefix:
+                result.append(text[index : index + verbatim_prefix])
+                index += verbatim_prefix
+                while index < length:
+                    ch = text[index]
+                    result.append(ch)
+                    if ch == '"' and index + 1 < length and text[index + 1] == '"':
+                        result.append('"')
+                        index += 2
+                        continue
+                    index += 1
+                    if ch == '"':
+                        break
                 continue
-            if current == quote:
-                quote = None
-            index += 1
+
+        # Swift / C# raw string literals: ###"..."###, ###"""..."""###, """..."""
+        hashes = 0
+        probe = index
+        if suffix == ".swift" and current == "#":
+            while probe < length and text[probe] == "#":
+                hashes += 1
+                probe += 1
+        elif suffix == ".cs" and current == "$":
+            while probe < length and text[probe] == "$":
+                probe += 1
+        if probe < length and text[probe : probe + 3] == '"""':
+            quote_run = 3
+            while probe + quote_run < length and text[probe + quote_run] == '"':
+                quote_run += 1
+            closing = '"' * quote_run + ("#" * hashes)
+            end_quote = probe + quote_run
+            result.append(text[index:end_quote])
+            index = end_quote
+            close_pos = text.find(closing, index)
+            if close_pos == -1:
+                result.append(text[index:])
+                break
+            result.append(text[index : close_pos + len(closing)])
+            index = close_pos + len(closing)
             continue
-        if current in {"\"", "'"}:
+        if suffix == ".swift" and hashes > 0 and probe < length and text[probe] == '"':
+            closing = '"' + ("#" * hashes)
+            result.append(text[index : probe + 1])
+            index = probe + 1
+            while index < length:
+                if text.startswith(closing, index):
+                    result.append(closing)
+                    index += len(closing)
+                    break
+                escape = "\\" + ("#" * hashes)
+                if text.startswith(escape, index) and index + len(escape) < length:
+                    result.append(text[index : index + len(escape) + 1])
+                    index += len(escape) + 1
+                    continue
+                result.append(text[index])
+                index += 1
+            continue
+
+        if current in {'"', "'"}:
             quote = current
             result.append(current)
             index += 1
+            while index < length:
+                ch = text[index]
+                result.append(ch)
+                if ch == "\\" and index + 1 < length:
+                    result.append(text[index + 1])
+                    index += 2
+                    continue
+                index += 1
+                if ch == quote:
+                    break
             continue
+
         if current == "/" and following == "/":
             end = text.find("\n", index)
             if end == -1:
@@ -103,7 +173,7 @@ def without_comments(text: str, suffix: str) -> str:
             continue
         if current == "/" and following == "*":
             end = text.find("*/", index + 2)
-            end = len(text) if end == -1 else end + 2
+            end = length if end == -1 else end + 2
             result.append("\n" * text[index:end].count("\n"))
             index = end
             continue
@@ -224,6 +294,10 @@ def scan(root: Path) -> list[str]:
                     if relative == WINDOWS_SYNC and token in {"WebDAVClient", "new Client("}:
                         continue
                     if relative == WINDOWS_TRANSLATION and token in {"HttpClient", "SocketsHttpHandler"}:
+                        continue
+                    if relative == WINDOWS_ACTION_DISPATCHER and (
+                        token.startswith("Process")
+                    ):
                         continue
                     if relative == MAC_ACTION_DISPATCHER and (
                         token == "Process(" or token.startswith("process.arguments") or token.startswith("process.executableURL")

@@ -63,31 +63,42 @@ public sealed class UsageRankingStore
 
     public int Boost(string identifier, string query)
     {
+        return BoostAndCount(identifier, NormalizedQueryHash(query)).Boost;
+    }
+
+    public string? NormalizedQueryHash(string query)
+    {
+        var normalized = Normalize(query);
+        return string.IsNullOrEmpty(normalized) ? null : Hash(normalized);
+    }
+
+    public (int Boost, int Count) BoostAndCount(string identifier, string? queryHash)
+    {
+        var resultHash = Hash(identifier);
+        var now = DateTimeOffset.UtcNow;
         lock (_lock)
         {
-            var resultHash = Hash(identifier);
-            var frequency = _entries.TryGetValue(resultHash, out var entry)
-                ? (int)(Math.Log2(entry.Count + 1) * 24)
-                : 0;
-            var age = _entries.TryGetValue(resultHash, out var entry2)
-                ? DateTimeOffset.UtcNow - entry2.LastUsed
+            var hasEntry = _entries.TryGetValue(resultHash, out var entry);
+            var count = hasEntry && entry is not null ? entry.Count : 0;
+            var frequency = count > 0 ? (int)(Math.Log2(count + 1) * 24) : 0;
+            var age = hasEntry && entry is not null
+                ? now - entry.LastUsed
                 : TimeSpan.MaxValue;
             var recency = age < TimeSpan.FromHours(1) ? 45
                 : age < TimeSpan.FromDays(1) ? 30
                 : age < TimeSpan.FromDays(7) ? 15
                 : 0;
 
-            var normalizedQuery = Normalize(query);
             var latchBoost = 0;
-            if (!string.IsNullOrEmpty(normalizedQuery)
-                && _latches.TryGetValue(Hash(normalizedQuery), out var latch)
+            if (queryHash is not null
+                && _latches.TryGetValue(queryHash, out var latch)
                 && latch.ResultHash == resultHash
-                && DateTimeOffset.UtcNow - latch.LastUsed < TimeSpan.FromDays(28))
+                && now - latch.LastUsed < TimeSpan.FromDays(28))
             {
                 latchBoost = Math.Min(180, 55 + latch.Confirmations * 25);
             }
 
-            return frequency + recency + latchBoost;
+            return (frequency + recency + latchBoost, count);
         }
     }
 

@@ -67,6 +67,12 @@ struct YToolsCoreChecks {
         } catch CalculatorError.divisionByZero {
             // Expected.
         }
+        do {
+            _ = try calculator.evaluate(Array(repeating: "2", count: 70).joined(separator: "^"))
+            throw CheckFailure.message("Calculator accepted unbounded power nesting")
+        } catch CalculatorError.invalidExpression {
+            // Expected.
+        }
     }
 
     private static func checkPanelCommandRouter() throws {
@@ -75,8 +81,14 @@ struct YToolsCoreChecks {
             for: PanelKeyEvent(keyCode: 18, modifiers: .command),
             mode: .launcher
         )
-        guard first == .activateResult(0) else {
-            throw CheckFailure.message("Command + 1 mapping failed")
+        let tenth = router.command(
+            for: PanelKeyEvent(keyCode: 29, modifiers: .command),
+            mode: .launcher
+        )
+        guard first == .activateResult(0), tenth == .activateResult(9),
+              router.command(for: PanelKeyEvent(keyCode: 123, modifiers: .shift), mode: .launcher) == nil,
+              router.command(for: PanelKeyEvent(keyCode: 18, modifiers: [.command, .option]), mode: .launcher) == nil else {
+            throw CheckFailure.message("Command + digit or exact modifier mapping failed")
         }
         let buffered = router.command(
             for: PanelKeyEvent(keyCode: 125, modifiers: .option),
@@ -139,7 +151,12 @@ struct YToolsCoreChecks {
             score: 1,
             action: .copy("value")
         )
-        guard policy.sanitize(copied, from: noCapabilities)?.moduleID == "safe" else {
+        guard policy.sanitize(copied, from: noCapabilities)?.moduleID == "safe",
+              policy.sanitize(
+                  LauncherResult(id: "concealed", moduleID: "wrong", title: "Secret", subtitle: "",
+                                 icon: .system("key.fill"), score: 1, action: .copyConcealed("value")),
+                  from: noCapabilities
+              )?.action == .copyConcealed("value") else {
             throw CheckFailure.message("Module policy rejected a safe copy result")
         }
         let privileged = LauncherResult(
@@ -223,6 +240,8 @@ struct YToolsCoreChecks {
         let scheme = "://"
         guard TranslationDirection.target(for: "你好世界", primary: .chineseSimplified, secondary: .english) == .english,
               TranslationDirection.target(for: "hello world", primary: .chineseSimplified, secondary: .english) == .chineseSimplified,
+              TranslationDirection.target(for: "国際連合安全保障理事会の決議", primary: .chineseSimplified, secondary: .japanese) == .chineseSimplified,
+              TranslationDirection.target(for: "這是一個繁體中文測試", primary: .chineseSimplified, secondary: .chineseTraditional) == .chineseSimplified,
               TranslationQuery.parse("fy hello", keywords: ["fy"]) == "hello",
               TranslationQuery.parse("fyi", keywords: ["fy"]) == nil,
               case .failure(.insecureScheme) = TranslationEndpointPolicy.requestURL(baseURL: "http" + scheme + "api.example.com/v1", format: .openAICompatible),

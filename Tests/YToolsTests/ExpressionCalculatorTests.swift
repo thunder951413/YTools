@@ -62,6 +62,8 @@ final class ExpressionCalculatorTests: XCTestCase {
         let nestedCalls = String(repeating: "abs(", count: 200) + "1" + String(repeating: ")", count: 200)
         XCTAssertThrowsError(try calculator.evaluate(nestedCalls))
         XCTAssertThrowsError(try calculator.evaluate(String(repeating: "-", count: 600) + "1"))
+        let deepPower = Array(repeating: "2", count: 70).joined(separator: "^")
+        XCTAssertThrowsError(try calculator.evaluate(deepPower))
         let shallow = String(repeating: "(", count: 30) + "1" + String(repeating: ")", count: 30)
         XCTAssertEqual(try calculator.evaluate(shallow), 1)
     }

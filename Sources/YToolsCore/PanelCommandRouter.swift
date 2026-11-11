@@ -65,13 +65,13 @@ public struct PanelCommandRouter: Sendable {
         static let y: UInt16 = 16
         static let l: UInt16 = 37
         static let comma: UInt16 = 43
-        static let numberRow: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+        static let numberRow: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25, 29]
     }
 
     public init() {}
 
     public func command(for event: PanelKeyEvent, mode: PanelInputMode) -> PanelCommand? {
-        if event.modifiers.contains(.command),
+        if event.modifiers == .command,
            let index = resultIndex(forNumberKeyCode: event.keyCode) {
             return .activateResult(index)
         }
@@ -83,39 +83,39 @@ public struct PanelCommandRouter: Sendable {
             return .queueClipboardItem
         case (KeyCode.returnKey, .clipboard) where event.modifiers == .command:
             return .copyClipboardItemOnly
-        case (KeyCode.upArrow, .launcher) where event.modifiers.contains(.option):
+        case (KeyCode.upArrow, .launcher) where event.modifiers == .option:
             return .addSelectedToBuffer(moveToNext: false)
-        case (KeyCode.downArrow, .launcher) where event.modifiers.contains(.option):
+        case (KeyCode.downArrow, .launcher) where event.modifiers == .option:
             return .addSelectedToBuffer(moveToNext: true)
-        case (KeyCode.leftArrow, .launcher) where event.modifiers.contains(.option):
+        case (KeyCode.leftArrow, .launcher) where event.modifiers == .option:
             return .removeLastBufferedItem
-        case (KeyCode.rightArrow, .launcher) where event.modifiers.contains(.option):
+        case (KeyCode.rightArrow, .launcher) where event.modifiers == .option:
             return .showFileBufferActions
-        case (KeyCode.delete, .launcher) where event.modifiers.contains(.option):
+        case (KeyCode.delete, .launcher) where event.modifiers == .option:
             return .clearFileBuffer
-        case (KeyCode.escape, _):
+        case (KeyCode.escape, _) where event.modifiers.isEmpty:
             return .escape
-        case (KeyCode.downArrow, _):
+        case (KeyCode.downArrow, _) where event.modifiers.isEmpty:
             return .moveSelection(1)
-        case (KeyCode.upArrow, _):
+        case (KeyCode.upArrow, _) where event.modifiers.isEmpty:
             return .moveSelection(-1)
-        case (KeyCode.rightArrow, .launcher):
+        case (KeyCode.rightArrow, .launcher) where event.modifiers.isEmpty:
             return .showActions
-        case (KeyCode.leftArrow, .launcher):
+        case (KeyCode.leftArrow, .launcher) where event.modifiers.isEmpty:
             return .navigateBack
-        case (KeyCode.d, .clipboard) where event.modifiers.contains(.command):
+        case (KeyCode.d, .clipboard) where event.modifiers == .command:
             return .deleteClipboardItem
-        case (KeyCode.s, .clipboard) where event.modifiers.contains(.command):
+        case (KeyCode.s, .clipboard) where event.modifiers == .command:
             return .saveClipboardAsSnippet
         case (KeyCode.p, .clipboard) where event.modifiers == .command:
             return .toggleClipboardPreview
-        case (KeyCode.y, .launcher) where event.modifiers.contains(.command):
+        case (KeyCode.y, .launcher) where event.modifiers == .command:
             return .togglePreview
-        case (KeyCode.l, .launcher) where event.modifiers.contains(.command):
+        case (KeyCode.l, .launcher) where event.modifiers == .command:
             return .showLargeType
-        case (KeyCode.returnKey, .launcher) where event.modifiers.contains(.command):
+        case (KeyCode.returnKey, .launcher) where event.modifiers == .command:
             return .revealSelected
-        case (KeyCode.comma, _) where event.modifiers.contains(.command):
+        case (KeyCode.comma, _) where event.modifiers == .command:
             return .openSettings
         default:
             return nil

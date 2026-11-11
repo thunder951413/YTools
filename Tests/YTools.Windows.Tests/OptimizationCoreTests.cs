@@ -16,10 +16,11 @@ public sealed class OptimizationCoreTests
     public void DiagnosticsRejectsVersionContentAndContainsOnlyFixedState()
     {
         var report = LocalDiagnosticReport.Text("secret-user-content", DiagnosticPlatform.Windows, DiagnosticFileBackend.FileNameScan,
-            -1, 2, 3, true, false, true, true, false);
+            -1, 2, 3, true, false, true, true, false, true);
         Assert.DoesNotContain("secret-user-content", report);
         Assert.Contains("剪贴板记录：0", report);
         Assert.Contains("剪贴板存储：需处理", report);
+        Assert.Contains("AI 翻译：已启用", report);
         Assert.DoesNotContain("http", report);
     }
     [Fact]

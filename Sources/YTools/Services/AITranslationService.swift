@@ -54,7 +54,7 @@ enum AITranslationProvider: String, Codable, CaseIterable, Identifiable, Sendabl
         case .moonshot: "moonshot-v1-8k"
         case .zhipu: "glm-4-flash"
         case .openRouter: "openai/gpt-4o-mini"
-        case .anthropic: "claude-haiku-5-5"
+        case .anthropic: "claude-haiku-4-5"
         case .ollama: "qwen2.5:7b"
         case .custom: ""
         }
@@ -88,6 +88,7 @@ enum AITranslationError: LocalizedError, Equatable {
             case 401, 403: "API Key 无效或没有权限（HTTP \(status)）\(message.map { "：\($0)" } ?? "")"
             case 404: "接口地址或模型名称不存在（HTTP 404）\(message.map { "：\($0)" } ?? "")"
             case 429: "请求过于频繁或额度不足（HTTP 429）\(message.map { "：\($0)" } ?? "")"
+            case 300..<400: "接口要求重定向（HTTP \(status)），已拒绝；请填写最终的接口地址。"
             default: "接口返回 HTTP \(status)\(message.map { "：\($0)" } ?? "")"
             }
         case let .payload(error): error.message

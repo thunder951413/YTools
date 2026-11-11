@@ -46,6 +46,7 @@ final class ActionDispatcher {
     private let recentDocuments: any RecentDocumentsRecording
     private let fileOperations = FileOperationService()
     private var fileOperationTask: Task<Void, Never>?
+    private var compressionTask: Task<Void, Never>?
     private var isShuttingDown = false
     private(set) var isBusy = false
     private(set) var isChoosingDestination = false
@@ -57,6 +58,7 @@ final class ActionDispatcher {
     func flushPendingOperations() async {
         isShuttingDown = true
         await fileOperationTask?.value
+        await compressionTask?.value
     }
 
     func cancelFileOperation() { fileOperationTask?.cancel() }
@@ -103,6 +105,8 @@ final class ActionDispatcher {
         switch action {
         case let .copy(text):
             copyText(text)
+        case let .copyConcealed(text):
+            copyConcealedText(text)
         case let .paste(text):
             copyText(text)
             if !PasteService.shared.pasteIntoPreviousApplication() {
@@ -218,14 +222,25 @@ final class ActionDispatcher {
         return .hidePanel
     }
 
+    private func withModalGuard<T>(_ body: () -> T) -> T {
+        isChoosingDestination = true
+        defer {
+            onDestinationPickerClosed?()
+            isChoosingDestination = false
+        }
+        return body()
+    }
+
     private func confirm(title: String, message: String, button: String) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: button)
-        alert.addButton(withTitle: "取消")
-        return alert.runModal() == .alertFirstButtonReturn
+        withModalGuard {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = message
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: button)
+            alert.addButton(withTitle: "取消")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
     }
 
     func execute(_ kind: LauncherActionKind) -> ActionExecutionOutcome {
@@ -326,7 +341,9 @@ final class ActionDispatcher {
         case let .compress(url):
             let reveal = settingsProvider().fileActions.revealArchiveAfterCompression
             ToastPresenter.show("正在压缩“\(url.lastPathComponent)”…", systemImage: "archivebox")
-            Task {
+            let previousCompression = compressionTask
+            compressionTask = Task {
+                _ = await previousCompression?.value
                 do {
                     let archive = try await Task.detached(priority: .userInitiated) {
                         try ZipArchiveWriter.archive(url)
@@ -481,14 +498,17 @@ final class ActionDispatcher {
             showAlert(title: "项目已不存在", message: url.path)
             return .keepPanel
         }
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.applicationBundle]
-        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
-        panel.prompt = "使用此应用打开"
-        guard panel.runModal() == .OK, let applicationURL = panel.url else { return .keepPanel }
+        let selectedApplicationURL = withModalGuard { () -> URL? in
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = false
+            panel.canChooseFiles = true
+            panel.allowsMultipleSelection = false
+            panel.allowedContentTypes = [.applicationBundle]
+            panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+            panel.prompt = "使用此应用打开"
+            return panel.runModal() == .OK ? panel.url : nil
+        }
+        guard let applicationURL = selectedApplicationURL else { return .keepPanel }
         recentDocuments.record(url)
         Task { [weak self] in
             do {
@@ -509,13 +529,16 @@ final class ActionDispatcher {
             showAlert(title: "项目已不存在", message: url.path)
             return .keepPanel
         }
-        let alert = NSAlert()
-        alert.messageText = "将“\(url.lastPathComponent)”移入废纸篓？"
-        alert.informativeText = "YTools 不会永久删除项目。你仍可从访达废纸篓恢复。"
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "移入废纸篓")
-        alert.addButton(withTitle: "取消")
-        guard alert.runModal() == .alertFirstButtonReturn else { return .keepPanel }
+        let confirmed = withModalGuard {
+            let alert = NSAlert()
+            alert.messageText = "将“\(url.lastPathComponent)”移入废纸篓？"
+            alert.informativeText = "YTools 不会永久删除项目。你仍可从访达废纸篓恢复。"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "移入废纸篓")
+            alert.addButton(withTitle: "取消")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+        guard confirmed else { return .keepPanel }
         NSWorkspace.shared.recycle([url]) { [weak self] _, error in
             guard let error else { return }
             Task { @MainActor in
@@ -526,13 +549,16 @@ final class ActionDispatcher {
     }
 
     private func emptyTrash() -> ActionExecutionOutcome {
-        let alert = NSAlert()
-        alert.messageText = "永久清空废纸篓？"
-        alert.informativeText = "Finder 将永久删除所有磁盘卷废纸篓中的项目，此操作无法撤销。"
-        alert.alertStyle = .critical
-        alert.addButton(withTitle: "清空废纸篓")
-        alert.addButton(withTitle: "取消")
-        guard alert.runModal() == .alertFirstButtonReturn else { return .keepPanel }
+        let confirmed = withModalGuard {
+            let alert = NSAlert()
+            alert.messageText = "永久清空废纸篓？"
+            alert.informativeText = "Finder 将永久删除所有磁盘卷废纸篓中的项目，此操作无法撤销。"
+            alert.alertStyle = .critical
+            alert.addButton(withTitle: "清空废纸篓")
+            alert.addButton(withTitle: "取消")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+        guard confirmed else { return .keepPanel }
 
         let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.finder")
         guard let targetDescriptor = target.aeDesc else {
@@ -582,6 +608,17 @@ final class ActionDispatcher {
     private func copyText(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func copyConcealedText(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+        let autoGeneratedType = NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType")
+        pasteboard.declareTypes([.string, concealedType, autoGeneratedType], owner: nil)
+        pasteboard.setString(text, forType: .string)
+        pasteboard.setData(Data(), forType: concealedType)
+        pasteboard.setData(Data(), forType: autoGeneratedType)
     }
 
     private func runFixedSystemCommand() throws {

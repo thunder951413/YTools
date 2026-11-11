@@ -106,6 +106,16 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
                let window = self.window, editor !== self.searchTextField(in: window)?.currentEditor() {
                 return event
             }
+            if event.keyCode == 124,
+               self.panelModifiers(from: event.modifierFlags).isEmpty,
+               self.state.mode == .launcher,
+               !self.launcher.isShowingActions,
+               let editor = self.window?.firstResponder as? NSTextView {
+                let selection = editor.selectedRange()
+                if selection.length == 0, selection.location < (editor.string as NSString).length {
+                    return event
+                }
+            }
             self.shiftPreviewTimer?.invalidate()
             guard let command = self.commandRouter.command(
                 for: PanelKeyEvent(
@@ -184,7 +194,7 @@ final class SearchPanelController: NSWindowController, NSWindowDelegate {
 
     func hide() {
         shiftPreviewTimer?.invalidate()
-        launcher.cancelDeferredActivation()
+        launcher.cancelActiveSearch()
         launcher.endPreviewSession()
         launcher.persistLastQuery()
         window?.orderOut(nil)
